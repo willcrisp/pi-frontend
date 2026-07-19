@@ -7,6 +7,16 @@
   --accent: #7aa2f7;
   --error: #f7768e;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* color profile: per-message-type colors, overridden at runtime by theme.js
+     from the header color picker (persisted to localStorage). Defaults here
+     match the pre-existing hardcoded colors. */
+  --msg-user: var(--accent);
+  --msg-assistant: var(--fg);
+  --msg-thinking: var(--dim);
+  --msg-tool: var(--accent);
+  --msg-tool-error: var(--error);
+  --msg-subagent: #bb9af7;
 }
 
 * {
@@ -903,11 +913,127 @@ header .wordmark {
 }
 
 .usage-agent-name {
-  color: var(--fg);
+  color: var(--msg-subagent);
 }
 
 .usage-agent-name.error {
   color: var(--error);
+}
+
+/* message color profile popover */
+.colors-trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.colors-trigger {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  margin: -4px;
+  cursor: pointer;
+  color: var(--dim);
+}
+
+.colors-trigger:hover {
+  color: var(--fg);
+}
+
+.colors-popover-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  width: 220px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  cursor: auto;
+}
+
+.colors-popover-panel.open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.colors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.colors-title {
+  color: var(--dim);
+  text-transform: lowercase;
+}
+
+.colors-reset {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+  text-decoration: underline;
+}
+
+.colors-reset:hover {
+  color: var(--fg);
+}
+
+.colors-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.colors-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.colors-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.colors-input {
+  width: 26px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.colors-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.colors-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
 }
 
 /* messages */
@@ -926,9 +1052,9 @@ main {
 }
 
 .msg-user {
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--msg-user);
   padding-left: 12px;
-  color: var(--fg);
+  color: var(--msg-user);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -943,12 +1069,13 @@ main {
 }
 
 .msg-assistant {
+  color: var(--msg-assistant);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
 
 .thinking {
-  color: var(--dim);
+  color: var(--msg-thinking);
   font-style: italic;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -983,11 +1110,11 @@ main {
 }
 
 .tool summary .tool-name {
-  color: var(--accent);
+  color: var(--msg-tool);
 }
 
 .tool.error summary .tool-name {
-  color: var(--error);
+  color: var(--msg-tool-error);
 }
 
 .tool pre {

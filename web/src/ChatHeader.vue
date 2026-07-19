@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { setSessionName, store } from "./pi.js";
 import UsagePopover from "./UsagePopover.vue";
+import ColorProfilePopover from "./ColorProfilePopover.vue";
 import SshPopover from "./SshPopover.vue";
 import CoderMenu from "./CoderMenu.vue";
 
@@ -43,6 +44,7 @@ async function renameSession() {
     </button>
     <div class="header-right">
       <UsagePopover class="header-usage" />
+      <ColorProfilePopover />
     </div>
   </header>
 </template>
