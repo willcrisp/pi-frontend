@@ -78,6 +78,7 @@ struct Config {
     pi_bin: String,
     web_dir: PathBuf,
     data_dir: PathBuf,
+    login_helper: PathBuf,
     pi_args: Vec<String>,
     ssh_host: Option<String>,
     ssh_identity: Option<String>,
@@ -119,6 +120,7 @@ fn parse_args() -> Config {
         pi_bin: "pi".into(),
         web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
         data_dir: default_data_dir(),
+        login_helper: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/pi-login/login-helper.mjs")),
         pi_args: Vec::new(),
         ssh_host: None,
         ssh_identity: None,
@@ -131,6 +133,7 @@ fn parse_args() -> Config {
             "--cwd" => cfg.cwd = args.next().expect("--cwd needs a value").into(),
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
             "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
+            "--login-helper" => cfg.login_helper = args.next().expect("--login-helper needs a value").into(),
             "--data-dir" => cfg.data_dir = args.next().expect("--data-dir needs a value").into(),
             "--ssh" => cfg.ssh_host = Some(args.next().expect("--ssh needs a value (user@host)")),
             "--ssh-identity" => cfg.ssh_identity = Some(args.next().expect("--ssh-identity needs a value")),
@@ -227,6 +230,7 @@ async fn main() {
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
         .route("/ws/{id}", get(ws_handler))
+        .route("/ws-auth", get(ws_auth_handler))
         .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
         .with_state(state);
 
@@ -464,6 +468,143 @@ async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>) {
             },
         }
     }
+}
+
+// ---- provider connect (login) helper -----------------------------------
+
+/// Resolves an executable name to an absolute path by scanning `$PATH`
+/// (honoring `PATHEXT` on Windows). Returns the input unchanged if it's
+/// already a path or can't be found.
+fn find_in_path(bin: &str) -> PathBuf {
+    let p = FsPath::new(bin);
+    if p.is_absolute() || bin.contains('/') || bin.contains('\\') {
+        return p.to_path_buf();
+    }
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    if let Ok(path) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for dir in path.split(sep) {
+            for ext in &exts {
+                let candidate = FsPath::new(dir).join(format!("{bin}{ext}"));
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    p.to_path_buf()
+}
+
+/// Given pi's launcher location, derive the bundled `node` executable, the
+/// coding-agent package directory, and the `node_modules` root — the login
+/// helper imports pi's own ModelRuntime, so it must run against the same
+/// install. pi ships as `<dir>/node` running
+/// `<dir>/node_modules/@earendil-works/pi-coding-agent/dist/cli.js` (see its
+/// launcher shim), so everything hangs off the launcher's directory.
+fn resolve_pi_node(pi_bin: &str) -> (PathBuf, Option<PathBuf>, Option<PathBuf>) {
+    let launcher = find_in_path(pi_bin);
+    let basedir = launcher.parent().map(|p| p.to_path_buf());
+    let Some(basedir) = basedir else {
+        return (PathBuf::from("node"), None, None);
+    };
+    let node_name = if cfg!(windows) { "node.exe" } else { "node" };
+    let node = basedir.join(node_name);
+    let node = if node.is_file() { node } else { PathBuf::from("node") };
+    let node_modules = basedir.join("node_modules");
+    let pkg = node_modules.join("@earendil-works").join("pi-coding-agent");
+    let pkg = if pkg.is_dir() { Some(pkg) } else { None };
+    let node_modules = if node_modules.is_dir() { Some(node_modules) } else { None };
+    (node, pkg, node_modules)
+}
+
+async fn ws_auth_handler(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_auth_socket(socket, state))
+}
+
+/// Bridges one WebSocket client to a freshly-spawned login helper process.
+/// Unlike the per-project pi bridge this is 1:1 and short-lived: the helper
+/// is spawned on connect and killed when the socket closes. Connecting a
+/// provider isn't supported in `--ssh` relay mode (the credential would land
+/// on this machine, not the remote host that actually runs pi), so we send a
+/// single error frame and close instead.
+async fn handle_auth_socket(mut socket: WebSocket, state: Arc<AppState>) {
+    if state.ssh.read().await.host.is_some() {
+        let _ = socket
+            .send(Message::Text(
+                r#"{"type":"error","message":"Connecting a provider isn't supported in SSH relay mode — run `/login` on the remote host that runs pi."}"#
+                    .into(),
+            ))
+            .await;
+        return;
+    }
+
+    let (node, pkg, node_modules) = resolve_pi_node(&state.cfg.pi_bin);
+    let mut cmd = Command::new(&node);
+    cmd.arg(&state.cfg.login_helper);
+    if let Some(pkg) = &pkg {
+        cmd.arg(pkg);
+    }
+    // If the package wasn't found next to the launcher, let Node resolve it
+    // by bare name via NODE_PATH (the helper falls back to a bare import).
+    if pkg.is_none() {
+        if let Some(nm) = &node_modules {
+            cmd.env("NODE_PATH", nm);
+        }
+    }
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!(
+                r#"{{"type":"error","message":"failed to start login helper: {}"}}"#,
+                e.to_string().replace('"', "'")
+            );
+            let _ = socket.send(Message::Text(msg.into())).await;
+            return;
+        }
+    };
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut lines = BufReader::new(stdout).lines();
+
+    loop {
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    if socket.send(Message::Text(line.into())).await.is_err() {
+                        break;
+                    }
+                }
+                _ => break, // helper exited or errored
+            },
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Text(text))) => {
+                    if stdin.write_all(text.as_bytes()).await.is_err()
+                        || stdin.write_all(b"\n").await.is_err()
+                        || stdin.flush().await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(_)) => break,
+            },
+        }
+    }
+    let _ = child.start_kill();
 }
 
 // ---- projects REST API --------------------------------------------------

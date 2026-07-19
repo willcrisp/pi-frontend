@@ -55,6 +55,7 @@ There is no test suite or linter configured in either project.
 | `--cwd DIR` | `.` | Working directory for the seed project on first run, local or on the remote host (`--ssh` mode) |
 | `--pi-bin PATH` | `pi` | pi executable, local or remote |
 | `--web-dir DIR` | `web/dist` | Built frontend to serve |
+| `--login-helper PATH` | `server/pi-login/login-helper.mjs` | Node script driving pi's provider connect flow (see "Provider connect") |
 | `--data-dir DIR` | `~/.pi-web` | Where `projects.json` is persisted |
 | `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally. Only seeds `<data-dir>/ssh.json` on the very first run — after that, edit the target from the popup on the header's connection dot (`/api/ssh`) instead of restarting with new flags |
 | `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |
@@ -62,6 +63,35 @@ There is no test suite or linter configured in either project.
 | `-- <args>` | | Everything after `--` is passed to pi for every project (e.g. `-- --model sonnet --continue`) |
 
 ## Architecture
+
+### Provider connect (the one place the server does more than pipe bytes)
+
+pi's per-project RPC protocol has **no** login/auth command — connecting a
+provider (API key or OAuth subscription, i.e. the TUI's `/login`) is
+"app-owned" and lives in pi's `ModelRuntime`, not the wire protocol. So the
+connect UI can't be a pure `pi.js` change like everything else. It works
+through a separate, self-contained path that doesn't touch the per-project
+pi bridge at all:
+
+- `server/pi-login/login-helper.mjs` — a headless Node script that
+  `import`s pi's own `ModelRuntime` (from the installed pi package, located
+  next to the `--pi-bin` launcher) and exposes its `getProviders()` /
+  `login()` / `logout()` over newline-delimited JSON on stdio. It drives the
+  exact same `ModelRuntime.login(id, method, interaction)` the interactive
+  TUI does, forwarding every prompt/notify (API-key field, OAuth URL, device
+  code, select) to the client.
+- `server/src/main.rs` `/ws-auth` — spawns one helper per WebSocket client
+  and bridges its stdio, same pattern as the per-project bridge but 1:1 and
+  short-lived. It resolves pi's bundled `node` + package dir from the `pi`
+  launcher location (`resolve_pi_node`).
+- `web/src/auth.js` + `ConnectDialog.vue` — reactive `authStore` + the
+  connect modal (opened from the sidebar "connect model" button).
+
+Credentials land in pi's `auth.json` on the machine running the helper.
+**Not supported in `--ssh` relay mode** (the credential would be written on
+the pi-web host, not the remote host that actually runs pi) — the `/ws-auth`
+handler sends an error frame and closes; connect there is still done with
+`/login` in a terminal on the remote host.
 
 ### The protocol boundary is in the browser, not the server
 

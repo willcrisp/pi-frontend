@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { store } from "./pi.js";
 import { addProject, openSession, projectsStore, removeProject, selectProject, startNewChat } from "./projects.js";
+import { openConnect } from "./auth.js";
 
 const showAddForm = ref(false);
 const newName = ref("");
@@ -179,6 +180,12 @@ function relativeTime(ms) {
       </div>
 
       <div v-if="!projectsStore.projects.length" class="sidebar-empty">no projects yet — add one above</div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="connect-trigger" title="Connect a model provider" @click="openConnect">
+        connect model
+      </button>
     </div>
   </aside>
 </template>
