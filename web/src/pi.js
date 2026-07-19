@@ -28,33 +28,22 @@ export const store = reactive(initialStore());
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-// Mirrors pi's BUILTIN_SLASH_COMMANDS (core/slash-commands.js). These are TUI-only
-// commands with no RPC equivalent for most of them — listed here purely for
-// discoverability in the composer's autocomplete; selecting one just inserts the
-// command name, it isn't executed.
+// Subset of pi's BUILTIN_SLASH_COMMANDS (core/slash-commands.js) that both (a) have
+// no equivalent already in this UI, and (b) map onto an RPC command this frontend
+// can actually execute. Selecting one runs it immediately (see runBuiltinCommand in
+// App.vue) rather than inserting text — unlike everything else in the dropdown,
+// these never get sent to pi as a prompt.
+//
+// Left out as redundant with existing UI: model (model <select>), new (sidebar "new
+// chat"), resume (sidebar chat history), session (usage popover). Left out as
+// unsupported outside a real terminal/TUI: settings, scoped-models, import, share,
+// changelog, hotkeys, trust, login, logout, quit, reload. Left out pending a
+// message/branch picker UI: fork, clone, tree.
 export const BUILTIN_SLASH_COMMANDS = [
-  { name: "settings", description: "Open settings menu" },
-  { name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
-  { name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
-  { name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
-  { name: "import", description: "Import and resume a session from a JSONL file" },
-  { name: "share", description: "Share session as a secret GitHub gist" },
-  { name: "copy", description: "Copy last agent message to clipboard" },
   { name: "name", description: "Set session display name" },
-  { name: "session", description: "Show session info and stats" },
-  { name: "changelog", description: "Show changelog entries" },
-  { name: "hotkeys", description: "Show all keyboard shortcuts" },
-  { name: "fork", description: "Create a new fork from a previous user message" },
-  { name: "clone", description: "Duplicate the current session at the current position" },
-  { name: "tree", description: "Navigate session tree (switch branches)" },
-  { name: "trust", description: "Save project trust decision for future sessions" },
-  { name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
-  { name: "logout", description: "Remove provider authentication" },
-  { name: "new", description: "Start a new session" },
+  { name: "export", description: "Export session as HTML" },
+  { name: "copy", description: "Copy last agent message to clipboard" },
   { name: "compact", description: "Manually compact the session context" },
-  { name: "resume", description: "Resume a different session" },
-  { name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },
-  { name: "quit", description: "Quit pi" },
 ];
 
 let ws = null;
@@ -133,6 +122,40 @@ export function send(cmd) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(cmd));
   }
+}
+
+// Commands sent via request() get their response's `data` (or a thrown error)
+// delivered back through this promise instead of the generic handleResponse
+// branching below, keyed by the id pi's RPC protocol echoes back on the response.
+let reqId = 0;
+const pending = new Map();
+
+function request(cmd) {
+  const id = `req-${++reqId}`;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    send({ ...cmd, id });
+  });
+}
+
+export async function setSessionName(name) {
+  await request({ type: "set_session_name", name });
+  store.sessionName = name;
+}
+
+export function exportSession() {
+  return request({ type: "export_html" });
+}
+
+export async function compactSession() {
+  await request({ type: "compact" });
+  send({ type: "get_session_stats" });
+}
+
+export async function copyLastAssistantText() {
+  const { text } = await request({ type: "get_last_assistant_text" });
+  if (text) await navigator.clipboard.writeText(text);
+  return text;
 }
 
 // images: [{ mimeType, data }] with `data` as base64 (no data: prefix)
@@ -228,6 +251,13 @@ function handle(ev) {
 }
 
 function handleResponse(ev) {
+  if (ev.id && pending.has(ev.id)) {
+    const { resolve, reject } = pending.get(ev.id);
+    pending.delete(ev.id);
+    if (ev.success) resolve(ev.data);
+    else reject(new Error(ev.error));
+    return;
+  }
   if (!ev.success) {
     console.warn("pi rpc error:", ev.command, ev.error);
     return;

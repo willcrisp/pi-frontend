@@ -545,6 +545,18 @@ footer {
   white-space: nowrap;
 }
 
+.composer-toast {
+  max-width: 760px;
+  margin: 0 auto 8px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--dim);
+  font-size: 12.5px;
+  text-align: center;
+}
+
 .pending-images {
   max-width: 760px;
   margin: 0 auto 8px;
