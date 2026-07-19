@@ -48,5 +48,5 @@ server on :3210.
 
 - Markdown rendering of assistant text (plain text for now)
 - `extension_ui_request` dialogs (confirm/select/input from extensions)
-- Session switching / model picker UI
+- Session switching UI
 - Images in prompts

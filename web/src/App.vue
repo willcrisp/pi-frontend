@@ -1,6 +1,13 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { abort, sendPrompt, store } from "./pi.js";
+import {
+  THINKING_LEVELS,
+  abort,
+  sendPrompt,
+  setModel,
+  setThinkingLevel,
+  store,
+} from "./pi.js";
 import MessageView from "./MessageView.vue";
 
 const input = ref("");
@@ -14,6 +21,40 @@ const visible = computed(() =>
 const modelLabel = computed(() =>
   store.model ? store.model.id || store.model.name : "…"
 );
+
+const modelKey = computed(() =>
+  store.model ? `${store.model.provider}::${store.model.id}` : ""
+);
+
+const thinkingDisabled = computed(() => !store.model?.reasoning);
+
+// Desaturated pastel gradient, cool blue (low effort) to warm red (max effort),
+// tuned light enough to read on the dark theme.
+const THINKING_COLORS = {
+  off: "hsl(215 38% 72%)",
+  minimal: "hsl(190 36% 68%)",
+  low: "hsl(160 34% 65%)",
+  medium: "hsl(110 32% 64%)",
+  high: "hsl(70 38% 64%)",
+  xhigh: "hsl(35 42% 66%)",
+  max: "hsl(5 46% 70%)",
+};
+
+function thinkingColor(level) {
+  return THINKING_COLORS[level] || "inherit";
+}
+
+function onModelChange(e) {
+  const key = e.target.value;
+  const model = store.availableModels.find(
+    (m) => `${m.provider}::${m.id}` === key
+  );
+  if (model) setModel(model);
+}
+
+function onThinkingChange(e) {
+  setThinkingLevel(e.target.value);
+}
 
 function submit() {
   const text = input.value.trim();
@@ -81,6 +122,46 @@ watch(
       ></textarea>
       <button v-if="store.streaming" class="stop" @click="abort">stop</button>
       <button v-else @click="submit">send</button>
+    </div>
+    <div class="controls">
+      <select
+        class="model-select"
+        :value="modelKey"
+        title="Model"
+        @change="onModelChange"
+      >
+        <option v-if="!store.availableModels.length" :value="modelKey">
+          {{ modelLabel }}
+        </option>
+        <option
+          v-for="m in store.availableModels"
+          :key="`${m.provider}::${m.id}`"
+          :value="`${m.provider}::${m.id}`"
+        >
+          {{ m.name || m.id }}
+        </option>
+      </select>
+      <span
+        class="level-dot"
+        :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
+      ></span>
+      <select
+        class="thinking-select"
+        :value="store.thinkingLevel || ''"
+        title="Reasoning effort"
+        :disabled="thinkingDisabled"
+        :style="{ color: thinkingDisabled ? '' : thinkingColor(store.thinkingLevel) }"
+        @change="onThinkingChange"
+      >
+        <option
+          v-for="level in THINKING_LEVELS"
+          :key="level"
+          :value="level"
+          :style="{ color: thinkingColor(level) }"
+        >
+          {{ level }}
+        </option>
+      </select>
     </div>
   </footer>
 </template>

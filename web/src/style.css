@@ -212,6 +212,48 @@ button.stop {
   color: var(--error);
 }
 
+.controls {
+  max-width: 760px;
+  margin: 6px auto 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.controls select {
+  flex-shrink: 0;
+  min-width: max-content;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  white-space: nowrap;
+  text-overflow: unset;
+  overflow: visible;
+}
+
+.controls select:hover:not(:disabled) {
+  border-color: #2c3540;
+  color: var(--fg);
+}
+
+.controls select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.controls .level-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
