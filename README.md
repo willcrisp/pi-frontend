@@ -28,10 +28,57 @@ Server flags:
 | Flag | Default | |
 |---|---|---|
 | `--port N` | `3210` | HTTP/WS port (binds 127.0.0.1 only) |
-| `--cwd DIR` | `.` | Working directory pi runs in |
-| `--pi-bin PATH` | `pi` | pi executable |
+| `--cwd DIR` | `.` | Working directory pi runs in (local mode) or on the remote host (`--ssh` mode) |
+| `--pi-bin PATH` | `pi` | pi executable, local or remote |
 | `--web-dir DIR` | `web/dist` | Built frontend to serve |
+| `--ssh user@host` | | Relay mode: exec pi over SSH on a remote machine instead of spawning it locally |
+| `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |
+| `--ssh-port N` | `22` | SSH port for `--ssh` |
 | `-- <args>` | | Everything after `--` is passed to pi (e.g. `-- --model sonnet --continue`) |
+
+## Remote setup: thin client on Railway, pi on your own machine
+
+If you want to drive pi from your phone without keeping a laptop open, run
+this thin client (frontend + bridge server) as a Railway service reachable
+over [Tailscale](https://tailscale.com/), and have the bridge server SSH
+into your actual dev machine — which also runs pi and holds your code —
+over the tailnet. Nothing here binds to the public internet: the server
+still only listens on `127.0.0.1`, and Tailscale's userspace networking
+mode proxies inbound tailnet traffic to that loopback port from inside the
+container. Railway doesn't grant containers a `/dev/net/tun` device, which
+is why userspace networking (not a full TUN-based Tailscale node) is used —
+see `entrypoint.sh`.
+
+**On your dev machine** (wherever pi and your code actually live):
+
+1. Install Tailscale and join the same tailnet: `tailscale up`.
+2. Enable Tailscale SSH so no key management is needed:
+   `tailscale up --ssh`. (Alternatively, use regular `sshd` with a
+   dedicated keypair — see `SSH_PRIVATE_KEY` below.)
+3. Make sure `pi` is installed and on `PATH` for the SSH user, and that
+   your project checkout exists at some path you'll pass as `REMOTE_CWD`.
+
+**On Railway** (this repo, deployed via the included `Dockerfile`):
+
+1. Create a Tailscale [auth key](https://login.tailscale.com/admin/settings/keys)
+   — mark it reusable and ephemeral, so redeploys don't pile up stale
+   offline nodes in your tailnet.
+2. Set these service variables:
+
+   | Variable | Example | |
+   |---|---|---|
+   | `TS_AUTHKEY` | `tskey-auth-...` | from step 1 |
+   | `SSH_TARGET` | `you@dev-machine.your-tailnet.ts.net` | your dev machine's Tailscale SSH hostname |
+   | `REMOTE_CWD` | `/home/you/projects/myapp` | project directory on the dev machine |
+   | `SSH_PRIVATE_KEY` | *(optional)* | only needed if not using Tailscale SSH |
+   | `TS_HOSTNAME` | *(optional)* | Tailscale node name for this Railway service |
+   | `PI_EXTRA_ARGS` | *(optional)* | e.g. `--model sonnet --continue` |
+
+3. Deploy. Do **not** add a public Railway domain/port for this service —
+   there's no auth in front of it, so it should only ever be reachable via
+   the tailnet.
+4. From your phone, install Tailscale, join the same tailnet, and open
+   `http://<railway-service-tailscale-name>:3210`.
 
 ## Dev
 
@@ -48,5 +95,47 @@ server on :3210.
 
 - Markdown rendering of assistant text (plain text for now)
 - `extension_ui_request` dialogs (confirm/select/input from extensions)
-- Session switching / model picker UI
+- Session switching UI
 - Images in prompts
+
+## TODO: pi-side setup for the token usage popover
+
+The bar-chart icon in the header shows a hover popover with token/cost
+totals (via pi's `get_session_stats` RPC command) and a per-sub-agent
+breakdown. The session totals work out of the box against any reasonably
+current `pi` build. The sub-agent breakdown does **not** — pi core has no
+built-in concept of sub-agents (by design, see its docs), so there's
+nothing to show unless a sub-agent extension is installed in *your* `pi`
+directory (not this repo).
+
+The frontend detects sub-agent runs heuristically: any tool call whose
+result contains `details.results` (an array of `{ agent, model, usage,
+stopReason, errorMessage }` objects) is treated as a sub-agent dispatch,
+matching the shape produced by pi-mono's own example `subagent` extension.
+Per-agent duration is measured client-side (start/end of the tool call),
+since that extension doesn't report elapsed time itself.
+
+To get the breakdown populated, install that example extension into your
+`~/.pi` config (run from a checkout of `badlogic/pi-mono`):
+
+```sh
+mkdir -p ~/.pi/agent/extensions/subagent
+ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/index.ts" \
+  ~/.pi/agent/extensions/subagent/index.ts
+ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" \
+  ~/.pi/agent/extensions/subagent/agents.ts
+
+mkdir -p ~/.pi/agent/agents
+for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
+  ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
+done
+```
+
+If you use a different sub-agent extension (or your own), the popover
+will still pick it up automatically as long as its tool result includes
+`details.results[].usage` with `{ input, output, cost }` fields — no
+frontend changes needed.
+
+Without any of that installed, the popover just shows session totals and
+"no sub-agents used this session" — it degrades gracefully, it just won't
+have anything sub-agent-shaped to display.

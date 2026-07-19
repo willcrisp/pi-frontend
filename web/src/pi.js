@@ -7,11 +7,17 @@ export const store = reactive({
   connected: false,
   streaming: false,
   model: null,
+  thinkingLevel: null,
+  availableModels: [],
   sessionName: null,
   messages: [],
-  // toolCallId -> { name, running, text, isError }
+  // toolCallId -> { name, running, text, isError, details, startedAt, endedAt }
   toolResults: {},
+  // { sessionFile, sessionId, tokens: {input,output,cacheRead,cacheWrite,total}, cost, contextUsage } or null
+  sessionStats: null,
 });
+
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 let ws = null;
 // Index into store.messages of the assistant message currently streaming.
@@ -25,6 +31,8 @@ export function connect() {
     store.connected = true;
     send({ type: "get_state" });
     send({ type: "get_messages" });
+    send({ type: "get_available_models" });
+    send({ type: "get_session_stats" });
   };
   ws.onclose = () => {
     store.connected = false;
@@ -56,6 +64,14 @@ export function abort() {
   send({ type: "abort" });
 }
 
+export function setModel(model) {
+  send({ type: "set_model", provider: model.provider, modelId: model.id });
+}
+
+export function setThinkingLevel(level) {
+  send({ type: "set_thinking_level", level });
+}
+
 function handle(ev) {
   switch (ev.type) {
     case "response":
@@ -68,6 +84,7 @@ function handle(ev) {
     case "agent_settled":
       store.streaming = false;
       currentIndex = -1;
+      send({ type: "get_session_stats" });
       break;
 
     case "message_start":
@@ -93,6 +110,7 @@ function handle(ev) {
         running: true,
         text: "",
         isError: false,
+        startedAt: Date.now(),
       };
       break;
     case "tool_execution_update":
@@ -105,7 +123,16 @@ function handle(ev) {
       r.running = false;
       r.text = resultText(ev.result);
       r.isError = !!ev.isError;
+      r.details = ev.result?.details;
+      r.endedAt = Date.now();
       store.toolResults[ev.toolCallId] = r;
+      // Sub-agent extensions (e.g. pi-mono's examples/extensions/subagent)
+      // spawn separate pi processes whose token usage isn't counted in this
+      // session's own get_session_stats — refresh so totals stay current
+      // and the usage popover picks up any per-agent breakdown.
+      if (r.details?.results) {
+        send({ type: "get_session_stats" });
+      }
       break;
     }
   }
@@ -118,8 +145,22 @@ function handleResponse(ev) {
   }
   if (ev.command === "get_state") {
     store.model = ev.data.model || null;
+    store.thinkingLevel = ev.data.thinkingLevel || null;
     store.streaming = ev.data.isStreaming;
     store.sessionName = ev.data.sessionName || null;
+  } else if (ev.command === "get_available_models") {
+    store.availableModels = ev.data.models || [];
+  } else if (ev.command === "get_session_stats") {
+    store.sessionStats = ev.data || null;
+  } else if (
+    ev.command === "set_model" ||
+    ev.command === "set_thinking_level" ||
+    ev.command === "cycle_model" ||
+    ev.command === "cycle_thinking_level"
+  ) {
+    // These commands' response shapes vary by pi version; re-fetch the
+    // authoritative state instead of trying to parse them individually.
+    send({ type: "get_state" });
   } else if (ev.command === "get_messages") {
     store.messages = ev.data.messages;
     // Backfill tool results from history so past tool calls show output.
@@ -130,6 +171,7 @@ function handleResponse(ev) {
           running: false,
           text: resultText(m),
           isError: !!m.isError,
+          details: m.details,
         };
       }
     }
