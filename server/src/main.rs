@@ -197,6 +197,7 @@ async fn main() {
         .route("/api/projects", get(list_projects).post(add_project))
         .route("/api/projects/{id}", delete(remove_project))
         .route("/api/projects/{id}/sessions", get(list_sessions))
+        .route("/api/browse-dirs", get(browse_dirs))
         .route("/ws/{id}", get(ws_handler))
         .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
         .with_state(state);
@@ -453,6 +454,56 @@ async fn add_project(
     ensure_running(&state, &id).await;
 
     Ok(Json(ProjectView { id, name, path: path.display().to_string() }))
+}
+
+#[derive(Deserialize)]
+struct BrowseDirsQuery {
+    #[serde(default)]
+    path: String,
+}
+
+/// Lists subdirectories for path autocomplete in the "add project" form.
+/// Splits the input into an existing directory plus a partial last segment,
+/// then returns child directories of that dir whose name starts with the
+/// partial segment (case-insensitive) so the frontend can fuzzy-filter and
+/// render suggestions as the user types.
+async fn browse_dirs(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<BrowseDirsQuery>,
+) -> Json<Vec<String>> {
+    if state.cfg.ssh_host.is_some() {
+        return Json(vec![]);
+    }
+    let input = q.path.replace('\\', "/");
+    let (dir, prefix) = match input.rfind('/') {
+        Some(idx) => (&input[..=idx], &input[idx + 1..]),
+        None => ("", input.as_str()),
+    };
+    let dir_path = if dir.is_empty() { PathBuf::from(".") } else { PathBuf::from(dir) };
+
+    let mut entries = match tokio::fs::read_dir(&dir_path).await {
+        Ok(rd) => rd,
+        Err(_) => return Json(vec![]),
+    };
+    let prefix_lower = prefix.to_lowercase();
+    let mut names = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(meta) = entry.metadata().await else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.to_lowercase().starts_with(&prefix_lower) {
+            names.push(name);
+        }
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    names.truncate(50);
+    let full = names
+        .into_iter()
+        .map(|n| format!("{dir}{n}"))
+        .collect();
+    Json(full)
 }
 
 async fn remove_project(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {

@@ -27,6 +27,13 @@ function toolResult(id) {
     <template v-for="(block, i) in blocks" :key="i">
       <span v-if="block.type === 'text'">{{ block.text }}</span>
 
+      <img
+        v-else-if="block.type === 'image'"
+        class="msg-image"
+        :src="`data:${block.mimeType};base64,${block.data}`"
+        alt=""
+      />
+
       <details v-else-if="block.type === 'thinking'" class="thinking">
         <summary>thinking</summary>
         {{ block.thinking }}

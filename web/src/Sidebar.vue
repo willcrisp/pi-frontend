@@ -9,6 +9,50 @@ const newPath = ref("");
 const addError = ref("");
 const adding = ref(false);
 
+const pathSuggestions = ref([]);
+const showSuggestions = ref(false);
+const activeSuggestion = ref(-1);
+let browseSeq = 0;
+
+async function onPathInput() {
+  showSuggestions.value = true;
+  activeSuggestion.value = -1;
+  const seq = ++browseSeq;
+  try {
+    const res = await fetch(`/api/browse-dirs?path=${encodeURIComponent(newPath.value)}`);
+    const dirs = res.ok ? await res.json() : [];
+    if (seq !== browseSeq) return; // stale response
+    pathSuggestions.value = dirs;
+  } catch {
+    if (seq === browseSeq) pathSuggestions.value = [];
+  }
+}
+
+function pickSuggestion(dir) {
+  newPath.value = dir + "/";
+  pathSuggestions.value = [];
+  showSuggestions.value = false;
+  onPathInput();
+}
+
+function onPathKeydown(e) {
+  if (!showSuggestions.value || !pathSuggestions.value.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    activeSuggestion.value = (activeSuggestion.value + 1) % pathSuggestions.value.length;
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    activeSuggestion.value = (activeSuggestion.value - 1 + pathSuggestions.value.length) % pathSuggestions.value.length;
+  } else if (e.key === "Tab" || e.key === "Enter") {
+    if (activeSuggestion.value >= 0) {
+      e.preventDefault();
+      pickSuggestion(pathSuggestions.value[activeSuggestion.value]);
+    }
+  } else if (e.key === "Escape") {
+    showSuggestions.value = false;
+  }
+}
+
 const PAGE_SIZE = 5;
 const historyLimit = ref(PAGE_SIZE);
 watch(
@@ -77,7 +121,27 @@ function relativeTime(ms) {
 
     <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
       <input v-model="newName" placeholder="name" autofocus />
-      <input v-model="newPath" placeholder="/path/to/project" />
+      <div class="path-input-wrap">
+        <input
+          v-model="newPath"
+          placeholder="/path/to/project"
+          autocomplete="off"
+          @input="onPathInput"
+          @focus="onPathInput"
+          @keydown="onPathKeydown"
+          @blur="showSuggestions = false"
+        />
+        <ul v-if="showSuggestions && pathSuggestions.length" class="path-suggestions">
+          <li
+            v-for="(d, i) in pathSuggestions"
+            :key="d"
+            :class="{ active: i === activeSuggestion }"
+            @mousedown.prevent="pickSuggestion(d)"
+          >
+            {{ d }}
+          </li>
+        </ul>
+      </div>
       <div v-if="addError" class="add-project-error">{{ addError }}</div>
       <button type="submit" :disabled="adding">{{ adding ? "adding…" : "add project" }}</button>
     </form>

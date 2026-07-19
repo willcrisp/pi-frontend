@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(server/target/**)",
+      "Read(web/node_modules/**)",
+      "Read(web/dist/**)",
+      "Edit(server/target/**)",
+      "Edit(web/node_modules/**)",
+      "Edit(web/dist/**)",
+      "Write(server/target/**)",
+      "Write(web/node_modules/**)",
+      "Write(web/dist/**)",
+      "Glob(server/target/**)",
+      "Glob(web/node_modules/**)",
+      "Glob(web/dist/**)",
+      "Grep(server/target/**)",
+      "Grep(web/node_modules/**)",
+      "Grep(web/dist/**)"
+    ]
+  }
+}

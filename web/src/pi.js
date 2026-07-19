@@ -18,12 +18,44 @@ function initialStore() {
     toolResults: {},
     // { sessionFile, sessionId, tokens: {input,output,cacheRead,cacheWrite,total}, cost, contextUsage } or null
     sessionStats: null,
+    // Extension/prompt-template/skill commands invocable via "/name args" in a prompt,
+    // from get_commands: [{ name, description, source, sourceInfo }]
+    commands: [],
   };
 }
 
 export const store = reactive(initialStore());
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+// Mirrors pi's BUILTIN_SLASH_COMMANDS (core/slash-commands.js). These are TUI-only
+// commands with no RPC equivalent for most of them — listed here purely for
+// discoverability in the composer's autocomplete; selecting one just inserts the
+// command name, it isn't executed.
+export const BUILTIN_SLASH_COMMANDS = [
+  { name: "settings", description: "Open settings menu" },
+  { name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
+  { name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
+  { name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
+  { name: "import", description: "Import and resume a session from a JSONL file" },
+  { name: "share", description: "Share session as a secret GitHub gist" },
+  { name: "copy", description: "Copy last agent message to clipboard" },
+  { name: "name", description: "Set session display name" },
+  { name: "session", description: "Show session info and stats" },
+  { name: "changelog", description: "Show changelog entries" },
+  { name: "hotkeys", description: "Show all keyboard shortcuts" },
+  { name: "fork", description: "Create a new fork from a previous user message" },
+  { name: "clone", description: "Duplicate the current session at the current position" },
+  { name: "tree", description: "Navigate session tree (switch branches)" },
+  { name: "trust", description: "Save project trust decision for future sessions" },
+  { name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
+  { name: "logout", description: "Remove provider authentication" },
+  { name: "new", description: "Start a new session" },
+  { name: "compact", description: "Manually compact the session context" },
+  { name: "resume", description: "Resume a different session" },
+  { name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },
+  { name: "quit", description: "Quit pi" },
+];
 
 let ws = null;
 let currentProjectId = null;
@@ -68,6 +100,7 @@ function connect() {
     send({ type: "get_messages" });
     send({ type: "get_available_models" });
     send({ type: "get_session_stats" });
+    send({ type: "get_commands" });
   };
   ws.onclose = () => {
     if (projectId !== currentProjectId) return;
@@ -102,9 +135,18 @@ export function send(cmd) {
   }
 }
 
-export function sendPrompt(text) {
-  store.messages.push({ role: "user", content: [{ type: "text", text }] });
-  send({ type: "prompt", message: text });
+// images: [{ mimeType, data }] with `data` as base64 (no data: prefix)
+export function sendPrompt(text, images = []) {
+  const imageBlocks = images.map((img) => ({
+    type: "image",
+    data: img.data,
+    mimeType: img.mimeType,
+  }));
+  const content = text ? [{ type: "text", text }, ...imageBlocks] : imageBlocks;
+  store.messages.push({ role: "user", content });
+  const cmd = { type: "prompt", message: text };
+  if (imageBlocks.length) cmd.images = imageBlocks;
+  send(cmd);
 }
 
 export function abort() {
@@ -199,6 +241,8 @@ function handleResponse(ev) {
     store.availableModels = ev.data.models || [];
   } else if (ev.command === "get_session_stats") {
     store.sessionStats = ev.data || null;
+  } else if (ev.command === "get_commands") {
+    store.commands = ev.data?.commands || [];
   } else if (
     ev.command === "set_model" ||
     ev.command === "set_thinking_level" ||

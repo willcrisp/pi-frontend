@@ -112,8 +112,8 @@ Run the Rust server, then in a second terminal:
 cd web && npm run dev
 ```
 
-Vite serves the UI on :5173 with hot reload and proxies `/ws` to the Rust
-server on :3210.
+Vite serves the UI on :5173 with hot reload and proxies `/ws` and `/api` to
+the Rust server on :3210.
 
 ## Not yet implemented
 
