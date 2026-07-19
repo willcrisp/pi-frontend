@@ -286,6 +286,42 @@ header .wordmark {
   font-weight: 600;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-title {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--dim);
+  text-align: center;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.header-title:hover {
+  color: var(--fg);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
 .dot {
   width: 7px;
   height: 7px;
@@ -402,6 +438,196 @@ header .wordmark {
 .ssh-help {
   font-size: 10.5px;
   line-height: 1.4;
+}
+
+/* coder workspaces menu */
+.coder-trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.coder-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  cursor: pointer;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.coder-trigger:hover {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.coder-count {
+  min-width: 14px;
+  text-align: center;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #4ade80;
+  color: #04120a;
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.coder-popover-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  width: 260px;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  cursor: auto;
+}
+
+.coder-popover-panel.open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.coder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.coder-title {
+  color: var(--dim);
+  text-transform: lowercase;
+}
+
+.coder-refresh {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 4px;
+}
+
+.coder-refresh:hover {
+  color: var(--fg);
+}
+
+.coder-unavailable {
+  line-height: 1.5;
+  padding: 4px 0;
+}
+
+.coder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.coder-ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dim);
+}
+
+.coder-ws-dot.running {
+  background: #4ade80;
+}
+
+.coder-ws-dot.starting,
+.coder-ws-dot.stopping,
+.coder-ws-dot.pending,
+.coder-ws-dot.canceling {
+  background: #f59e0b;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.coder-ws-dot.failed {
+  background: var(--error);
+}
+
+.coder-ws-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.coder-ws-name {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coder-ws-status {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.coder-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.coder-action:hover:not(:disabled) {
+  border-color: #2c3540;
+}
+
+.coder-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.glyph-start {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid #4ade80;
+  margin-left: 2px;
+}
+
+.glyph-stop {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--error);
+}
+
+.coder-error {
+  color: var(--error);
+  line-height: 1.4;
+  padding-top: 2px;
 }
 
 /* token usage popover */

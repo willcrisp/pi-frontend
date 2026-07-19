@@ -76,6 +76,7 @@ struct Config {
     port: u16,
     cwd: PathBuf,
     pi_bin: String,
+    coder_bin: String,
     web_dir: PathBuf,
     data_dir: PathBuf,
     login_helper: PathBuf,
@@ -118,6 +119,7 @@ fn parse_args() -> Config {
         port: 3210,
         cwd: PathBuf::from("."),
         pi_bin: "pi".into(),
+        coder_bin: "coder".into(),
         web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
         data_dir: default_data_dir(),
         login_helper: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/pi-login/login-helper.mjs")),
@@ -132,6 +134,7 @@ fn parse_args() -> Config {
             "--port" => cfg.port = args.next().expect("--port needs a value").parse().expect("invalid port"),
             "--cwd" => cfg.cwd = args.next().expect("--cwd needs a value").into(),
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
+            "--coder-bin" => cfg.coder_bin = args.next().expect("--coder-bin needs a value"),
             "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
             "--login-helper" => cfg.login_helper = args.next().expect("--login-helper needs a value").into(),
             "--data-dir" => cfg.data_dir = args.next().expect("--data-dir needs a value").into(),
@@ -145,7 +148,7 @@ fn parse_args() -> Config {
             other => {
                 eprintln!("unknown argument: {other}");
                 eprintln!(
-                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] [--data-dir DIR] \
+                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--coder-bin PATH] [--web-dir DIR] [--data-dir DIR] \
                      [--ssh user@host [--ssh-identity PATH] [--ssh-port N]] [-- <extra pi args>]"
                 );
                 std::process::exit(2);
@@ -229,6 +232,9 @@ async fn main() {
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
+        .route("/api/coder/workspaces", get(list_coder_workspaces))
+        .route("/api/coder/start", post(start_coder_workspace))
+        .route("/api/coder/stop", post(stop_coder_workspace))
         .route("/ws/{id}", get(ws_handler))
         .route("/ws-auth", get(ws_auth_handler))
         .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
@@ -907,6 +913,147 @@ async fn clear_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigV
     persist_ssh_config(&state).await;
     respawn_all(&state).await;
     Json(SshConfig::default().into())
+}
+
+// ---- coder integration REST API -----------------------------------------
+//
+// A thin wrapper over the local `coder` CLI so the frontend can list the
+// user's cloud workspaces and start/stop them. `coder` is expected to be
+// installed and already logged in (`coder login`) on the machine running
+// this server — we shell out to it exactly as a human would. Independent of
+// the pi bridge and of `--ssh` relay mode: these workspaces are Coder's own
+// cloud machines, unrelated to where pi runs.
+
+#[derive(Serialize)]
+struct CoderWorkspace {
+    /// `owner/name` — the reference accepted by `coder start`/`coder stop`.
+    id: String,
+    name: String,
+    owner: String,
+    /// Latest build status: running | stopped | starting | stopping |
+    /// pending | failed | canceling | canceled | deleting | deleted.
+    status: String,
+    outdated: bool,
+}
+
+#[derive(Serialize)]
+struct CoderListResp {
+    available: bool,
+    error: Option<String>,
+    workspaces: Vec<CoderWorkspace>,
+}
+
+/// Builds a `coder` command with the given args. `coder` ships as a single
+/// executable (`coder.exe` on Windows), so it's spawned directly rather than
+/// through a shell shim like pi.
+fn coder_command(cfg: &Config, args: &[&str]) -> Command {
+    let mut c = Command::new(&cfg.coder_bin);
+    c.args(args);
+    c
+}
+
+async fn list_coder_workspaces(State(state): State<Arc<AppState>>) -> Json<CoderListResp> {
+    let mut c = coder_command(&state.cfg, &["list", "--all", "--output", "json"]);
+    c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(15), c.output()).await {
+        Err(_) => {
+            return Json(CoderListResp { available: false, error: Some("coder list timed out".into()), workspaces: vec![] });
+        }
+        Ok(Err(e)) => {
+            // Most commonly: coder isn't installed / not on PATH.
+            let msg = format!("coder CLI not available: {e}");
+            return Json(CoderListResp { available: false, error: Some(msg), workspaces: vec![] });
+        }
+        Ok(Ok(out)) => out,
+    };
+
+    if !out.status.success() {
+        // Typically "not logged in" — coder prints guidance to stderr.
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let message = if stderr.is_empty() { "coder list failed".to_string() } else { stderr };
+        return Json(CoderListResp { available: false, error: Some(message), workspaces: vec![] });
+    }
+
+    let workspaces = parse_coder_workspaces(&out.stdout);
+    Json(CoderListResp { available: true, error: None, workspaces })
+}
+
+/// Parses `coder list --output json` into our trimmed view. Tolerant of
+/// schema drift: pulls only the handful of fields we need and skips anything
+/// malformed rather than failing the whole request.
+fn parse_coder_workspaces(stdout: &[u8]) -> Vec<CoderWorkspace> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return vec![];
+    };
+    let Some(arr) = value.as_array() else { return vec![] };
+    let mut out = Vec::new();
+    for w in arr {
+        let Some(name) = w.get("name").and_then(|n| n.as_str()) else { continue };
+        let owner = w.get("owner_name").and_then(|o| o.as_str()).unwrap_or("").to_string();
+        let status = w
+            .pointer("/latest_build/status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let outdated = w.get("outdated").and_then(|o| o.as_bool()).unwrap_or(false);
+        let id = if owner.is_empty() { name.to_string() } else { format!("{owner}/{name}") };
+        out.push(CoderWorkspace { id, name: name.to_string(), owner, status, outdated });
+    }
+    out.sort_by(|a, b| a.id.to_lowercase().cmp(&b.id.to_lowercase()));
+    out
+}
+
+#[derive(Deserialize)]
+struct CoderActionReq {
+    /// `owner/name` (or bare `name`) as returned in the workspace list.
+    workspace: String,
+}
+
+/// `coder start <workspace>` / `coder stop <workspace>`. Both builds can take
+/// minutes, so we don't wait for completion: the process is spawned, reaped
+/// in the background, and the frontend observes the transition ("starting" /
+/// "stopping" → "running" / "stopped", or "failed") by polling the list.
+/// Only immediate spawn failures (e.g. coder not installed) are reported.
+async fn run_coder_transition(state: &Arc<AppState>, verb: &str, workspace: &str) -> Result<(), (StatusCode, String)> {
+    let workspace = workspace.trim();
+    if workspace.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "workspace is required".into()));
+    }
+    let mut c = coder_command(&state.cfg, &[verb, workspace, "--yes"]);
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
+    match c.spawn() {
+        Ok(mut child) => {
+            // Reap it so it doesn't linger as a zombie; log non-zero exits.
+            let verb = verb.to_string();
+            let workspace = workspace.to_string();
+            tokio::spawn(async move {
+                if let Ok(status) = child.wait().await {
+                    if !status.success() {
+                        eprintln!("coder {verb} {workspace} exited: {status:?}");
+                    }
+                }
+            });
+            Ok(())
+        }
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("failed to run coder: {e}"))),
+    }
+}
+
+async fn start_coder_workspace(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CoderActionReq>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    run_coder_transition(&state, "start", &req.workspace).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn stop_coder_workspace(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CoderActionReq>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    run_coder_transition(&state, "stop", &req.workspace).await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 // ---- chat history (sessions) REST API -----------------------------------
