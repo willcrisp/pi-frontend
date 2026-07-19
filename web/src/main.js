@@ -1,7 +1,9 @@
 import { createApp } from "vue";
 import App from "./App.vue";
-import { connect } from "./pi.js";
+import { setOnSessionSwitched } from "./pi.js";
+import { initProjects, refreshCurrentSessions } from "./projects.js";
 import "./style.css";
 
-connect();
+setOnSessionSwitched(refreshCurrentSessions);
+initProjects();
 createApp(App).mount("#app");
