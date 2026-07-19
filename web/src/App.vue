@@ -142,7 +142,17 @@ watch(
             :disabled="!input.trim()"
             @click="submit"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg v-if="store.streaming" width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.2" />
+              <path
+                d="M8 8V1.7M8 8 13.5 11.2M8 8 2.5 11.2"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+              />
+              <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+            </svg>
+            <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path
                 d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
                 stroke="currentColor"
