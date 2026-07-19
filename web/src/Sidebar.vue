@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { store } from "./pi.js";
 import { addProject, openSession, projectsStore, removeProject, selectProject, startNewChat } from "./projects.js";
 
@@ -8,6 +8,22 @@ const newName = ref("");
 const newPath = ref("");
 const addError = ref("");
 const adding = ref(false);
+
+const PAGE_SIZE = 5;
+const historyLimit = ref(PAGE_SIZE);
+watch(
+  () => projectsStore.currentProjectId,
+  () => {
+    historyLimit.value = PAGE_SIZE;
+  }
+);
+
+const visibleSessions = computed(() => projectsStore.sessions.slice(0, historyLimit.value));
+const hasMoreSessions = computed(() => projectsStore.sessions.length > historyLimit.value);
+
+function loadMoreSessions() {
+  historyLimit.value += PAGE_SIZE;
+}
 
 const activeSessionPath = computed(() => store.sessionStats?.sessionFile || null);
 
@@ -82,7 +98,7 @@ function relativeTime(ms) {
           <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading…</div>
           <template v-else>
             <div
-              v-for="s in projectsStore.sessions"
+              v-for="s in visibleSessions"
               :key="s.path"
               class="chat-row"
               :class="{ active: s.path === activeSessionPath }"
@@ -92,6 +108,7 @@ function relativeTime(ms) {
               <span class="chat-title">{{ s.title }}</span>
               <span class="chat-time">{{ relativeTime(s.mtimeMs) }}</span>
             </div>
+            <div v-if="hasMoreSessions" class="chat-row load-more" @click="loadMoreSessions">load more…</div>
             <div v-if="!projectsStore.sessions.length" class="chat-row dim">no past chats</div>
           </template>
         </div>

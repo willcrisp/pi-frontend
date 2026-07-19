@@ -190,6 +190,11 @@ body {
   font-style: italic;
 }
 
+.chat-row.load-more {
+  color: var(--accent);
+  justify-content: flex-start;
+}
+
 .chat-title {
   overflow: hidden;
   text-overflow: ellipsis;
