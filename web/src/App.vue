@@ -123,35 +123,36 @@ watch(
           @keydown="onKeydown"
           @input="autosize"
         ></textarea>
-        <button
-          v-if="store.streaming"
-          class="icon-btn stop"
-          aria-label="Stop"
-          title="Stop"
-          @click="abort"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" />
-          </svg>
-        </button>
-        <button
-          v-else
-          class="icon-btn send"
-          aria-label="Send"
-          title="Send"
-          :disabled="!input.trim()"
-          @click="submit"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
-              stroke="currentColor"
-              stroke-width="1.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
+        <div class="composer-actions">
+          <button
+            v-if="store.streaming"
+            class="icon-btn stop"
+            aria-label="Stop"
+            title="Stop"
+            @click="abort"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            class="icon-btn send"
+            :aria-label="store.streaming ? 'Steer' : 'Send'"
+            :title="store.streaming ? 'Steer the agent with this message' : 'Send'"
+            :disabled="!input.trim()"
+            @click="submit"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
     <div class="controls">
