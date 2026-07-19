@@ -8,7 +8,9 @@ import {
   setThinkingLevel,
   store,
 } from "./pi.js";
+import { projectsStore } from "./projects.js";
 import MessageView from "./MessageView.vue";
+import Sidebar from "./Sidebar.vue";
 import UsagePopover from "./UsagePopover.vue";
 
 const input = ref("");
@@ -95,75 +97,83 @@ watch(
 </script>
 
 <template>
-  <header>
-    <span
-      class="dot"
-      :class="{ connected: store.connected, streaming: store.streaming }"
-    ></span>
-    <span class="wordmark">pi</span>
-    <span>{{ modelLabel }}</span>
-    <span v-if="store.sessionName">· {{ store.sessionName }}</span>
-    <UsagePopover class="header-usage" />
-  </header>
+  <Sidebar />
 
-  <main ref="mainEl">
-    <div class="messages">
-      <MessageView v-for="(m, i) in visible" :key="i" :message="m" />
-    </div>
-  </main>
+  <div v-if="!projectsStore.currentProjectId" class="chat-panel chat-empty">
+    <p>select or add a project to start chatting</p>
+  </div>
 
-  <footer>
-    <div class="composer">
-      <textarea
-        ref="textareaEl"
-        v-model="input"
-        rows="1"
-        placeholder="Message pi…"
-        @keydown="onKeydown"
-        @input="autosize"
-      ></textarea>
-      <button v-if="store.streaming" class="stop" @click="abort">stop</button>
-      <button v-else @click="submit">send</button>
-    </div>
-    <div class="controls">
-      <select
-        class="model-select"
-        :value="modelKey"
-        title="Model"
-        @change="onModelChange"
-      >
-        <option v-if="!store.availableModels.length" :value="modelKey">
-          {{ modelLabel }}
-        </option>
-        <option
-          v-for="m in store.availableModels"
-          :key="`${m.provider}::${m.id}`"
-          :value="`${m.provider}::${m.id}`"
-        >
-          {{ m.name || m.id }}
-        </option>
-      </select>
+  <div v-else class="chat-panel">
+    <header>
       <span
-        class="level-dot"
-        :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
+        class="dot"
+        :class="{ connected: store.connected, streaming: store.streaming }"
       ></span>
-      <select
-        class="thinking-select"
-        :value="store.thinkingLevel || ''"
-        title="Reasoning effort"
-        :disabled="thinkingDisabled"
-        :style="{ color: thinkingDisabled ? '' : thinkingColor(store.thinkingLevel) }"
-        @change="onThinkingChange"
-      >
-        <option
-          v-for="level in THINKING_LEVELS"
-          :key="level"
-          :value="level"
-          :style="{ color: thinkingColor(level) }"
+      <span class="wordmark">pi</span>
+      <span>{{ modelLabel }}</span>
+      <span v-if="store.sessionName">· {{ store.sessionName }}</span>
+      <UsagePopover class="header-usage" />
+    </header>
+
+    <main ref="mainEl">
+      <div class="messages">
+        <MessageView v-for="(m, i) in visible" :key="i" :message="m" />
+      </div>
+    </main>
+
+    <footer>
+      <div class="composer">
+        <textarea
+          ref="textareaEl"
+          v-model="input"
+          rows="1"
+          placeholder="Message pi…"
+          @keydown="onKeydown"
+          @input="autosize"
+        ></textarea>
+        <button v-if="store.streaming" class="stop" @click="abort">stop</button>
+        <button v-else @click="submit">send</button>
+      </div>
+      <div class="controls">
+        <select
+          class="model-select"
+          :value="modelKey"
+          title="Model"
+          @change="onModelChange"
         >
-          {{ level }}
-        </option>
-      </select>
-    </div>
-  </footer>
+          <option v-if="!store.availableModels.length" :value="modelKey">
+            {{ modelLabel }}
+          </option>
+          <option
+            v-for="m in store.availableModels"
+            :key="`${m.provider}::${m.id}`"
+            :value="`${m.provider}::${m.id}`"
+          >
+            {{ m.name || m.id }}
+          </option>
+        </select>
+        <span
+          class="level-dot"
+          :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
+        ></span>
+        <select
+          class="thinking-select"
+          :value="store.thinkingLevel || ''"
+          title="Reasoning effort"
+          :disabled="thinkingDisabled"
+          :style="{ color: thinkingDisabled ? '' : thinkingColor(store.thinkingLevel) }"
+          @change="onThinkingChange"
+        >
+          <option
+            v-for="level in THINKING_LEVELS"
+            :key="level"
+            :value="level"
+            :style="{ color: thinkingColor(level) }"
+          >
+            {{ level }}
+          </option>
+        </select>
+      </div>
+    </footer>
+  </div>
 </template>
