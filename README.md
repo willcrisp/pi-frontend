@@ -18,7 +18,7 @@ Minimal dark-themed web frontend for the [pi coding agent](https://github.com/ba
 cd web && npm install && npm run build
 
 # run the server (from the repo root)
-cd server && cargo run --release -- --cwd path/to/your/project
+cd server && cargo run --release -- --cwd C:\\Users\\crispy\\AppData\\Local\\pi-node\\current
 ```
 
 Open http://127.0.0.1:3210.
