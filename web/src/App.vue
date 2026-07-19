@@ -99,10 +99,11 @@ watch(
     <span
       class="dot"
       :class="{ connected: store.connected, streaming: store.streaming }"
+      :title="store.connected ? (store.streaming ? 'Connected · agent running' : 'Connected') : 'Disconnected'"
     ></span>
-    <span class="wordmark">pi</span>
-    <span>{{ modelLabel }}</span>
-    <span v-if="store.sessionName">· {{ store.sessionName }}</span>
+    <span class="wordmark" title="pi coding agent">pi</span>
+    <span :title="modelLabel">{{ modelLabel }}</span>
+    <span v-if="store.sessionName" :title="store.sessionName">· {{ store.sessionName }}</span>
     <UsagePopover class="header-usage" />
   </header>
 
@@ -120,6 +121,7 @@ watch(
           v-model="input"
           rows="1"
           placeholder="Message pi…"
+          title="Enter to send, Shift+Enter for a new line"
           @keydown="onKeydown"
           @input="autosize"
         ></textarea>
@@ -143,14 +145,10 @@ watch(
             @click="submit"
           >
             <svg v-if="store.streaming" width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.2" />
-              <path
-                d="M8 8V1.7M8 8 13.5 11.2M8 8 2.5 11.2"
-                stroke="currentColor"
-                stroke-width="1.2"
-                stroke-linecap="round"
-              />
-              <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+              <line x1="4" y1="2" x2="4" y2="10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              <circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.2" />
+              <circle cx="4" cy="12" r="2" stroke="currentColor" stroke-width="1.2" />
+              <path d="M12 6a6 6 0 0 1-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
             </svg>
             <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path
@@ -185,6 +183,7 @@ watch(
       </select>
       <span
         class="level-dot"
+        :title="thinkingDisabled ? 'Reasoning effort unavailable for this model' : `Reasoning effort: ${store.thinkingLevel}`"
         :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
       ></span>
       <select
