@@ -43,7 +43,7 @@ fn parse_args() -> Config {
         port: 3210,
         cwd: PathBuf::from("."),
         pi_bin: "pi".into(),
-        web_dir: PathBuf::from("web/dist"),
+        web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
         pi_args: Vec::new(),
         ssh_host: None,
         ssh_identity: None,
