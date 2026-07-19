@@ -1,33 +1,68 @@
 // WebSocket client for the pi RPC protocol.
 // The server is a transparent bridge: every WS text frame is one JSON line
 // to/from `pi --mode rpc`. See pi's docs/rpc.md for the protocol.
+// One project = one pi process = one `/ws/{projectId}` connection; switching
+// the active project tears down the old socket and opens a new one.
 import { reactive } from "vue";
 
-export const store = reactive({
-  connected: false,
-  streaming: false,
-  model: null,
-  thinkingLevel: null,
-  availableModels: [],
-  sessionName: null,
-  messages: [],
-  // toolCallId -> { name, running, text, isError, details, startedAt, endedAt }
-  toolResults: {},
-  // { sessionFile, sessionId, tokens: {input,output,cacheRead,cacheWrite,total}, cost, contextUsage } or null
-  sessionStats: null,
-});
+function initialStore() {
+  return {
+    connected: false,
+    streaming: false,
+    model: null,
+    thinkingLevel: null,
+    availableModels: [],
+    sessionName: null,
+    messages: [],
+    // toolCallId -> { name, running, text, isError, details, startedAt, endedAt }
+    toolResults: {},
+    // { sessionFile, sessionId, tokens: {input,output,cacheRead,cacheWrite,total}, cost, contextUsage } or null
+    sessionStats: null,
+  };
+}
+
+export const store = reactive(initialStore());
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 let ws = null;
+let currentProjectId = null;
 // Index into store.messages of the assistant message currently streaming.
 let currentIndex = -1;
+// Called after new_session/switch_session completes, so the sidebar can
+// refresh its chat-history list. Wired up once from App.vue.
+let onSessionSwitched = null;
 
-export function connect() {
+export function setOnSessionSwitched(fn) {
+  onSessionSwitched = fn;
+}
+
+export function connectToProject(projectId) {
+  if (ws) {
+    ws.onclose = null; // don't auto-reconnect the socket we're intentionally closing
+    ws.close();
+    ws = null;
+  }
+  currentProjectId = projectId;
+  currentIndex = -1;
+  Object.assign(store, initialStore());
+  connect();
+}
+
+// Tear down the active connection with no replacement (e.g. the current
+// project was removed).
+export function resetChat() {
+  connectToProject(null);
+}
+
+function connect() {
+  const projectId = currentProjectId;
+  if (!projectId) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws = new WebSocket(`${proto}//${location.host}/ws/${projectId}`);
 
   ws.onopen = () => {
+    if (projectId !== currentProjectId) return;
     store.connected = true;
     send({ type: "get_state" });
     send({ type: "get_messages" });
@@ -35,10 +70,14 @@ export function connect() {
     send({ type: "get_session_stats" });
   };
   ws.onclose = () => {
+    if (projectId !== currentProjectId) return;
     store.connected = false;
-    setTimeout(connect, 1500);
+    setTimeout(() => {
+      if (projectId === currentProjectId) connect();
+    }, 1500);
   };
   ws.onmessage = (e) => {
+    if (projectId !== currentProjectId) return;
     let ev;
     try {
       ev = JSON.parse(e.data);
@@ -47,6 +86,14 @@ export function connect() {
     }
     handle(ev);
   };
+}
+
+export function newSession() {
+  send({ type: "new_session" });
+}
+
+export function switchSession(sessionPath) {
+  send({ type: "switch_session", sessionPath });
 }
 
 export function send(cmd) {
@@ -161,6 +208,13 @@ function handleResponse(ev) {
     // These commands' response shapes vary by pi version; re-fetch the
     // authoritative state instead of trying to parse them individually.
     send({ type: "get_state" });
+  } else if (ev.command === "new_session" || ev.command === "switch_session") {
+    store.messages = [];
+    store.toolResults = {};
+    send({ type: "get_state" });
+    send({ type: "get_messages" });
+    send({ type: "get_session_stats" });
+    onSessionSwitched?.();
   } else if (ev.command === "get_messages") {
     store.messages = ev.data.messages;
     // Backfill tool results from history so past tool calls show output.

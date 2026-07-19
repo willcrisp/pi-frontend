@@ -1,30 +1,73 @@
-//! Minimal bridge between a `pi --mode rpc` child process and browser clients.
+//! Bridge between one or more `pi --mode rpc` child processes (one per
+//! "project" working directory) and browser clients.
 //!
-//! pi speaks newline-delimited JSON on stdin/stdout. This server pipes those
-//! lines verbatim to/from WebSocket clients at /ws and serves the built
-//! frontend from web/dist. It does not parse the protocol at all — the
-//! browser speaks pi RPC directly.
+//! pi speaks newline-delimited JSON on stdin/stdout. For each project this
+//! server pipes those lines verbatim to/from WebSocket clients at
+//! `/ws/{projectId}` — it does not parse the protocol, so it stays
+//! compatible as pi evolves. The one deliberate exception: right after
+//! spawning a project's pi process, it sends a `get_session_stats` probe
+//! and peeks at the `sessionFile` field of the response to learn where pi
+//! is writing that project's session history, so it can list past chats
+//! without needing to know pi's session-directory naming scheme.
+//!
+//! Projects run concurrently: each one keeps its own pi process alive in
+//! the background (added/removed via the `/api/projects` REST endpoints)
+//! so work continues even while a different project is in view. The list
+//! is persisted to `<data-dir>/projects.json`.
+//!
+//! With `--ssh user@host`, every project's pi process is spawned on that
+//! remote host over SSH instead of locally (see `spawn_child`) — this is
+//! how the Railway/Tailscale thin-client setup in the README works. Project
+//! paths are then remote paths, so local filesystem checks (path
+//! validation on add, chat-history discovery) are skipped/degrade
+//! gracefully rather than erroring.
 
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Path, State,
     },
+    http::StatusCode,
     response::IntoResponse,
-    routing::get,
-    Router,
+    routing::{delete, get},
+    Json, Router,
 };
-use std::{path::PathBuf, process::Stdio, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    path::{Path as FsPath, PathBuf},
+    process::Stdio,
+    sync::Arc,
+    time::UNIX_EPOCH,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, Mutex, RwLock},
 };
 use tower_http::services::{ServeDir, ServeFile};
+use uuid::Uuid;
 
-struct AppState {
+/// Persisted project metadata (`<data-dir>/projects.json`).
+#[derive(Clone, Serialize, Deserialize)]
+struct ProjectRecord {
+    id: String,
+    name: String,
+    path: PathBuf,
+}
+
+/// In-memory project metadata, including the lazily-learned session directory.
+struct ProjectEntry {
+    name: String,
+    path: PathBuf,
+    session_dir: Mutex<Option<PathBuf>>,
+}
+
+/// A live pi process for a project.
+struct RunningProcess {
     to_pi: mpsc::Sender<String>,
     from_pi: broadcast::Sender<String>,
+    kill_tx: mpsc::Sender<()>,
 }
 
 struct Config {
@@ -32,10 +75,25 @@ struct Config {
     cwd: PathBuf,
     pi_bin: String,
     web_dir: PathBuf,
+    data_dir: PathBuf,
     pi_args: Vec<String>,
     ssh_host: Option<String>,
     ssh_identity: Option<String>,
     ssh_port: Option<u16>,
+}
+
+struct AppState {
+    cfg: Config,
+    projects: RwLock<HashMap<String, Arc<ProjectEntry>>>,
+    running: RwLock<HashMap<String, Arc<RunningProcess>>>,
+}
+
+fn default_data_dir() -> PathBuf {
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    match std::env::var(home_var) {
+        Ok(home) => PathBuf::from(home).join(".pi-web"),
+        Err(_) => PathBuf::from(".pi-web"),
+    }
 }
 
 fn parse_args() -> Config {
@@ -44,6 +102,7 @@ fn parse_args() -> Config {
         cwd: PathBuf::from("."),
         pi_bin: "pi".into(),
         web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
+        data_dir: default_data_dir(),
         pi_args: Vec::new(),
         ssh_host: None,
         ssh_identity: None,
@@ -56,6 +115,7 @@ fn parse_args() -> Config {
             "--cwd" => cfg.cwd = args.next().expect("--cwd needs a value").into(),
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
             "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
+            "--data-dir" => cfg.data_dir = args.next().expect("--data-dir needs a value").into(),
             "--ssh" => cfg.ssh_host = Some(args.next().expect("--ssh needs a value (user@host)")),
             "--ssh-identity" => cfg.ssh_identity = Some(args.next().expect("--ssh-identity needs a value")),
             "--ssh-port" => cfg.ssh_port = Some(args.next().expect("--ssh-port needs a value").parse().expect("invalid ssh port")),
@@ -66,7 +126,7 @@ fn parse_args() -> Config {
             other => {
                 eprintln!("unknown argument: {other}");
                 eprintln!(
-                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] \
+                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] [--data-dir DIR] \
                      [--ssh user@host [--ssh-identity PATH] [--ssh-port N]] [-- <extra pi args>]"
                 );
                 std::process::exit(2);
@@ -84,12 +144,84 @@ fn shell_quote(s: &str) -> String {
 #[tokio::main]
 async fn main() {
     let cfg = parse_args();
+    let _ = tokio::fs::create_dir_all(&cfg.data_dir).await;
 
-    let mut child = if let Some(ssh_host) = &cfg.ssh_host {
+    // First run ever (no persisted project list yet): seed one project from
+    // --cwd so `cargo run -- --cwd path/to/project` still works out of the
+    // box, matching the old single-project behavior.
+    let projects_file = cfg.data_dir.join("projects.json");
+    let seed_needed = tokio::fs::metadata(&projects_file).await.is_err();
+    let mut records = load_projects(&cfg).await;
+    if seed_needed {
+        // In --ssh mode --cwd is a path on the remote host, not this
+        // machine, so there's nothing local to canonicalize.
+        let path = if cfg.ssh_host.is_some() {
+            cfg.cwd.clone()
+        } else {
+            tokio::fs::canonicalize(&cfg.cwd).await.unwrap_or_else(|_| cfg.cwd.clone())
+        };
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
+        records.push(ProjectRecord { id: Uuid::new_v4().to_string(), name, path });
+    }
+
+    let mut projects = HashMap::new();
+    for r in records {
+        projects.insert(
+            r.id,
+            Arc::new(ProjectEntry { name: r.name, path: r.path, session_dir: Mutex::new(None) }),
+        );
+    }
+
+    let state = Arc::new(AppState {
+        cfg,
+        projects: RwLock::new(projects),
+        running: RwLock::new(HashMap::new()),
+    });
+
+    if seed_needed {
+        persist_projects(&state).await;
+    }
+
+    // Projects run concurrently: bring every known project's pi process up
+    // at startup rather than waiting for a client to connect.
+    let ids: Vec<String> = state.projects.read().await.keys().cloned().collect();
+    for id in ids {
+        ensure_running(&state, &id).await;
+    }
+
+    let port = state.cfg.port;
+    let web_dir = state.cfg.web_dir.clone();
+    let index = web_dir.join("index.html");
+
+    let app = Router::new()
+        .route("/api/projects", get(list_projects).post(add_project))
+        .route("/api/projects/{id}", delete(remove_project))
+        .route("/api/projects/{id}/sessions", get(list_sessions))
+        .route("/ws/{id}", get(ws_handler))
+        .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
+        .with_state(state);
+
+    let addr = format!("127.0.0.1:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
+    eprintln!("pi-web listening on http://{addr}");
+    axum::serve(listener, app).await.unwrap();
+}
+
+// ---- process lifecycle -----------------------------------------------
+
+/// Spawns pi for one project's `cwd` — locally, or over SSH on `cfg.ssh_host`
+/// if set (in which case `cwd` is a path on the remote host, and every
+/// project shares that one remote host).
+fn spawn_child(cfg: &Config, cwd: &FsPath) -> tokio::process::Child {
+    if let Some(ssh_host) = &cfg.ssh_host {
         // Relay mode: exec pi on a remote box over SSH instead of spawning it
         // locally. The whole remote command is built as one shell-quoted
         // string so it survives ssh's own arg-joining unambiguously.
-        let mut remote_cmd = format!("cd {} && exec {} --mode rpc", shell_quote(cfg.cwd.to_str().expect("--cwd must be valid UTF-8")), shell_quote(&cfg.pi_bin));
+        let mut remote_cmd = format!(
+            "cd {} && exec {} --mode rpc",
+            shell_quote(cwd.to_str().expect("project path must be valid UTF-8")),
+            shell_quote(&cfg.pi_bin)
+        );
         for a in &cfg.pi_args {
             remote_cmd.push(' ');
             remote_cmd.push_str(&shell_quote(a));
@@ -125,25 +257,31 @@ async fn main() {
         cmd.arg("--mode")
             .arg("rpc")
             .args(&cfg.pi_args)
-            .current_dir(&cfg.cwd)
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
-    };
+            .stderr(Stdio::inherit());
+        cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
+    }
+}
 
-    let mut stdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
+fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>) -> Arc<RunningProcess> {
+    let mut child = spawn_child(&state.cfg, &entry.path);
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let stdout = child.stdout.take().expect("piped stdout");
 
     let (to_pi, mut to_pi_rx) = mpsc::channel::<String>(64);
     let (from_pi, _) = broadcast::channel::<String>(1024);
+    let (kill_tx, mut kill_rx) = mpsc::channel::<()>(1);
 
-    // pi stdout -> broadcast to all connected clients
+    // pi stdout -> broadcast to this project's clients, also peeked for
+    // the get_session_stats probe response.
     let from_pi_tx = from_pi.clone();
+    let entry_for_probe = entry.clone();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            learn_session_dir(&entry_for_probe, &line).await;
             let _ = from_pi_tx.send(line);
         }
     });
@@ -160,32 +298,76 @@ async fn main() {
         }
     });
 
-    // if pi dies, there is nothing left to serve
+    // Learn where this project's sessions live without guessing pi's
+    // directory-hashing scheme.
+    let _ = to_pi.try_send(r#"{"type":"get_session_stats"}"#.to_string());
+
+    // Own the child exclusively: either it exits on its own, or someone
+    // asks us to kill it. Either way, drop this project out of `running`
+    // so the next WS connect (or nobody) respawns it.
+    let id_for_exit = id.clone();
     tokio::spawn(async move {
-        let status = child.wait().await;
-        eprintln!("pi exited: {status:?}");
-        std::process::exit(1);
+        tokio::select! {
+            status = child.wait() => {
+                eprintln!("pi exited for project {id_for_exit}: {status:?}");
+            }
+            _ = kill_rx.recv() => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+            }
+        }
+        state.running.write().await.remove(&id_for_exit);
     });
 
-    let state = Arc::new(AppState { to_pi, from_pi });
-    let index = cfg.web_dir.join("index.html");
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .fallback_service(ServeDir::new(&cfg.web_dir).fallback(ServeFile::new(index)))
-        .with_state(state);
-
-    let addr = format!("127.0.0.1:{}", cfg.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
-    eprintln!("pi-web listening on http://{addr}");
-    axum::serve(listener, app).await.unwrap();
+    Arc::new(RunningProcess { to_pi, from_pi, kill_tx })
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+/// Returns the running process for a project, spawning (or respawning, if
+/// it previously died) one on demand. `None` only if `id` isn't a known
+/// project at all.
+async fn ensure_running(state: &Arc<AppState>, id: &str) -> Option<Arc<RunningProcess>> {
+    if let Some(p) = state.running.read().await.get(id) {
+        return Some(p.clone());
+    }
+    let entry = state.projects.read().await.get(id)?.clone();
+    let mut running = state.running.write().await;
+    if let Some(p) = running.get(id) {
+        return Some(p.clone());
+    }
+    let proc = spawn_process(state.clone(), id.to_string(), entry);
+    running.insert(id.to_string(), proc.clone());
+    Some(proc)
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    let mut from_pi = state.from_pi.subscribe();
+async fn learn_session_dir(entry: &Arc<ProjectEntry>, line: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
+    if v.get("command").and_then(|c| c.as_str()) != Some("get_session_stats") {
+        return;
+    }
+    if v.get("success").and_then(|s| s.as_bool()) != Some(true) {
+        return;
+    }
+    let Some(session_file) = v.pointer("/data/sessionFile").and_then(|s| s.as_str()) else { return };
+    let Some(dir) = FsPath::new(session_file).parent() else { return };
+    let mut guard = entry.session_dir.lock().await;
+    if guard.as_deref() != Some(dir) {
+        *guard = Some(dir.to_path_buf());
+    }
+}
+
+// ---- WebSocket bridge --------------------------------------------------
+
+async fn ws_handler(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, StatusCode> {
+    let proc = ensure_running(&state, &id).await.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, proc)))
+}
+
+async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>) {
+    let mut from_pi = proc.from_pi.subscribe();
     loop {
         tokio::select! {
             line = from_pi.recv() => match line {
@@ -200,7 +382,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Text(text))) => {
-                    if state.to_pi.send(text.to_string()).await.is_err() {
+                    if proc.to_pi.send(text.to_string()).await.is_err() {
                         break;
                     }
                 }
@@ -210,4 +392,188 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             },
         }
     }
+}
+
+// ---- projects REST API --------------------------------------------------
+
+#[derive(Serialize)]
+struct ProjectView {
+    id: String,
+    name: String,
+    path: String,
+}
+
+async fn list_projects(State(state): State<Arc<AppState>>) -> Json<Vec<ProjectView>> {
+    let projects = state.projects.read().await;
+    let mut views: Vec<ProjectView> = projects
+        .iter()
+        .map(|(id, e)| ProjectView { id: id.clone(), name: e.name.clone(), path: e.path.display().to_string() })
+        .collect();
+    views.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Json(views)
+}
+
+#[derive(Deserialize)]
+struct AddProjectReq {
+    name: String,
+    path: String,
+}
+
+async fn add_project(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddProjectReq>,
+) -> Result<Json<ProjectView>, (StatusCode, String)> {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name is required".into()));
+    }
+    if req.path.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "path is required".into()));
+    }
+    let path = PathBuf::from(req.path.trim());
+    // In --ssh mode `path` lives on the remote host, not this machine, so
+    // there's nothing local to validate — trust it and let a bad path
+    // surface as a spawn/connect failure for that project instead.
+    let path = if state.cfg.ssh_host.is_some() {
+        path
+    } else {
+        let meta = tokio::fs::metadata(&path)
+            .await
+            .map_err(|_| (StatusCode::BAD_REQUEST, "path does not exist".into()))?;
+        if !meta.is_dir() {
+            return Err((StatusCode::BAD_REQUEST, "path is not a directory".into()));
+        }
+        tokio::fs::canonicalize(&path).await.unwrap_or(path)
+    };
+
+    let id = Uuid::new_v4().to_string();
+    let entry = Arc::new(ProjectEntry { name: name.clone(), path: path.clone(), session_dir: Mutex::new(None) });
+    state.projects.write().await.insert(id.clone(), entry);
+    persist_projects(&state).await;
+    ensure_running(&state, &id).await;
+
+    Ok(Json(ProjectView { id, name, path: path.display().to_string() }))
+}
+
+async fn remove_project(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
+    let existed = state.projects.write().await.remove(&id).is_some();
+    if !existed {
+        return StatusCode::NOT_FOUND;
+    }
+    if let Some(p) = state.running.write().await.remove(&id) {
+        let _ = p.kill_tx.send(()).await;
+    }
+    persist_projects(&state).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn persist_projects(state: &Arc<AppState>) {
+    let records: Vec<ProjectRecord> = {
+        let projects = state.projects.read().await;
+        projects
+            .iter()
+            .map(|(id, e)| ProjectRecord { id: id.clone(), name: e.name.clone(), path: e.path.clone() })
+            .collect()
+    };
+    let file = state.cfg.data_dir.join("projects.json");
+    match serde_json::to_vec_pretty(&records) {
+        Ok(json) => {
+            if let Err(e) = tokio::fs::write(&file, json).await {
+                eprintln!("failed to persist projects: {e}");
+            }
+        }
+        Err(e) => eprintln!("failed to serialize projects: {e}"),
+    }
+}
+
+async fn load_projects(cfg: &Config) -> Vec<ProjectRecord> {
+    let file = cfg.data_dir.join("projects.json");
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+// ---- chat history (sessions) REST API -----------------------------------
+
+#[derive(Serialize)]
+struct SessionView {
+    path: String,
+    title: String,
+    #[serde(rename = "mtimeMs")]
+    mtime_ms: u128,
+}
+
+/// Lists `session_dir` on this machine's filesystem. In `--ssh` mode
+/// `session_dir` is learned from the remote pi process's own
+/// `get_session_stats` response, so it's a path on the *remote* host —
+/// `read_dir` on it here will simply fail and this degrades to an empty
+/// list rather than erroring. Browsing chat history isn't supported over
+/// SSH relay yet.
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<SessionView>>, StatusCode> {
+    let entry = state.projects.read().await.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let session_dir = entry.session_dir.lock().await.clone();
+    let Some(session_dir) = session_dir else {
+        return Ok(Json(Vec::new()));
+    };
+
+    let Ok(mut dir_entries) = tokio::fs::read_dir(&session_dir).await else {
+        return Ok(Json(Vec::new()));
+    };
+
+    let mut sessions = Vec::new();
+    while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
+        let path = dir_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let mtime_ms = dir_entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let title = session_title(&path)
+            .await
+            .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("session").to_string());
+        sessions.push(SessionView { path: path.display().to_string(), title, mtime_ms });
+    }
+    sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    Ok(Json(sessions))
+}
+
+/// Best-effort chat title: the first user message's text, truncated. Falls
+/// back to the filename (via the caller) if the file is empty, unreadable,
+/// or doesn't look like a pi session in the expected shape.
+async fn session_title(path: &FsPath) -> Option<String> {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut lines = BufReader::new(file).lines();
+    let mut scanned = 0;
+    while scanned < 50 {
+        let Ok(Some(line)) = lines.next_line().await else { break };
+        scanned += 1;
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if v.get("role").and_then(|r| r.as_str()) != Some("user") {
+            continue;
+        }
+        let text = v
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")))
+            .and_then(|b| b.get("text"))
+            .and_then(|t| t.as_str());
+        let Some(text) = text else { continue };
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let truncated: String = trimmed.chars().take(60).collect();
+        return Some(if trimmed.chars().count() > 60 { format!("{truncated}…") } else { truncated });
+    }
+    None
 }
