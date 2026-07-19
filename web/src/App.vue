@@ -9,6 +9,7 @@ import {
   store,
 } from "./pi.js";
 import MessageView from "./MessageView.vue";
+import UsagePopover from "./UsagePopover.vue";
 
 const input = ref("");
 const textareaEl = ref(null);
@@ -102,6 +103,7 @@ watch(
     <span class="wordmark">pi</span>
     <span>{{ modelLabel }}</span>
     <span v-if="store.sessionName">· {{ store.sessionName }}</span>
+    <UsagePopover class="header-usage" />
   </header>
 
   <main ref="mainEl">
