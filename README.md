@@ -13,15 +13,26 @@ Minimal dark-themed web frontend for the [pi coding agent](https://github.com/ba
 
 ## Run
 
+Prerequisites: Rust (`cargo`), Node.js, and `pi` installed and importable
+(check with `pi --version`; on this machine `pi` is a shim in
+`C:\Users\crispy\AppData\Local\pi-node\current`, already on `PATH`).
+
 ```sh
 # one-time: build the frontend
 cd web && npm install && npm run build
 
-# run the server (from the repo root)
-cd server && cargo run --release -- --cwd C:\\Users\\crispy\\AppData\\Local\\pi-node\\current
+# run the server (from the repo root), pointing --cwd at the project
+# you want pi to work on — NOT at pi's own install directory
+cd server && cargo run --release -- --cwd C:\path\to\your\project
 ```
 
 Open http://127.0.0.1:3210.
+
+If `pi` isn't on `PATH`, pass its full path explicitly instead:
+
+```sh
+cargo run --release -- --cwd C:\path\to\your\project --pi-bin "C:\Users\crispy\AppData\Local\pi-node\current\pi.cmd"
+```
 
 Server flags:
 
