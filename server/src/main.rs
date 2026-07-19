@@ -33,6 +33,9 @@ struct Config {
     pi_bin: String,
     web_dir: PathBuf,
     pi_args: Vec<String>,
+    ssh_host: Option<String>,
+    ssh_identity: Option<String>,
+    ssh_port: Option<u16>,
 }
 
 fn parse_args() -> Config {
@@ -42,6 +45,9 @@ fn parse_args() -> Config {
         pi_bin: "pi".into(),
         web_dir: PathBuf::from("web/dist"),
         pi_args: Vec::new(),
+        ssh_host: None,
+        ssh_identity: None,
+        ssh_port: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -50,13 +56,19 @@ fn parse_args() -> Config {
             "--cwd" => cfg.cwd = args.next().expect("--cwd needs a value").into(),
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
             "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
+            "--ssh" => cfg.ssh_host = Some(args.next().expect("--ssh needs a value (user@host)")),
+            "--ssh-identity" => cfg.ssh_identity = Some(args.next().expect("--ssh-identity needs a value")),
+            "--ssh-port" => cfg.ssh_port = Some(args.next().expect("--ssh-port needs a value").parse().expect("invalid ssh port")),
             "--" => {
                 cfg.pi_args = args.collect();
                 break;
             }
             other => {
                 eprintln!("unknown argument: {other}");
-                eprintln!("usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] [-- <extra pi args>]");
+                eprintln!(
+                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] \
+                     [--ssh user@host [--ssh-identity PATH] [--ssh-port N]] [-- <extra pi args>]"
+                );
                 std::process::exit(2);
             }
         }
@@ -64,28 +76,62 @@ fn parse_args() -> Config {
     cfg
 }
 
+/// Single-quotes a string for safe inclusion in a POSIX shell command line.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[tokio::main]
 async fn main() {
     let cfg = parse_args();
 
-    // Windows installs pi as a .cmd shim, which can only be spawned via cmd.exe.
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cfg.pi_bin);
-        c
+    let mut child = if let Some(ssh_host) = &cfg.ssh_host {
+        // Relay mode: exec pi on a remote box over SSH instead of spawning it
+        // locally. The whole remote command is built as one shell-quoted
+        // string so it survives ssh's own arg-joining unambiguously.
+        let mut remote_cmd = format!("cd {} && exec {} --mode rpc", shell_quote(cfg.cwd.to_str().expect("--cwd must be valid UTF-8")), shell_quote(&cfg.pi_bin));
+        for a in &cfg.pi_args {
+            remote_cmd.push(' ');
+            remote_cmd.push_str(&shell_quote(a));
+        }
+
+        let mut c = Command::new("ssh");
+        c.arg("-o").arg("BatchMode=yes")
+            .arg("-o").arg("StrictHostKeyChecking=accept-new")
+            .arg("-o").arg("ServerAliveInterval=30")
+            .arg("-o").arg("ServerAliveCountMax=3");
+        if let Some(identity) = &cfg.ssh_identity {
+            c.arg("-i").arg(identity);
+        }
+        if let Some(port) = cfg.ssh_port {
+            c.arg("-p").arg(port.to_string());
+        }
+        c.arg(ssh_host)
+            .arg(remote_cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("failed to spawn ssh — is it on PATH?")
     } else {
-        Command::new(&cfg.pi_bin)
+        // Windows installs pi as a .cmd shim, which can only be spawned via cmd.exe.
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&cfg.pi_bin);
+            c
+        } else {
+            Command::new(&cfg.pi_bin)
+        };
+        cmd.arg("--mode")
+            .arg("rpc")
+            .args(&cfg.pi_args)
+            .current_dir(&cfg.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
     };
-    let mut child = cmd
-        .arg("--mode")
-        .arg("rpc")
-        .args(&cfg.pi_args)
-        .current_dir(&cfg.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("failed to spawn pi — is it on PATH? (override with --pi-bin)");
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
