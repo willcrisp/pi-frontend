@@ -11,7 +11,11 @@ pi-web: a minimal dark-themed web frontend for the [pi coding agent](https://git
 
 There is no root `package.json`; `server/` and `web/` are independent projects (Cargo and npm respectively) built and run separately.
 
+## RULES
+Always work of main branch and commit directly too it
+
 ## Commands
+
 
 Build the frontend (one-time or after frontend changes), then run the server:
 
