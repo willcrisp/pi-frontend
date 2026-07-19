@@ -257,25 +257,32 @@ footer {
   max-width: 760px;
   margin: 0 auto;
   display: flex;
-  gap: 8px;
-  align-items: stretch;
+}
+
+.composer-field {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.composer-field:focus-within {
+  border-color: #2c3540;
 }
 
 textarea {
   flex: 1;
   resize: none;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: none;
+  border: none;
   color: var(--fg);
   font: inherit;
-  padding: 9px 12px;
+  padding: 9px 44px 9px 12px;
   max-height: 200px;
   outline: none;
-}
-
-textarea:focus {
-  border-color: #2c3540;
 }
 
 textarea::placeholder {
@@ -298,18 +305,23 @@ button:hover {
 }
 
 .icon-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border-radius: 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
   flex-shrink: 0;
 }
 
 .icon-btn.send {
   color: var(--accent);
-  border-color: var(--accent);
 }
 
 .icon-btn.send:hover:not(:disabled) {
@@ -319,13 +331,11 @@ button:hover {
 
 .icon-btn.send:disabled {
   color: var(--dim);
-  border-color: var(--border);
   cursor: not-allowed;
 }
 
 .icon-btn.stop {
   color: var(--error);
-  border-color: var(--error);
 }
 
 .icon-btn.stop:hover {
