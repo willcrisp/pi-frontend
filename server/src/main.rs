@@ -14,6 +14,13 @@
 //! the background (added/removed via the `/api/projects` REST endpoints)
 //! so work continues even while a different project is in view. The list
 //! is persisted to `<data-dir>/projects.json`.
+//!
+//! With `--ssh user@host`, every project's pi process is spawned on that
+//! remote host over SSH instead of locally (see `spawn_child`) — this is
+//! how the Railway/Tailscale thin-client setup in the README works. Project
+//! paths are then remote paths, so local filesystem checks (path
+//! validation on add, chat-history discovery) are skipped/degrade
+//! gracefully rather than erroring.
 
 use axum::{
     extract::{
@@ -70,6 +77,9 @@ struct Config {
     web_dir: PathBuf,
     data_dir: PathBuf,
     pi_args: Vec<String>,
+    ssh_host: Option<String>,
+    ssh_identity: Option<String>,
+    ssh_port: Option<u16>,
 }
 
 struct AppState {
@@ -94,6 +104,9 @@ fn parse_args() -> Config {
         web_dir: PathBuf::from("web/dist"),
         data_dir: default_data_dir(),
         pi_args: Vec::new(),
+        ssh_host: None,
+        ssh_identity: None,
+        ssh_port: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -103,6 +116,9 @@ fn parse_args() -> Config {
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
             "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
             "--data-dir" => cfg.data_dir = args.next().expect("--data-dir needs a value").into(),
+            "--ssh" => cfg.ssh_host = Some(args.next().expect("--ssh needs a value (user@host)")),
+            "--ssh-identity" => cfg.ssh_identity = Some(args.next().expect("--ssh-identity needs a value")),
+            "--ssh-port" => cfg.ssh_port = Some(args.next().expect("--ssh-port needs a value").parse().expect("invalid ssh port")),
             "--" => {
                 cfg.pi_args = args.collect();
                 break;
@@ -110,13 +126,19 @@ fn parse_args() -> Config {
             other => {
                 eprintln!("unknown argument: {other}");
                 eprintln!(
-                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] [--data-dir DIR] [-- <extra pi args>]"
+                    "usage: pi-web-server [--port N] [--cwd DIR] [--pi-bin PATH] [--web-dir DIR] [--data-dir DIR] \
+                     [--ssh user@host [--ssh-identity PATH] [--ssh-port N]] [-- <extra pi args>]"
                 );
                 std::process::exit(2);
             }
         }
     }
     cfg
+}
+
+/// Single-quotes a string for safe inclusion in a POSIX shell command line.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[tokio::main]
@@ -131,7 +153,13 @@ async fn main() {
     let seed_needed = tokio::fs::metadata(&projects_file).await.is_err();
     let mut records = load_projects(&cfg).await;
     if seed_needed {
-        let path = tokio::fs::canonicalize(&cfg.cwd).await.unwrap_or_else(|_| cfg.cwd.clone());
+        // In --ssh mode --cwd is a path on the remote host, not this
+        // machine, so there's nothing local to canonicalize.
+        let path = if cfg.ssh_host.is_some() {
+            cfg.cwd.clone()
+        } else {
+            tokio::fs::canonicalize(&cfg.cwd).await.unwrap_or_else(|_| cfg.cwd.clone())
+        };
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
         records.push(ProjectRecord { id: Uuid::new_v4().to_string(), name, path });
     }
@@ -181,27 +209,64 @@ async fn main() {
 
 // ---- process lifecycle -----------------------------------------------
 
-fn spawn_child(pi_bin: &str, cwd: &FsPath, pi_args: &[String]) -> tokio::process::Child {
-    // Windows installs pi as a .cmd shim, which can only be spawned via cmd.exe.
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(pi_bin);
-        c
+/// Spawns pi for one project's `cwd` — locally, or over SSH on `cfg.ssh_host`
+/// if set (in which case `cwd` is a path on the remote host, and every
+/// project shares that one remote host).
+fn spawn_child(cfg: &Config, cwd: &FsPath) -> tokio::process::Child {
+    if let Some(ssh_host) = &cfg.ssh_host {
+        // Relay mode: exec pi on a remote box over SSH instead of spawning it
+        // locally. The whole remote command is built as one shell-quoted
+        // string so it survives ssh's own arg-joining unambiguously.
+        let mut remote_cmd = format!(
+            "cd {} && exec {} --mode rpc",
+            shell_quote(cwd.to_str().expect("project path must be valid UTF-8")),
+            shell_quote(&cfg.pi_bin)
+        );
+        for a in &cfg.pi_args {
+            remote_cmd.push(' ');
+            remote_cmd.push_str(&shell_quote(a));
+        }
+
+        let mut c = Command::new("ssh");
+        c.arg("-o").arg("BatchMode=yes")
+            .arg("-o").arg("StrictHostKeyChecking=accept-new")
+            .arg("-o").arg("ServerAliveInterval=30")
+            .arg("-o").arg("ServerAliveCountMax=3");
+        if let Some(identity) = &cfg.ssh_identity {
+            c.arg("-i").arg(identity);
+        }
+        if let Some(port) = cfg.ssh_port {
+            c.arg("-p").arg(port.to_string());
+        }
+        c.arg(ssh_host)
+            .arg(remote_cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("failed to spawn ssh — is it on PATH?")
     } else {
-        Command::new(pi_bin)
-    };
-    cmd.arg("--mode")
-        .arg("rpc")
-        .args(pi_args)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
+        // Windows installs pi as a .cmd shim, which can only be spawned via cmd.exe.
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&cfg.pi_bin);
+            c
+        } else {
+            Command::new(&cfg.pi_bin)
+        };
+        cmd.arg("--mode")
+            .arg("rpc")
+            .args(&cfg.pi_args)
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
+    }
 }
 
 fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>) -> Arc<RunningProcess> {
-    let mut child = spawn_child(&state.cfg.pi_bin, &entry.path, &state.cfg.pi_args);
+    let mut child = spawn_child(&state.cfg, &entry.path);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
 
@@ -366,13 +431,20 @@ async fn add_project(
         return Err((StatusCode::BAD_REQUEST, "path is required".into()));
     }
     let path = PathBuf::from(req.path.trim());
-    let meta = tokio::fs::metadata(&path)
-        .await
-        .map_err(|_| (StatusCode::BAD_REQUEST, "path does not exist".into()))?;
-    if !meta.is_dir() {
-        return Err((StatusCode::BAD_REQUEST, "path is not a directory".into()));
-    }
-    let path = tokio::fs::canonicalize(&path).await.unwrap_or(path);
+    // In --ssh mode `path` lives on the remote host, not this machine, so
+    // there's nothing local to validate — trust it and let a bad path
+    // surface as a spawn/connect failure for that project instead.
+    let path = if state.cfg.ssh_host.is_some() {
+        path
+    } else {
+        let meta = tokio::fs::metadata(&path)
+            .await
+            .map_err(|_| (StatusCode::BAD_REQUEST, "path does not exist".into()))?;
+        if !meta.is_dir() {
+            return Err((StatusCode::BAD_REQUEST, "path is not a directory".into()));
+        }
+        tokio::fs::canonicalize(&path).await.unwrap_or(path)
+    };
 
     let id = Uuid::new_v4().to_string();
     let entry = Arc::new(ProjectEntry { name: name.clone(), path: path.clone(), session_dir: Mutex::new(None) });
@@ -432,6 +504,12 @@ struct SessionView {
     mtime_ms: u128,
 }
 
+/// Lists `session_dir` on this machine's filesystem. In `--ssh` mode
+/// `session_dir` is learned from the remote pi process's own
+/// `get_session_stats` response, so it's a path on the *remote* host —
+/// `read_dir` on it here will simply fail and this degrades to an empty
+/// list rather than erroring. Browsing chat history isn't supported over
+/// SSH relay yet.
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

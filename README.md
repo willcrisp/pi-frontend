@@ -11,7 +11,9 @@ with a sidebar for switching between projects and each project's chat history.
   project's session history lives on disk. Projects run concurrently — an
   agent keeps working in a project you're not currently viewing — and are
   added/removed via the `/api/projects` REST endpoints from the sidebar,
-  persisted to `<data-dir>/projects.json`. Also serves the built frontend.
+  persisted to `<data-dir>/projects.json`. With `--ssh`, every project's pi
+  process runs on one remote host over SSH instead of locally (see "Remote
+  setup" below). Also serves the built frontend.
 - `web/` — Vue 3 + Vite frontend (plain JS, Vue is the only runtime
   dependency). The browser speaks pi's RPC protocol directly over the
   WebSocket: streaming deltas, tool calls with live output, history hydration
@@ -20,12 +22,17 @@ with a sidebar for switching between projects and each project's chat history.
 
 ## Run
 
+Prerequisites: Rust (`cargo`), Node.js, and `pi` installed and importable
+(check with `pi --version`; on this machine `pi` is a shim in
+`C:\Users\crispy\AppData\Local\pi-node\current`, already on `PATH`).
+
 ```sh
 # one-time: build the frontend
 cd web && npm install && npm run build
 
-# run the server (from the repo root)
-cd server && cargo run --release -- --cwd path/to/your/project
+# run the server (from the repo root), pointing --cwd at the project
+# you want pi to work on — NOT at pi's own install directory
+cd server && cargo run --release -- --cwd C:\path\to\your\project
 ```
 
 Open http://127.0.0.1:3210. `--cwd` only seeds the first project on the very
@@ -33,16 +40,69 @@ first run (so the old single-project workflow still works out of the box);
 after that, add/remove projects from the sidebar and the list persists across
 restarts.
 
+If `pi` isn't on `PATH`, pass its full path explicitly instead:
+
+```sh
+cargo run --release -- --cwd C:\path\to\your\project --pi-bin "C:\Users\crispy\AppData\Local\pi-node\current\pi.cmd"
+```
+
 Server flags:
 
 | Flag | Default | |
 |---|---|---|
 | `--port N` | `3210` | HTTP/WS port (binds 127.0.0.1 only) |
-| `--cwd DIR` | `.` | Working directory for the seed project on first run |
-| `--pi-bin PATH` | `pi` | pi executable |
+| `--cwd DIR` | `.` | Working directory for the seed project on first run, local or on the remote host (`--ssh` mode) |
+| `--pi-bin PATH` | `pi` | pi executable, local or remote |
 | `--web-dir DIR` | `web/dist` | Built frontend to serve |
 | `--data-dir DIR` | `~/.pi-web` | Where `projects.json` is persisted |
+| `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally |
+| `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |
+| `--ssh-port N` | `22` | SSH port for `--ssh` |
 | `-- <args>` | | Everything after `--` is passed to pi for every project (e.g. `-- --model sonnet`) |
+
+## Remote setup: thin client on Railway, pi on your own machine
+
+If you want to drive pi from your phone without keeping a laptop open, run
+this thin client (frontend + bridge server) as a Railway service reachable
+over [Tailscale](https://tailscale.com/), and have the bridge server SSH
+into your actual dev machine — which also runs pi and holds your code —
+over the tailnet. Nothing here binds to the public internet: the server
+still only listens on `127.0.0.1`, and Tailscale's userspace networking
+mode proxies inbound tailnet traffic to that loopback port from inside the
+container. Railway doesn't grant containers a `/dev/net/tun` device, which
+is why userspace networking (not a full TUN-based Tailscale node) is used —
+see `entrypoint.sh`.
+
+**On your dev machine** (wherever pi and your code actually live):
+
+1. Install Tailscale and join the same tailnet: `tailscale up`.
+2. Enable Tailscale SSH so no key management is needed:
+   `tailscale up --ssh`. (Alternatively, use regular `sshd` with a
+   dedicated keypair — see `SSH_PRIVATE_KEY` below.)
+3. Make sure `pi` is installed and on `PATH` for the SSH user, and that
+   your project checkout exists at some path you'll pass as `REMOTE_CWD`.
+
+**On Railway** (this repo, deployed via the included `Dockerfile`):
+
+1. Create a Tailscale [auth key](https://login.tailscale.com/admin/settings/keys)
+   — mark it reusable and ephemeral, so redeploys don't pile up stale
+   offline nodes in your tailnet.
+2. Set these service variables:
+
+   | Variable | Example | |
+   |---|---|---|
+   | `TS_AUTHKEY` | `tskey-auth-...` | from step 1 |
+   | `SSH_TARGET` | `you@dev-machine.your-tailnet.ts.net` | your dev machine's Tailscale SSH hostname |
+   | `REMOTE_CWD` | `/home/you/projects/myapp` | project directory on the dev machine |
+   | `SSH_PRIVATE_KEY` | *(optional)* | only needed if not using Tailscale SSH |
+   | `TS_HOSTNAME` | *(optional)* | Tailscale node name for this Railway service |
+   | `PI_EXTRA_ARGS` | *(optional)* | e.g. `--model sonnet --continue` |
+
+3. Deploy. Do **not** add a public Railway domain/port for this service —
+   there's no auth in front of it, so it should only ever be reachable via
+   the tailnet.
+4. From your phone, install Tailscale, join the same tailnet, and open
+   `http://<railway-service-tailscale-name>:3210`.
 
 ## Dev
 
@@ -62,6 +122,9 @@ server on :3210.
 - Images in prompts
 - Idle eviction of project processes (every added project's `pi` process runs
   until removed or the server restarts)
+- Chat-history browsing in `--ssh` mode (session files live on the remote
+  host, so the sidebar's history list is always empty there for now — new
+  chats and switching still work, there's just no discovery of past ones)
 
 ## TODO: pi-side setup for the token usage popover
 
