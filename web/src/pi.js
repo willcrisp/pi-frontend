@@ -21,6 +21,11 @@ function initialStore() {
     // Extension/prompt-template/skill commands invocable via "/name args" in a prompt,
     // from get_commands: [{ name, description, source, sourceInfo }]
     commands: [],
+    // { message, exitCode } from a synthetic pi_web_process_error frame (see
+    // spawn_process in server/src/main.rs) — the pi/ssh child failed to start
+    // or crashed, with its stderr tail as the message. Cleared once the
+    // process is confirmed alive again (get_state succeeds).
+    processError: null,
   };
 }
 
@@ -230,6 +235,10 @@ function handle(ev) {
         store.toolResults[ev.toolCallId].text = resultText(ev.partialResult);
       }
       break;
+    case "pi_web_process_error":
+      store.processError = { message: ev.message, exitCode: ev.exitCode };
+      break;
+
     case "tool_execution_end": {
       const r = store.toolResults[ev.toolCallId] || { name: ev.toolName };
       r.running = false;
@@ -267,6 +276,7 @@ function handleResponse(ev) {
     store.thinkingLevel = ev.data.thinkingLevel || null;
     store.streaming = ev.data.isStreaming;
     store.sessionName = ev.data.sessionName || null;
+    store.processError = null;
   } else if (ev.command === "get_available_models") {
     store.availableModels = ev.data.models || [];
   } else if (ev.command === "get_session_stats") {

@@ -235,6 +235,8 @@ async fn main() {
         .route("/api/coder/workspaces", get(list_coder_workspaces))
         .route("/api/coder/start", post(start_coder_workspace))
         .route("/api/coder/stop", post(stop_coder_workspace))
+        .route("/api/projects/{id}/git/branches", get(list_git_branches))
+        .route("/api/projects/{id}/git/checkout", post(checkout_git_branch))
         .route("/ws/{id}", get(ws_handler))
         .route("/ws-auth", get(ws_auth_handler))
         .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
@@ -256,9 +258,17 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
         // Relay mode: exec pi on a remote box over SSH instead of spawning it
         // locally. The whole remote command is built as one shell-quoted
         // string so it survives ssh's own arg-joining unambiguously.
+        //
+        // The directory is checked with `cd` on its own line first, with an
+        // explicit, attributable message on failure — rather than folding it
+        // into `cd X && exec pi` — so a bad/relative project path reports
+        // clearly as "pi-web: project directory not found" instead of a bare
+        // `cd: ...: No such file or directory` that's easy to mistake for
+        // something pi itself printed. pi is only ever exec'd once that cd
+        // has actually succeeded.
+        let quoted_cwd = shell_quote(cwd.to_str().expect("project path must be valid UTF-8"));
         let mut remote_cmd = format!(
-            "cd {} && exec {} --mode rpc",
-            shell_quote(cwd.to_str().expect("project path must be valid UTF-8")),
+            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; exec {} --mode rpc",
             shell_quote(&cfg.pi_bin)
         );
         for a in &cfg.pi_args {
@@ -281,7 +291,7 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
             .arg(remote_cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn ssh — is it on PATH?")
     } else {
@@ -299,7 +309,7 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
     }
 }
@@ -308,6 +318,7 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
     let mut child = spawn_child(&state.cfg, &ssh, &entry.path);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
 
     let (to_pi, mut to_pi_rx) = mpsc::channel::<String>(64);
     let (from_pi, _) = broadcast::channel::<String>(1024);
@@ -326,6 +337,24 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
         while let Ok(Some(line)) = lines.next_line().await {
             learn_session_dir(&entry_for_probe, &line).await;
             let _ = from_pi_tx.send(line);
+        }
+    });
+
+    // pi/ssh stderr -> server console (as before) plus a capped tail kept
+    // around so a failing exit can report *why* (version mismatch, bad cwd,
+    // crash) instead of just an opaque exit code.
+    let stderr_tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let id_for_stderr = id.clone();
+    let stderr_tail_writer = stderr_tail.clone();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            eprintln!("[{id_for_stderr}] {line}");
+            let mut tail = stderr_tail_writer.lock().await;
+            tail.push(line);
+            if tail.len() > 30 {
+                tail.remove(0);
+            }
         }
     });
 
@@ -354,16 +383,43 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
     // `id_for_exit`; removing unconditionally would leak that one.
     let id_for_exit = id.clone();
     let proc_for_exit = proc.clone();
+    let from_pi_tx_exit = from_pi.clone();
     tokio::spawn(async move {
+        let mut killed = false;
         tokio::select! {
             status = child.wait() => {
                 eprintln!("pi exited for project {id_for_exit}: {status:?}");
+                // A clean exit (status 0) is a normal shutdown, not an error worth
+                // surfacing — e.g. pi quitting on its own. Anything else (nonzero
+                // exit, or the process never even started) gets reported to the
+                // browser as a synthetic frame; this is the one place besides the
+                // get_session_stats probe where the server injects its own JSON
+                // into the otherwise-untouched pi<->browser stream, since there is
+                // no other way for a spawn/crash failure to reach the UI.
+                let failed = !matches!(&status, Ok(s) if s.success());
+                if failed {
+                    let tail = stderr_tail.lock().await.join("\n");
+                    let message = if tail.is_empty() {
+                        "pi process exited unexpectedly (no output on stderr)".to_string()
+                    } else {
+                        tail
+                    };
+                    let exit_code = status.ok().and_then(|s| s.code());
+                    let ev = serde_json::json!({
+                        "type": "pi_web_process_error",
+                        "message": message,
+                        "exitCode": exit_code,
+                    });
+                    let _ = from_pi_tx_exit.send(ev.to_string());
+                }
             }
             _ = kill_rx.recv() => {
+                killed = true;
                 let _ = child.start_kill();
                 let _ = child.wait().await;
             }
         }
+        let _ = killed; // intentional kills (respawn/removal) never report an error
         let mut running = state.running.write().await;
         if let Some(current) = running.get(&id_for_exit) {
             if Arc::ptr_eq(current, &proc_for_exit) {
@@ -684,44 +740,88 @@ struct BrowseDirsQuery {
 /// Splits the input into an existing directory plus a partial last segment,
 /// then returns child directories of that dir whose name starts with the
 /// partial segment (case-insensitive) so the frontend can fuzzy-filter and
-/// render suggestions as the user types.
+/// render suggestions as the user types. Works both locally and, via
+/// `list_remote_dirs`, against an SSH target — the placeholder in the "add
+/// project" form asks for an absolute path, so an empty query starts
+/// browsing at `/` (root) on either side rather than some ambiguous "current
+/// directory".
 async fn browse_dirs(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<BrowseDirsQuery>,
 ) -> Json<Vec<String>> {
-    if state.ssh.read().await.host.is_some() {
-        return Json(vec![]);
-    }
+    let ssh = state.ssh.read().await.clone();
     let input = q.path.replace('\\', "/");
     let (dir, prefix) = match input.rfind('/') {
         Some(idx) => (&input[..=idx], &input[idx + 1..]),
         None => ("", input.as_str()),
     };
-    let dir_path = if dir.is_empty() { PathBuf::from(".") } else { PathBuf::from(dir) };
 
-    let mut entries = match tokio::fs::read_dir(&dir_path).await {
-        Ok(rd) => rd,
-        Err(_) => return Json(vec![]),
+    let names = if ssh.host.is_some() {
+        let remote_dir = if dir.is_empty() { "/" } else { dir };
+        match list_remote_dirs(&ssh, remote_dir).await {
+            Ok(names) => names,
+            Err(_) => return Json(vec![]),
+        }
+    } else {
+        let dir_path = if dir.is_empty() { PathBuf::from(".") } else { PathBuf::from(dir) };
+        let mut entries = match tokio::fs::read_dir(&dir_path).await {
+            Ok(rd) => rd,
+            Err(_) => return Json(vec![]),
+        };
+        let mut names = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(meta) = entry.metadata().await else { continue };
+            if !meta.is_dir() {
+                continue;
+            }
+            names.push(entry.file_name().to_string_lossy().to_string());
+        }
+        names
     };
+
     let prefix_lower = prefix.to_lowercase();
-    let mut names = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let Ok(meta) = entry.metadata().await else { continue };
-        if !meta.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.to_lowercase().starts_with(&prefix_lower) {
-            names.push(name);
-        }
-    }
+    let mut names: Vec<String> =
+        names.into_iter().filter(|n| n.to_lowercase().starts_with(&prefix_lower)).collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.truncate(50);
-    let full = names
-        .into_iter()
-        .map(|n| format!("{dir}{n}"))
-        .collect();
+    let full = names.into_iter().map(|n| format!("{dir}{n}")).collect();
     Json(full)
+}
+
+/// Lists child directory names of `dir` on the SSH target (bare names, no
+/// trailing slash). `ls -1p | grep '/$'` is used instead of a shell glob so
+/// an empty directory or one with no subdirectories degrades to no output
+/// rather than a literal unglobbed `*` under `sh`'s default (non-nullglob)
+/// behavior. `cd` failing (path doesn't exist / not a directory / no
+/// permission) short-circuits to no output too, same as local `read_dir`
+/// failing.
+async fn list_remote_dirs(ssh: &SshConfig, dir: &str) -> Result<Vec<String>, String> {
+    let remote_cmd = format!("cd {} 2>/dev/null && ls -1p 2>/dev/null | grep '/$'", shell_quote(dir));
+    let ssh_host = ssh.host.as_ref().ok_or_else(|| "no ssh target".to_string())?;
+
+    let mut c = Command::new("ssh");
+    c.arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("StrictHostKeyChecking=accept-new")
+        .arg("-o").arg("ConnectTimeout=8");
+    if let Some(identity) = &ssh.identity {
+        c.arg("-i").arg(identity);
+    }
+    if let Some(port) = ssh.port {
+        c.arg("-p").arg(port.to_string());
+    }
+    c.arg(ssh_host).arg(remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(8), c.output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return Err(format!("failed to run ssh: {e}")),
+        Err(_) => return Err("ssh command timed out".into()),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(|l| l.strip_suffix('/'))
+        .map(|s| s.to_string())
+        .collect())
 }
 
 async fn remove_project(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
@@ -913,6 +1013,127 @@ async fn clear_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigV
     persist_ssh_config(&state).await;
     respawn_all(&state).await;
     Json(SshConfig::default().into())
+}
+
+// ---- git branch REST API -------------------------------------------------
+//
+// Lets the frontend show/switch the git branch checked out in a project's
+// working directory — locally, or on the SSH target if one is set (same
+// dual-mode treatment as `spawn_child`). Read-only listing plus a plain
+// `git checkout <branch>`; no fetch/pull/create is performed.
+
+/// Runs `git <args>` in `cwd`, locally or over SSH depending on `ssh.host`.
+/// Branch names are passed as separate argv entries locally, so there's no
+/// local shell involved; over SSH they're individually shell-quoted before
+/// being joined into the one command string ssh execs remotely.
+async fn run_git(ssh: &SshConfig, cwd: &FsPath, args: &[String]) -> Result<std::process::Output, String> {
+    let mut c = if let Some(ssh_host) = &ssh.host {
+        let mut remote_cmd = format!("cd {} && git", shell_quote(cwd.to_str().unwrap_or_default()));
+        for a in args {
+            remote_cmd.push(' ');
+            remote_cmd.push_str(&shell_quote(a));
+        }
+        let mut c = Command::new("ssh");
+        c.arg("-o").arg("BatchMode=yes")
+            .arg("-o").arg("StrictHostKeyChecking=accept-new")
+            .arg("-o").arg("ConnectTimeout=8");
+        if let Some(identity) = &ssh.identity {
+            c.arg("-i").arg(identity);
+        }
+        if let Some(port) = ssh.port {
+            c.arg("-p").arg(port.to_string());
+        }
+        c.arg(ssh_host).arg(remote_cmd);
+        c
+    } else {
+        let mut c = Command::new("git");
+        c.args(args).current_dir(cwd);
+        c
+    };
+    c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    match tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await {
+        Ok(Ok(out)) => Ok(out),
+        Ok(Err(e)) => Err(format!("failed to run git: {e}")),
+        Err(_) => Err("git command timed out".into()),
+    }
+}
+
+#[derive(Serialize)]
+struct GitBranchesResp {
+    current: Option<String>,
+    branches: Vec<String>,
+    error: Option<String>,
+}
+
+/// Lists local branches (`git branch`), most-recently-committed first is not
+/// guaranteed — this mirrors plain `git branch` order — with the checked-out
+/// one flagged via `current`.
+async fn list_git_branches(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<GitBranchesResp>, StatusCode> {
+    let entry = state.projects.read().await.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let ssh = state.ssh.read().await.clone();
+    let args = vec!["branch".to_string()];
+    match run_git(&ssh, &entry.path, &args).await {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut current = None;
+            let mut branches = Vec::new();
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let name = if let Some(rest) = line.strip_prefix("* ") {
+                    current = Some(rest.trim().to_string());
+                    rest.trim()
+                } else {
+                    line
+                };
+                branches.push(name.to_string());
+            }
+            Ok(Json(GitBranchesResp { current, branches, error: None }))
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let error = Some(if stderr.is_empty() { "not a git repository".to_string() } else { stderr });
+            Ok(Json(GitBranchesResp { current: None, branches: vec![], error }))
+        }
+        Err(e) => Ok(Json(GitBranchesResp { current: None, branches: vec![], error: Some(e) })),
+    }
+}
+
+#[derive(Deserialize)]
+struct GitCheckoutReq {
+    branch: String,
+}
+
+#[derive(Serialize)]
+struct GitCheckoutResp {
+    ok: bool,
+    current: Option<String>,
+    error: Option<String>,
+}
+
+async fn checkout_git_branch(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<GitCheckoutReq>,
+) -> Result<Json<GitCheckoutResp>, StatusCode> {
+    let entry = state.projects.read().await.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let branch = req.branch.trim().to_string();
+    if branch.is_empty() {
+        return Ok(Json(GitCheckoutResp { ok: false, current: None, error: Some("branch is required".into()) }));
+    }
+    let ssh = state.ssh.read().await.clone();
+    let args = vec!["checkout".to_string(), branch.clone()];
+    match run_git(&ssh, &entry.path, &args).await {
+        Ok(out) if out.status.success() => Ok(Json(GitCheckoutResp { ok: true, current: Some(branch), error: None })),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let error = Some(if stderr.is_empty() { "git checkout failed".to_string() } else { stderr });
+            Ok(Json(GitCheckoutResp { ok: false, current: None, error }))
+        }
+        Err(e) => Ok(Json(GitCheckoutResp { ok: false, current: None, error: Some(e) })),
+    }
 }
 
 // ---- coder integration REST API -----------------------------------------

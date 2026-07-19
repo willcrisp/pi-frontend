@@ -13,6 +13,7 @@ import {
   setThinkingLevel,
   store,
 } from "./pi.js";
+import GitBranchSelect from "./GitBranchSelect.vue";
 
 const input = ref("");
 const textareaEl = ref(null);
@@ -299,6 +300,7 @@ function autosize() {
       </div>
     </div>
     <div class="controls">
+      <GitBranchSelect />
       <select
         class="model-select"
         :value="modelKey"

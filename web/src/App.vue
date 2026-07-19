@@ -1,6 +1,7 @@
 <script setup>
 import { projectsStore } from "./projects.js";
 import { authStore } from "./auth.js";
+import { store } from "./pi.js";
 import ChatHeader from "./ChatHeader.vue";
 import Composer from "./Composer.vue";
 import MessageList from "./MessageList.vue";
@@ -17,6 +18,12 @@ import ConnectDialog from "./ConnectDialog.vue";
 
   <div v-else class="chat-panel">
     <ChatHeader />
+    <div v-if="store.processError" class="process-error-banner">
+      <span class="process-error-text">
+        pi process failed to start<template v-if="store.processError.exitCode != null"> (exit {{ store.processError.exitCode }})</template>: {{ store.processError.message }}
+      </span>
+      <button type="button" class="process-error-dismiss" title="Dismiss" @click="store.processError = null">×</button>
+    </div>
     <MessageList />
     <Composer />
   </div>

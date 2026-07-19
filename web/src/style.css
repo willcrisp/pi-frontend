@@ -630,6 +630,197 @@ header .wordmark {
   padding-top: 2px;
 }
 
+/* pi process error banner (App.vue) */
+.process-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  background: rgba(247, 118, 142, 0.1);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  color: var(--error);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.process-error-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.process-error-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.process-error-dismiss:hover {
+  opacity: 0.7;
+}
+
+/* git branch selector (composer controls row) */
+.branch-trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.branch-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 160px;
+}
+
+.branch-trigger:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.branch-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.branch-icon {
+  flex-shrink: 0;
+}
+
+.branch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.branch-popover-panel {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  cursor: auto;
+}
+
+.branch-popover-panel.open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.branch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+  padding: 0 2px;
+}
+
+.branch-title {
+  color: var(--dim);
+  text-transform: lowercase;
+}
+
+.branch-refresh {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 4px;
+}
+
+.branch-refresh:hover {
+  color: var(--fg);
+}
+
+.branch-unavailable {
+  color: var(--dim);
+  line-height: 1.5;
+  padding: 4px 2px;
+}
+
+.branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 5px 6px;
+}
+
+.branch-row:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.branch-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.branch-row.current {
+  color: var(--accent);
+}
+
+.branch-check {
+  width: 10px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-error {
+  color: var(--error);
+  line-height: 1.4;
+  padding-top: 2px;
+}
+
 /* token usage popover */
 .header-usage {
   margin-left: auto;
