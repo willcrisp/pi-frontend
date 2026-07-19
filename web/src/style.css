@@ -309,6 +309,101 @@ header .wordmark {
   }
 }
 
+/* ssh target popover */
+.ssh-trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ssh-trigger {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  margin: -4px;
+  cursor: pointer;
+}
+
+.ssh-popover-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  width: 240px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  cursor: auto;
+}
+
+.ssh-popover-panel.open {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ssh-popover-panel input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.ssh-popover-panel input:focus {
+  border-color: #2c3540;
+}
+
+.ssh-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.ssh-actions button {
+  flex: 1;
+  font-size: 11.5px;
+  padding: 6px 8px;
+}
+
+.ssh-test-result.ok {
+  color: #4ade80;
+}
+
+.ssh-test-result.fail {
+  color: var(--error);
+}
+
+.ssh-clear-link {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.ssh-clear-link:hover {
+  color: var(--fg);
+}
+
+.ssh-help {
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 /* token usage popover */
 .header-usage {
   margin-left: auto;

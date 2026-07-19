@@ -15,7 +15,9 @@
 //! so work continues even while a different project is in view. The list
 //! is persisted to `<data-dir>/projects.json`.
 //!
-//! With `--ssh user@host`, every project's pi process is spawned on that
+//! When an SSH target is set (via `--ssh user@host` at first boot, or
+//! afterwards through the `/api/ssh` endpoints and the frontend's popup on
+//! the connection dot), every project's pi process is spawned on that
 //! remote host over SSH instead of locally (see `spawn_child`) — this is
 //! how the Railway/Tailscale thin-client setup in the README works. Project
 //! paths are then remote paths, so local filesystem checks (path
@@ -29,7 +31,7 @@ use axum::{
     },
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -82,10 +84,24 @@ struct Config {
     ssh_port: Option<u16>,
 }
 
+/// Runtime-editable SSH target (`<data-dir>/ssh.json`), applied to every
+/// project's spawned pi process. `identity` is a path to a key file that
+/// must already exist on the machine running the server — no secret
+/// material is ever stored here. `--ssh`/`--ssh-identity`/`--ssh-port` only
+/// seed this on the very first run (no persisted `ssh.json` yet); after
+/// that, it's edited at runtime via `/api/ssh`.
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct SshConfig {
+    host: Option<String>,
+    identity: Option<String>,
+    port: Option<u16>,
+}
+
 struct AppState {
     cfg: Config,
     projects: RwLock<HashMap<String, Arc<ProjectEntry>>>,
     running: RwLock<HashMap<String, Arc<RunningProcess>>>,
+    ssh: RwLock<SshConfig>,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -146,6 +162,12 @@ async fn main() {
     let cfg = parse_args();
     let _ = tokio::fs::create_dir_all(&cfg.data_dir).await;
 
+    // First run ever (no persisted ssh.json yet): seed from --ssh/etc, same
+    // one-shot-seed treatment as --cwd below.
+    let ssh_file = cfg.data_dir.join("ssh.json");
+    let ssh_seed_needed = tokio::fs::metadata(&ssh_file).await.is_err();
+    let ssh_cfg = load_ssh_config(&cfg).await;
+
     // First run ever (no persisted project list yet): seed one project from
     // --cwd so `cargo run -- --cwd path/to/project` still works out of the
     // box, matching the old single-project behavior.
@@ -153,9 +175,9 @@ async fn main() {
     let seed_needed = tokio::fs::metadata(&projects_file).await.is_err();
     let mut records = load_projects(&cfg).await;
     if seed_needed {
-        // In --ssh mode --cwd is a path on the remote host, not this
-        // machine, so there's nothing local to canonicalize.
-        let path = if cfg.ssh_host.is_some() {
+        // When the SSH target is set, --cwd is a path on the remote host,
+        // not this machine, so there's nothing local to canonicalize.
+        let path = if ssh_cfg.host.is_some() {
             cfg.cwd.clone()
         } else {
             tokio::fs::canonicalize(&cfg.cwd).await.unwrap_or_else(|_| cfg.cwd.clone())
@@ -176,10 +198,14 @@ async fn main() {
         cfg,
         projects: RwLock::new(projects),
         running: RwLock::new(HashMap::new()),
+        ssh: RwLock::new(ssh_cfg),
     });
 
     if seed_needed {
         persist_projects(&state).await;
+    }
+    if ssh_seed_needed {
+        persist_ssh_config(&state).await;
     }
 
     // Projects run concurrently: bring every known project's pi process up
@@ -198,6 +224,8 @@ async fn main() {
         .route("/api/projects/{id}", delete(remove_project))
         .route("/api/projects/{id}/sessions", get(list_sessions))
         .route("/api/browse-dirs", get(browse_dirs))
+        .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
+        .route("/api/ssh/test", post(test_ssh_config))
         .route("/ws/{id}", get(ws_handler))
         .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
         .with_state(state);
@@ -210,11 +238,11 @@ async fn main() {
 
 // ---- process lifecycle -----------------------------------------------
 
-/// Spawns pi for one project's `cwd` — locally, or over SSH on `cfg.ssh_host`
+/// Spawns pi for one project's `cwd` — locally, or over SSH on `ssh.host`
 /// if set (in which case `cwd` is a path on the remote host, and every
 /// project shares that one remote host).
-fn spawn_child(cfg: &Config, cwd: &FsPath) -> tokio::process::Child {
-    if let Some(ssh_host) = &cfg.ssh_host {
+fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::Child {
+    if let Some(ssh_host) = &ssh.host {
         // Relay mode: exec pi on a remote box over SSH instead of spawning it
         // locally. The whole remote command is built as one shell-quoted
         // string so it survives ssh's own arg-joining unambiguously.
@@ -233,10 +261,10 @@ fn spawn_child(cfg: &Config, cwd: &FsPath) -> tokio::process::Child {
             .arg("-o").arg("StrictHostKeyChecking=accept-new")
             .arg("-o").arg("ServerAliveInterval=30")
             .arg("-o").arg("ServerAliveCountMax=3");
-        if let Some(identity) = &cfg.ssh_identity {
+        if let Some(identity) = &ssh.identity {
             c.arg("-i").arg(identity);
         }
-        if let Some(port) = cfg.ssh_port {
+        if let Some(port) = ssh.port {
             c.arg("-p").arg(port.to_string());
         }
         c.arg(ssh_host)
@@ -266,14 +294,18 @@ fn spawn_child(cfg: &Config, cwd: &FsPath) -> tokio::process::Child {
     }
 }
 
-fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>) -> Arc<RunningProcess> {
-    let mut child = spawn_child(&state.cfg, &entry.path);
+fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh: SshConfig) -> Arc<RunningProcess> {
+    let mut child = spawn_child(&state.cfg, &ssh, &entry.path);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
 
     let (to_pi, mut to_pi_rx) = mpsc::channel::<String>(64);
     let (from_pi, _) = broadcast::channel::<String>(1024);
     let (kill_tx, mut kill_rx) = mpsc::channel::<()>(1);
+
+    // Built up front (rather than at the end) so the watcher task below can
+    // compare identity against it — see the Arc::ptr_eq comment there.
+    let proc = Arc::new(RunningProcess { to_pi: to_pi.clone(), from_pi: from_pi.clone(), kill_tx });
 
     // pi stdout -> broadcast to this project's clients, also peeked for
     // the get_session_stats probe response.
@@ -304,9 +336,14 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>) -> 
     let _ = to_pi.try_send(r#"{"type":"get_session_stats"}"#.to_string());
 
     // Own the child exclusively: either it exits on its own, or someone
-    // asks us to kill it. Either way, drop this project out of `running`
-    // so the next WS connect (or nobody) respawns it.
+    // asks us to kill it. Either way, drop this project out of `running` —
+    // but only if `running` still points at *this* process. A respawn (e.g.
+    // from an SSH config change) inserts the new process under the same id
+    // before killing this one, so by the time this task's kill/wait
+    // resolves, the map may already hold a newer, unrelated process for
+    // `id_for_exit`; removing unconditionally would leak that one.
     let id_for_exit = id.clone();
+    let proc_for_exit = proc.clone();
     tokio::spawn(async move {
         tokio::select! {
             status = child.wait() => {
@@ -317,10 +354,15 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>) -> 
                 let _ = child.wait().await;
             }
         }
-        state.running.write().await.remove(&id_for_exit);
+        let mut running = state.running.write().await;
+        if let Some(current) = running.get(&id_for_exit) {
+            if Arc::ptr_eq(current, &proc_for_exit) {
+                running.remove(&id_for_exit);
+            }
+        }
     });
 
-    Arc::new(RunningProcess { to_pi, from_pi, kill_tx })
+    proc
 }
 
 /// Returns the running process for a project, spawning (or respawning, if
@@ -331,13 +373,42 @@ async fn ensure_running(state: &Arc<AppState>, id: &str) -> Option<Arc<RunningPr
         return Some(p.clone());
     }
     let entry = state.projects.read().await.get(id)?.clone();
+    let ssh = state.ssh.read().await.clone();
     let mut running = state.running.write().await;
     if let Some(p) = running.get(id) {
         return Some(p.clone());
     }
-    let proc = spawn_process(state.clone(), id.to_string(), entry);
+    let proc = spawn_process(state.clone(), id.to_string(), entry, ssh);
     running.insert(id.to_string(), proc.clone());
     Some(proc)
+}
+
+/// Kills and respawns one project's pi process against the current SSH
+/// target, inserting the new process into `running` before signalling the
+/// old one to exit — the `Arc::ptr_eq` guard in `spawn_process`'s watcher
+/// task is what makes this ordering safe (see its comment).
+async fn respawn_project(state: &Arc<AppState>, id: &str) {
+    let Some(entry) = state.projects.read().await.get(id).cloned() else { return };
+    let ssh = state.ssh.read().await.clone();
+    let old = {
+        let mut running = state.running.write().await;
+        let old = running.remove(id);
+        let new_proc = spawn_process(state.clone(), id.to_string(), entry, ssh);
+        running.insert(id.to_string(), new_proc);
+        old
+    };
+    if let Some(old) = old {
+        let _ = old.kill_tx.send(()).await;
+    }
+}
+
+/// Respawns every known project's pi process, e.g. after the SSH target
+/// changes.
+async fn respawn_all(state: &Arc<AppState>) {
+    let ids: Vec<String> = state.projects.read().await.keys().cloned().collect();
+    for id in ids {
+        respawn_project(state, &id).await;
+    }
 }
 
 async fn learn_session_dir(entry: &Arc<ProjectEntry>, line: &str) {
@@ -432,10 +503,10 @@ async fn add_project(
         return Err((StatusCode::BAD_REQUEST, "path is required".into()));
     }
     let path = PathBuf::from(req.path.trim());
-    // In --ssh mode `path` lives on the remote host, not this machine, so
-    // there's nothing local to validate — trust it and let a bad path
-    // surface as a spawn/connect failure for that project instead.
-    let path = if state.cfg.ssh_host.is_some() {
+    // With an SSH target set, `path` lives on the remote host, not this
+    // machine, so there's nothing local to validate — trust it and let a
+    // bad path surface as a spawn/connect failure for that project instead.
+    let path = if state.ssh.read().await.host.is_some() {
         path
     } else {
         let meta = tokio::fs::metadata(&path)
@@ -471,7 +542,7 @@ async fn browse_dirs(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<BrowseDirsQuery>,
 ) -> Json<Vec<String>> {
-    if state.cfg.ssh_host.is_some() {
+    if state.ssh.read().await.host.is_some() {
         return Json(vec![]);
     }
     let input = q.path.replace('\\', "/");
@@ -543,6 +614,158 @@ async fn load_projects(cfg: &Config) -> Vec<ProjectRecord> {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
         Err(_) => Vec::new(),
     }
+}
+
+// ---- ssh config REST API -------------------------------------------------
+
+async fn persist_ssh_config(state: &Arc<AppState>) {
+    let cfg = state.ssh.read().await.clone();
+    let file = state.cfg.data_dir.join("ssh.json");
+    match serde_json::to_vec_pretty(&cfg) {
+        Ok(json) => {
+            if let Err(e) = tokio::fs::write(&file, json).await {
+                eprintln!("failed to persist ssh config: {e}");
+            }
+        }
+        Err(e) => eprintln!("failed to serialize ssh config: {e}"),
+    }
+}
+
+/// Loads `<data-dir>/ssh.json` if present, else falls back to whatever the
+/// `--ssh`/`--ssh-identity`/`--ssh-port` CLI flags provided (first-run seed
+/// only, same treatment as `--cwd` seeding `projects.json`).
+async fn load_ssh_config(cfg: &Config) -> SshConfig {
+    let file = cfg.data_dir.join("ssh.json");
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => SshConfig { host: cfg.ssh_host.clone(), identity: cfg.ssh_identity.clone(), port: cfg.ssh_port },
+    }
+}
+
+#[derive(Serialize)]
+struct SshConfigView {
+    host: Option<String>,
+    identity: Option<String>,
+    port: Option<u16>,
+}
+
+impl From<SshConfig> for SshConfigView {
+    fn from(cfg: SshConfig) -> Self {
+        SshConfigView { host: cfg.host, identity: cfg.identity, port: cfg.port }
+    }
+}
+
+async fn get_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigView> {
+    Json(state.ssh.read().await.clone().into())
+}
+
+#[derive(Deserialize)]
+struct SshTestReq {
+    host: String,
+    #[serde(default)]
+    identity: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+#[derive(Serialize)]
+struct SshTestResp {
+    ok: bool,
+    message: String,
+    #[serde(rename = "piFound")]
+    pi_found: Option<bool>,
+}
+
+/// Tests a candidate SSH target without persisting it or touching any
+/// running project process. Also checks whether `pi_bin` is on the remote
+/// `$PATH`, as a soft warning (not a failure — pi may be installed later).
+async fn test_ssh_config(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SshTestReq>,
+) -> Json<SshTestResp> {
+    let host = req.host.trim().to_string();
+    if host.is_empty() {
+        return Json(SshTestResp { ok: false, message: "host is required".into(), pi_found: None });
+    }
+    let identity = req.identity.filter(|s| !s.trim().is_empty());
+
+    let probe = format!(
+        "command -v {} >/dev/null 2>&1 && echo PI_WEB_PI_FOUND || echo PI_WEB_PI_MISSING",
+        shell_quote(&state.cfg.pi_bin)
+    );
+    let mut c = Command::new("ssh");
+    c.arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("StrictHostKeyChecking=accept-new")
+        .arg("-o").arg("ConnectTimeout=6");
+    if let Some(identity) = &identity {
+        c.arg("-i").arg(identity);
+    }
+    if let Some(port) = req.port {
+        c.arg("-p").arg(port.to_string());
+    }
+    c.arg(&host).arg(probe).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    match tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await {
+        Err(_) => Json(SshTestResp { ok: false, message: "connection timed out".into(), pi_found: None }),
+        Ok(Err(e)) => Json(SshTestResp { ok: false, message: format!("failed to run ssh: {e}"), pi_found: None }),
+        Ok(Ok(out)) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let pi_found = if stdout.contains("PI_WEB_PI_FOUND") {
+                Some(true)
+            } else if stdout.contains("PI_WEB_PI_MISSING") {
+                Some(false)
+            } else {
+                None
+            };
+            let message = match pi_found {
+                Some(true) => "connected — pi found on remote PATH".to_string(),
+                Some(false) => format!("connected — but `{}` not found on remote PATH", state.cfg.pi_bin),
+                None => "connected".to_string(),
+            };
+            Json(SshTestResp { ok: true, message, pi_found })
+        }
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let message = if stderr.is_empty() { "ssh connection failed".to_string() } else { stderr };
+            Json(SshTestResp { ok: false, message, pi_found: None })
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SshSaveReq {
+    host: String,
+    #[serde(default)]
+    identity: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+/// Persists the new SSH target and respawns every project's pi process
+/// against it.
+async fn save_ssh_config(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SshSaveReq>,
+) -> Result<Json<SshConfigView>, (StatusCode, String)> {
+    let host = req.host.trim().to_string();
+    if host.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "host is required".into()));
+    }
+    let identity = req.identity.filter(|s| !s.trim().is_empty());
+    let new_cfg = SshConfig { host: Some(host), identity, port: req.port };
+    *state.ssh.write().await = new_cfg.clone();
+    persist_ssh_config(&state).await;
+    respawn_all(&state).await;
+    Ok(Json(new_cfg.into()))
+}
+
+/// Clears the SSH target (back to local execution) and respawns every
+/// project's pi process locally.
+async fn clear_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigView> {
+    *state.ssh.write().await = SshConfig::default();
+    persist_ssh_config(&state).await;
+    respawn_all(&state).await;
+    Json(SshConfig::default().into())
 }
 
 // ---- chat history (sessions) REST API -----------------------------------

@@ -56,7 +56,7 @@ There is no test suite or linter configured in either project.
 | `--pi-bin PATH` | `pi` | pi executable, local or remote |
 | `--web-dir DIR` | `web/dist` | Built frontend to serve |
 | `--data-dir DIR` | `~/.pi-web` | Where `projects.json` is persisted |
-| `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally |
+| `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally. Only seeds `<data-dir>/ssh.json` on the very first run — after that, edit the target from the popup on the header's connection dot (`/api/ssh`) instead of restarting with new flags |
 | `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |
 | `--ssh-port N` | `22` | SSH port for `--ssh` |
 | `-- <args>` | | Everything after `--` is passed to pi for every project (e.g. `-- --model sonnet --continue`) |
@@ -107,7 +107,7 @@ web/src/App.vue (composer, header, model/thinking selects)
 - Per project: one `mpsc::channel` carries lines from any connected WS client into that project's pi stdin; one `broadcast::channel` carries every line of that pi process's stdout out to all WS clients on `/ws/{projectId}` — this means multiple browser tabs on the same project stay in sync automatically.
 - A lagging client (slow consumer) just skips missed broadcast messages rather than blocking others; the frontend recovers by re-requesting `get_messages` on reconnect (see `ws.onclose` in `pi.js`, which retries the connection after 1.5s).
 - If a project's `pi` child process exits, only that project's entry is dropped from `running` (next connect respawns it) — the server itself keeps running, unlike the old single-process design.
-- With `--ssh user@host`, `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host.
+- When an SSH target is set (`AppState.ssh: RwLock<SshConfig>`, runtime-editable via `/api/ssh` — see below — and persisted to `<data-dir>/ssh.json`), `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host. Changing the target via `PUT`/`DELETE /api/ssh` respawns every known project's pi process against it (`respawn_all`) — the watcher task that removes a dead process from `running` guards the removal with `Arc::ptr_eq` so a respawn's new process (inserted under the same id before the old one is killed) can't be evicted by the old process's own cleanup.
 - Windows spawns `pi` via `cmd /C` since it installs as a `.cmd` shim.
 
 ### Frontend internals (`web/src/`)
@@ -116,6 +116,8 @@ web/src/App.vue (composer, header, model/thinking selects)
 - `projects.js` — REST client + reactive `projectsStore` (project list, current project's session/chat list). Session switching itself goes over the WebSocket via pi's `new_session`/`switch_session` RPC commands.
 - `Sidebar.vue` — project list (add/remove, backed by `/api/projects`) and, for the active project, its paginated chat history (backed by `/api/projects/{id}/sessions`).
 - `App.vue` — top-level layout: sidebar, header (connection dot, model, session name, usage popover), scrollable message list, composer (textarea + send/stop), model/thinking-level selects. Auto-scrolls the message pane unless the user has scrolled up.
+- `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
+- `SshPopover.vue` — click-toggled popup on the header's connection dot (`ChatHeader.vue`) for viewing/testing/saving/clearing the SSH target. Unlike `UsagePopover.vue` (hover-triggered, read-only), this is click-toggled with outside-click/Escape-to-close since it's a form.
 - `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself.
 - `UsagePopover.vue` — session-level token/cost stats from `get_session_stats`, plus a **heuristic** sub-agent breakdown: any tool result whose `details.results` is an array of `{ agent, model, usage, stopReason, errorMessage }` is treated as a sub-agent dispatch (the shape produced by pi-mono's example `subagent` extension). Per-agent duration is measured client-side from tool-call start/end, since that extension doesn't report elapsed time itself. This degrades gracefully to "no sub-agents used this session" when no such extension is installed — see the README's "TODO: pi-side setup for the token usage popover" section for how to wire one up in a local `pi` config.
 - Styling is a single hand-written `style.css` (CSS custom properties for the dark theme) — no CSS framework or utility classes.
@@ -126,6 +128,6 @@ web/src/App.vue (composer, header, model/thinking selects)
 - No handling of `extension_ui_request` dialogs (confirm/select/input from extensions).
 - No image support in prompts.
 - No idle eviction of project processes (every added project's `pi` process runs until removed or the server restarts).
-- No chat-history browsing in `--ssh` mode (session files live on the remote host; new chats and switching still work, there's just no discovery of past ones).
+- No chat-history browsing when an SSH target is set (session files live on the remote host; new chats and switching still work, there's just no discovery of past ones).
 
 When working in this area, check whether a change belongs in `pi.js` (protocol/state) versus the `.vue` components (presentation) before touching the server — the server almost never needs to change for frontend-visible features.
