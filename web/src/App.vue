@@ -196,10 +196,11 @@ watch(
       <span
         class="dot"
         :class="{ connected: store.connected, streaming: store.streaming }"
+        :title="store.connected ? (store.streaming ? 'Connected · agent running' : 'Connected') : 'Disconnected'"
       ></span>
-      <span class="wordmark">pi</span>
-      <span>{{ modelLabel }}</span>
-      <span v-if="store.sessionName">· {{ store.sessionName }}</span>
+      <span class="wordmark" title="pi coding agent">pi</span>
+      <span :title="modelLabel">{{ modelLabel }}</span>
+      <span v-if="store.sessionName" :title="store.sessionName">· {{ store.sessionName }}</span>
       <UsagePopover class="header-usage" />
     </header>
 
@@ -229,17 +230,53 @@ watch(
         </li>
       </ul>
       <div class="composer">
-        <textarea
-          ref="textareaEl"
-          v-model="input"
-          rows="1"
-          placeholder="Message pi… (paste an image to attach it)"
-          @keydown="onKeydown"
-          @paste="onPaste"
-          @input="autosize"
-        ></textarea>
-        <button v-if="store.streaming" class="stop" @click="abort">stop</button>
-        <button v-else @click="submit">send</button>
+        <div class="composer-field">
+          <textarea
+            ref="textareaEl"
+            v-model="input"
+            rows="1"
+            placeholder="Message pi…"
+            title="Enter to send, Shift+Enter for a new line"
+            @keydown="onKeydown"
+            @input="autosize"
+          ></textarea>
+          <div class="composer-actions">
+            <button
+              v-if="store.streaming"
+              class="composer-icon-btn stop"
+              aria-label="Stop"
+              title="Stop"
+              @click="abort"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" />
+              </svg>
+            </button>
+            <button
+              class="composer-icon-btn send"
+              :aria-label="store.streaming ? 'Steer' : 'Send'"
+              :title="store.streaming ? 'Steer the agent with this message' : 'Send'"
+              :disabled="!input.trim()"
+              @click="submit"
+            >
+              <svg v-if="store.streaming" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <line x1="4" y1="2" x2="4" y2="10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                <circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.2" />
+                <circle cx="4" cy="12" r="2" stroke="currentColor" stroke-width="1.2" />
+                <path d="M12 6a6 6 0 0 1-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
       <div class="controls">
         <select
@@ -261,6 +298,7 @@ watch(
         </select>
         <span
           class="level-dot"
+          :title="thinkingDisabled ? 'Reasoning effort unavailable for this model' : `Reasoning effort: ${store.thinkingLevel}`"
           :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
         ></span>
         <select

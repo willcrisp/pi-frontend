@@ -76,7 +76,7 @@ function formatDuration(ms) {
 </script>
 
 <template>
-  <div class="usage" tabindex="0">
+  <div class="usage" tabindex="0" title="Token usage & cost">
     <svg
       class="usage-icon"
       width="16"

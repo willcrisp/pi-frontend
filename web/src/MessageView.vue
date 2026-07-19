@@ -35,7 +35,7 @@ function toolResult(id) {
       />
 
       <details v-else-if="block.type === 'thinking'" class="thinking">
-        <summary>thinking</summary>
+        <summary title="Click to expand/collapse">thinking</summary>
         {{ block.thinking }}
       </details>
 
@@ -45,10 +45,10 @@ function toolResult(id) {
         :class="{ error: toolResult(block.id)?.isError }"
         :open="toolResult(block.id)?.running"
       >
-        <summary>
-          <span class="tool-name">{{ block.name }}</span>
+        <summary title="Click to expand/collapse">
+          <span class="tool-name" :title="block.name">{{ block.name }}</span>
           {{ argsSummary(block.arguments) }}
-          <span v-if="toolResult(block.id)?.running" class="running">⋯</span>
+          <span v-if="toolResult(block.id)?.running" class="running" title="Running">⋯</span>
         </summary>
         <pre v-if="toolResult(block.id)?.text">{{ toolResult(block.id).text }}</pre>
       </details>
