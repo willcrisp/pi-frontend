@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pi-web",
+      "runtimeExecutable": "server\\target\\release\\pi-web-server.exe",
+      "runtimeArgs": [],
+      "port": 3210
+    }
+  ]
+}
