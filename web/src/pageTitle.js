@@ -17,8 +17,7 @@ function updatePageTitle() {
   const projectName = currentProject?.name || "pi";
   const sessionName = store.sessionName || "untitled";
 
-  const statusDot = store.streaming ? "🟨" : "🟢";
-  const title = `${statusDot} ${projectName} - ${sessionName}`;
+  const title = `${projectName} - ${sessionName}`;
 
   document.title = title;
 
