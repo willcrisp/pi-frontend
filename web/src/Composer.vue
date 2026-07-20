@@ -13,6 +13,7 @@ import {
   setThinkingLevel,
   store,
 } from "./pi.js";
+import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
 
 const input = ref("");
@@ -250,6 +251,7 @@ function autosize() {
       </li>
     </ul>
     <div class="composer">
+      <D20Die />
       <div class="composer-field">
         <textarea
           ref="textareaEl"

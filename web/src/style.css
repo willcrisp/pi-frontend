@@ -1553,6 +1553,138 @@ button:hover {
   color: var(--bg);
 }
 
+/* --- d20 fidget die (D20Die.vue, left of the composer input) --- */
+
+.d20-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  margin: 0 10px 0 0;
+  background: none;
+  border: none;
+  flex-shrink: 0;
+  align-self: flex-end;
+  cursor: pointer;
+}
+
+.d20 {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--dim);
+  transition: color 0.25s ease, transform 0.15s ease;
+}
+
+.d20 svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.d20-num {
+  fill: var(--fg);
+  font-size: 26px;
+  font-weight: 650;
+}
+
+.d20-btn:hover .d20 {
+  color: var(--accent);
+  transform: rotate(-14deg);
+}
+
+.d20-btn:active .d20 {
+  transform: rotate(-14deg) scale(0.85);
+}
+
+.d20.rolling {
+  color: var(--accent);
+  animation: d20-roll 0.9s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.d20.rolling .d20-num {
+  filter: blur(0.8px);
+}
+
+.d20.crit {
+  color: #e0af68;
+  filter: drop-shadow(0 0 6px rgba(224, 175, 104, 0.55));
+  animation: d20-pop 0.5s ease;
+}
+
+.d20.crit .d20-num {
+  fill: #e0af68;
+}
+
+.d20.fumble {
+  color: var(--error);
+  animation: d20-shake 0.4s ease;
+}
+
+.d20.fumble .d20-num {
+  fill: var(--error);
+}
+
+@keyframes d20-roll {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(270deg) scale(1.18);
+  }
+  55% {
+    transform: rotate(560deg) scale(1.05);
+  }
+  80% {
+    transform: rotate(695deg) scale(0.94);
+  }
+  100% {
+    transform: rotate(720deg) scale(1);
+  }
+}
+
+@keyframes d20-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.3) rotate(8deg);
+  }
+  70% {
+    transform: scale(0.92) rotate(-4deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes d20-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-3px) rotate(-6deg);
+  }
+  40% {
+    transform: translateX(3px) rotate(5deg);
+  }
+  60% {
+    transform: translateX(-2px) rotate(-3deg);
+  }
+  80% {
+    transform: translateX(2px) rotate(2deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .d20.rolling,
+  .d20.crit,
+  .d20.fumble {
+    animation: none;
+  }
+}
+
 .controls {
   max-width: 760px;
   margin: 6px auto 0;
