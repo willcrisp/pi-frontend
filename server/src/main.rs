@@ -106,11 +106,19 @@ struct AppState {
     ssh: RwLock<SshConfig>,
 }
 
-fn default_data_dir() -> PathBuf {
+/// The current user's home directory (`$HOME`, or `%USERPROFILE%` on
+/// Windows), if the environment provides one. `None` when it doesn't (rare,
+/// but callers should degrade gracefully rather than panic — see
+/// `default_data_dir` and `resolve_agents_dir`'s user scope).
+fn home_dir() -> Option<PathBuf> {
     let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    match std::env::var(home_var) {
-        Ok(home) => PathBuf::from(home).join(".pi-web"),
-        Err(_) => PathBuf::from(".pi-web"),
+    std::env::var(home_var).ok().map(PathBuf::from)
+}
+
+fn default_data_dir() -> PathBuf {
+    match home_dir() {
+        Some(home) => home.join(".pi-web"),
+        None => PathBuf::from(".pi-web"),
     }
 }
 
@@ -229,6 +237,7 @@ async fn main() {
         .route("/api/projects", get(list_projects).post(add_project))
         .route("/api/projects/{id}", delete(remove_project))
         .route("/api/projects/{id}/sessions", get(list_sessions))
+        .route("/api/agents", get(list_agents).put(save_agent).delete(delete_agent))
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
@@ -1359,4 +1368,813 @@ async fn session_title(path: &FsPath) -> Option<String> {
         return Some(if trimmed.chars().count() > 60 { format!("{truncated}…") } else { truncated });
     }
     None
+}
+
+// ---- agent definitions REST API -----------------------------------------
+//
+// pi-mono's `subagent` extension reads per-agent markdown files with a small
+// YAML-ish frontmatter (name/description/tools/model, all single-line
+// scalars) from two locations: a user scope (`~/.pi/agent/agents/*.md`) and
+// a per-project scope (`<projectPath>/.pi/agents/*.md`). Both are directories
+// on whatever machine actually runs pi — this machine normally, or the SSH
+// target's machine when one is set — so every filesystem op here has the
+// same local/remote duality as `spawn_child`/`run_git`/`list_remote_dirs`
+// above. There's deliberately no yaml crate involved: the frontmatter shape
+// is fixed and tiny enough that a hand-rolled parser/serializer round-trips
+// it (including lines it doesn't understand) more predictably than pulling
+// in a general YAML parser would.
+
+/// One agent-definition file as parsed for the frontend. `raw` is always the
+/// full file contents verbatim (used both to show a "view source" toggle and
+/// as the write-back payload for files whose frontmatter didn't parse);
+/// `name`/`description`/`tools`/`model`/`parseError` are best-effort and any
+/// of them can be absent, e.g. for a file missing its closing `---`.
+#[derive(Serialize)]
+struct AgentView {
+    scope: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
+    name: Option<String>,
+    description: Option<String>,
+    tools: Option<String>,
+    model: Option<String>,
+    #[serde(rename = "systemPrompt")]
+    system_prompt: String,
+    raw: String,
+    #[serde(rename = "parseError")]
+    parse_error: Option<String>,
+}
+
+impl AgentView {
+    fn new(scope: &str, file_name: String, raw: String, parsed: ParsedAgent) -> Self {
+        AgentView {
+            scope: scope.to_string(),
+            file_name,
+            name: parsed.name,
+            description: parsed.description,
+            tools: parsed.tools,
+            model: parsed.model,
+            system_prompt: parsed.system_prompt,
+            raw,
+            parse_error: parsed.parse_error,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AgentsResp {
+    agents: Vec<AgentView>,
+}
+
+/// The directory holding agent-definition files for one scope, in both
+/// local and SSH-remote-embeddable form — mirrors the `local`/remote-string
+/// split callers already do inline for `spawn_child`'s `cwd` and
+/// `run_git`'s `cwd`, just bundled into one value since the agent-file
+/// helpers below need it repeatedly. `remote_expr` is a value that's already
+/// safe to splice directly into a remote shell command: for user scope it's
+/// the literal, deliberately *unquoted* string `~/.pi/agent/agents` (quoting
+/// it would defeat sh's tilde-expansion); for project scope it's the
+/// project's path with `.pi/agents` appended, `shell_quote`d as a whole
+/// since project paths can contain spaces.
+struct AgentsDir {
+    local: PathBuf,
+    remote_expr: String,
+}
+
+/// Resolves the agents directory for `scope` ("user" or "project"). For
+/// project scope, `project_id` must name a known project — 404 otherwise,
+/// matching how every other per-project endpoint in this file reports an
+/// unknown id. `list_agents` intentionally does *not* use this for its own
+/// project-scope lookup (an unknown `projectId` there just means "skip
+/// project scope", not a request error) — this is for `save_agent`/
+/// `delete_agent`, where the caller is acting on a specific scope and an
+/// unresolvable one really is an error.
+async fn resolve_agents_dir(
+    state: &Arc<AppState>,
+    scope: &str,
+    project_id: Option<&str>,
+) -> Result<AgentsDir, (StatusCode, String)> {
+    match scope {
+        "user" => Ok(AgentsDir {
+            local: home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".pi/agent/agents"),
+            remote_expr: "~/.pi/agent/agents".to_string(),
+        }),
+        "project" => {
+            let id = project_id
+                .filter(|s| !s.is_empty())
+                .ok_or((StatusCode::NOT_FOUND, "projectId is required for project scope".to_string()))?;
+            let entry = state
+                .projects
+                .read()
+                .await
+                .get(id)
+                .cloned()
+                .ok_or((StatusCode::NOT_FOUND, "unknown project".to_string()))?;
+            let local = entry.path.join(".pi").join("agents");
+            let remote_path = format!("{}/.pi/agents", entry.path.to_string_lossy());
+            Ok(AgentsDir { local, remote_expr: shell_quote(&remote_path) })
+        }
+        other => Err((StatusCode::BAD_REQUEST, format!("invalid scope: {other} (expected \"user\" or \"project\")"))),
+    }
+}
+
+/// Builds `ssh <opts> <host>`, ready for the caller to append the remote
+/// command and set stdio — the option list `run_git`/`list_remote_dirs`
+/// above also use, factored out here since the agent-file helpers below need
+/// several independent round-trips (list, exists, write, delete) instead of
+/// just one.
+fn ssh_command(ssh: &SshConfig, connect_timeout_secs: u64) -> Command {
+    let ssh_host = ssh.host.as_deref().expect("caller only invokes this when ssh.host is Some");
+    let mut c = Command::new("ssh");
+    c.arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("StrictHostKeyChecking=accept-new")
+        .arg("-o").arg(format!("ConnectTimeout={connect_timeout_secs}"));
+    if let Some(identity) = &ssh.identity {
+        c.arg("-i").arg(identity);
+    }
+    if let Some(port) = ssh.port {
+        c.arg("-p").arg(port.to_string());
+    }
+    c.arg(ssh_host);
+    c
+}
+
+/// Builds a single shell "word" for `dir/file_name` on the remote host, by
+/// concatenating `dir_remote` (either the unquoted `~/...` literal or an
+/// already-`shell_quote`d path, per `AgentsDir::remote_expr`) with a
+/// separately quoted file name. sh concatenates adjacent quoted/unquoted
+/// segments that have no whitespace between them into one word, so both
+/// `~/.pi/agent/agents/'my agent.md'` and `'/path with space'/'a.md'` expand
+/// to the intended single path.
+fn remote_file_expr(dir_remote: &str, file_name: &str) -> String {
+    format!("{dir_remote}/{}", shell_quote(file_name))
+}
+
+/// Reads every `*.md` file in an agents directory — locally, or over SSH —
+/// as `(fileName, contents)` pairs. A missing/unreadable directory degrades
+/// to an empty list rather than an error, same as `list_sessions` treats a
+/// project's (possibly not-yet-existing) session directory: an empty scope
+/// isn't a failure.
+async fn read_agent_files(ssh: &SshConfig, dir_local: &FsPath, dir_remote: &str) -> Result<Vec<(String, String)>, String> {
+    if ssh.host.is_some() {
+        // One ssh round-trip lists and reads every file, emitting NUL-framed
+        // (fileName, contents) pairs so neither filenames nor file contents
+        // containing newlines can be mistaken for record boundaries. The
+        // `[ -f "$f" ]` guard skips the unglobbed literal `*.md` that `for`
+        // iterates over when the directory has no matches (sh's default
+        // non-nullglob behavior); a `cd` failure short-circuits to no output
+        // at all, same as local `read_dir` failing below.
+        let remote_cmd = format!(
+            "cd {dir_remote} 2>/dev/null && for f in *.md; do [ -f \"$f\" ] || continue; printf '%s\\0' \"$f\"; cat \"$f\"; printf '\\0'; done"
+        );
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let out = match tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(format!("failed to run ssh: {e}")),
+            Err(_) => return Err("ssh command timed out".to_string()),
+        };
+        Ok(split_nul_pairs(&out.stdout))
+    } else {
+        let mut entries = match tokio::fs::read_dir(dir_local).await {
+            Ok(rd) => rd,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let mut files = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.path().extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata().await else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else { continue };
+            // Skip files that aren't valid UTF-8 rather than failing the
+            // whole listing over one bad file.
+            if let Ok(contents) = tokio::fs::read_to_string(entry.path()).await {
+                files.push((file_name, contents));
+            }
+        }
+        Ok(files)
+    }
+}
+
+/// Splits the NUL-framed `(fileName, contents)` stream `read_agent_files`'s
+/// remote branch produces back into pairs. The final NUL leaves a trailing
+/// empty split artifact, which naturally falls out (the `contents` half of
+/// that pair is absent, so the pattern match below stops the loop) rather
+/// than needing special-casing.
+fn split_nul_pairs(bytes: &[u8]) -> Vec<(String, String)> {
+    let mut parts = bytes.split(|b| *b == 0);
+    let mut out = Vec::new();
+    while let (Some(name), Some(contents)) = (parts.next(), parts.next()) {
+        if let (Ok(name), Ok(contents)) = (std::str::from_utf8(name), std::str::from_utf8(contents)) {
+            out.push((name.to_string(), contents.to_string()));
+        }
+    }
+    out
+}
+
+/// Whether `dir/file_name` exists — used for the create-vs-409 check in
+/// `save_agent` and the 404-vs-success check in `delete_agent`.
+async fn agent_file_exists(ssh: &SshConfig, dir_local: &FsPath, dir_remote: &str, file_name: &str) -> bool {
+    if ssh.host.is_some() {
+        let remote_cmd = format!("test -f {}", remote_file_expr(dir_remote, file_name));
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), c.status()).await,
+            Ok(Ok(status)) if status.success()
+        )
+    } else {
+        tokio::fs::try_exists(dir_local.join(file_name)).await.unwrap_or(false)
+    }
+}
+
+/// Reads one agent file's raw contents, if it exists and is readable —
+/// `None` on any failure (missing, unreadable, not valid UTF-8, ssh error).
+/// Used by `save_agent` to fetch the *previous* contents of a file being
+/// updated, so a structured-mode edit can carry forward frontmatter lines
+/// this codec doesn't otherwise understand (see `ParsedAgent::extra`)
+/// instead of silently dropping them.
+async fn read_agent_file(ssh: &SshConfig, dir_local: &FsPath, dir_remote: &str, file_name: &str) -> Option<String> {
+    if ssh.host.is_some() {
+        let remote_cmd = format!("cat {}", remote_file_expr(dir_remote, file_name));
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await.ok()?.ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok()
+    } else {
+        tokio::fs::read_to_string(dir_local.join(file_name)).await.ok()
+    }
+}
+
+/// Writes `contents` to `dir/file_name`, creating the directory first
+/// (`mkdir -p` semantics both locally and remotely) — callers decide
+/// create-vs-overwrite via `agent_file_exists` before calling this, it
+/// always just writes.
+async fn write_agent_file(ssh: &SshConfig, dir_local: &FsPath, dir_remote: &str, file_name: &str, contents: &str) -> Result<(), String> {
+    if ssh.host.is_some() {
+        let remote_cmd = format!("mkdir -p {dir_remote} && cat > {}", remote_file_expr(dir_remote, file_name));
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = c.spawn().map_err(|e| format!("failed to run ssh: {e}"))?;
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let write_res = stdin.write_all(contents.as_bytes()).await;
+        drop(stdin);
+        if let Err(e) = write_res {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(format!("failed to write to ssh stdin: {e}"));
+        }
+        let out = match tokio::time::timeout(std::time::Duration::from_secs(10), child.wait_with_output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(format!("failed to run ssh: {e}")),
+            Err(_) => return Err("ssh command timed out".to_string()),
+        };
+        if out.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if stderr.is_empty() { "failed to write agent file".to_string() } else { stderr })
+        }
+    } else {
+        tokio::fs::create_dir_all(dir_local).await.map_err(|e| format!("failed to create directory: {e}"))?;
+        tokio::fs::write(dir_local.join(file_name), contents).await.map_err(|e| format!("failed to write file: {e}"))
+    }
+}
+
+/// Deletes `dir/file_name`. `Ok(false)` (not an error) means it didn't exist
+/// to begin with, so callers can turn that into a 404 without a separate
+/// existence check.
+async fn delete_agent_file(ssh: &SshConfig, dir_local: &FsPath, dir_remote: &str, file_name: &str) -> Result<bool, String> {
+    if ssh.host.is_some() {
+        let expr = remote_file_expr(dir_remote, file_name);
+        // Exit code 3 is our own sentinel for "wasn't there" — chosen since
+        // `rm`'s own failure exit (1) shouldn't be conflated with it.
+        let remote_cmd = format!("if [ -f {expr} ]; then rm -- {expr}; else exit 3; fi");
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let out = match tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(format!("failed to run ssh: {e}")),
+            Err(_) => return Err("ssh command timed out".to_string()),
+        };
+        if out.status.success() {
+            Ok(true)
+        } else if out.status.code() == Some(3) {
+            Ok(false)
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if stderr.is_empty() { "failed to delete agent file".to_string() } else { stderr })
+        }
+    } else {
+        match tokio::fs::remove_file(dir_local.join(file_name)).await {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("failed to delete file: {e}")),
+        }
+    }
+}
+
+/// A bare file/agent-name component: non-empty, drawn only from
+/// `[A-Za-z0-9._-]`, and not containing `..` — the character class already
+/// excludes `/` (so there's no directory to traverse into in the first
+/// place), the `..` check is belt-and-suspenders on top of that.
+fn valid_agent_file_component(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        && !s.contains("..")
+}
+
+/// Frontmatter scalars are constrained to one line (see `serialize_agent_md`
+/// — they're always emitted as a single quoted line); reject values that
+/// would break that before they ever reach the codec.
+fn has_line_break(s: &str) -> bool {
+    s.contains('\n') || s.contains('\r')
+}
+
+// ---- agent-definition frontmatter codec ---------------------------------
+//
+// Hand-rolled rather than pulled from a yaml crate: the shape is fixed to
+// four known single-line scalar keys plus an opaque body, small enough that
+// a dedicated parser/serializer round-trips it (including lines it doesn't
+// understand, preserved verbatim) more predictably than a general YAML
+// parser would, and keeps the "no new crates" footprint of this change to
+// zero.
+
+/// The result of parsing one agent-definition markdown file. `extra` holds
+/// unknown frontmatter lines verbatim, in their original order, so
+/// `serialize_agent_md` can round-trip a file's untouched fields even though
+/// this codec only understands four of them. `parse_error` is set whenever
+/// the frontmatter block itself is malformed (missing opening/closing `---`)
+/// — the four known fields and `extra` are still filled in on a best-effort
+/// basis where possible; `system_prompt` falls back to the whole raw input
+/// when even the frontmatter's start can't be located.
+struct ParsedAgent {
+    name: Option<String>,
+    description: Option<String>,
+    tools: Option<String>,
+    model: Option<String>,
+    extra: Vec<String>,
+    system_prompt: String,
+    parse_error: Option<String>,
+}
+
+/// Strips one layer of matching surrounding quotes from a frontmatter value,
+/// unescaping as it goes: `\"` and `\\` inside double quotes, `''` (doubled
+/// single quote) inside single quotes. Values that aren't quoted (or whose
+/// quotes don't match) are returned unchanged — pi's own frontmatter writer
+/// always double-quotes, but hand-edited files may use single quotes or none
+/// at all, so all three are accepted on read.
+fn unquote_frontmatter_value(v: &str) -> String {
+    let bytes = v.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"' {
+        let inner = &v[1..v.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.peek() {
+                    Some('"') => {
+                        out.push('"');
+                        chars.next();
+                    }
+                    Some('\\') => {
+                        out.push('\\');
+                        chars.next();
+                    }
+                    _ => out.push('\\'),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+    if bytes.len() >= 2 && bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'' {
+        let inner = &v[1..v.len() - 1];
+        return inner.replace("''", "'");
+    }
+    v.to_string()
+}
+
+/// Double-quotes a frontmatter value for output, escaping `\` and `"` — the
+/// inverse of the double-quote branch of `unquote_frontmatter_value`.
+/// `serialize_agent_md` always uses this (never single-quote or bare
+/// output), so every file this server writes is unambiguous to re-parse.
+fn quote_frontmatter_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 2);
+    out.push('"');
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Parses one agent-definition markdown file's contents.
+fn parse_agent_md(raw: &str) -> ParsedAgent {
+    let empty = || ParsedAgent {
+        name: None,
+        description: None,
+        tools: None,
+        model: None,
+        extra: Vec::new(),
+        system_prompt: String::new(),
+        parse_error: None,
+    };
+
+    let all_lines: Vec<&str> = raw.lines().collect();
+    if all_lines.first() != Some(&"---") {
+        return ParsedAgent {
+            // Nothing usable was located, so fall back to showing the whole
+            // file as the "body" — the raw editor is still viable even when
+            // structured parsing fails outright.
+            system_prompt: raw.to_string(),
+            parse_error: Some("missing frontmatter: file must start with a '---' line".to_string()),
+            ..empty()
+        };
+    }
+
+    let mut name = None;
+    let mut description = None;
+    let mut tools = None;
+    let mut model = None;
+    let mut extra = Vec::new();
+    let mut closed = false;
+    let mut consumed = 1; // the opening "---" line
+
+    for line in &all_lines[1..] {
+        consumed += 1;
+        if *line == "---" {
+            closed = true;
+            break;
+        }
+        match line.split_once(':') {
+            Some((key, value)) => {
+                let key = key.trim();
+                let value = unquote_frontmatter_value(value.trim());
+                match key {
+                    "name" => name = Some(value),
+                    "description" => description = Some(value),
+                    "tools" => tools = Some(value),
+                    "model" => model = Some(value),
+                    _ => extra.push((*line).to_string()),
+                }
+            }
+            None => extra.push((*line).to_string()),
+        }
+    }
+
+    if !closed {
+        return ParsedAgent {
+            name,
+            description,
+            tools,
+            model,
+            extra,
+            system_prompt: String::new(),
+            parse_error: Some("missing closing '---' frontmatter delimiter".to_string()),
+        };
+    }
+
+    let mut body_lines = all_lines[consumed..].to_vec();
+    if body_lines.first() == Some(&"") {
+        body_lines.remove(0);
+    }
+    let mut system_prompt = body_lines.join("\n");
+    if !body_lines.is_empty() {
+        system_prompt.push('\n');
+    }
+
+    ParsedAgent { name, description, tools, model, extra, system_prompt, parse_error: None }
+}
+
+/// Serializes an agent definition back to markdown-with-frontmatter.
+/// `name`/`description` are always emitted (double-quoted); `tools`/`model`
+/// only when `Some` and non-empty; `extra` lines verbatim, preserving
+/// whatever order `parse_agent_md` collected them in — this is what makes
+/// round-tripping an existing file (parse then re-serialize) lossless for
+/// fields this codec doesn't otherwise understand.
+fn serialize_agent_md(
+    name: &str,
+    description: &str,
+    tools: Option<&str>,
+    model: Option<&str>,
+    extra: &[String],
+    system_prompt: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(&format!("name: {}\n", quote_frontmatter_value(name)));
+    out.push_str(&format!("description: {}\n", quote_frontmatter_value(description)));
+    if let Some(tools) = tools.filter(|s| !s.is_empty()) {
+        out.push_str(&format!("tools: {}\n", quote_frontmatter_value(tools)));
+    }
+    if let Some(model) = model.filter(|s| !s.is_empty()) {
+        out.push_str(&format!("model: {}\n", quote_frontmatter_value(model)));
+    }
+    for line in extra {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("---\n\n");
+    out.push_str(system_prompt);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct ListAgentsQuery {
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+}
+
+/// Lists agent-definition files for the user scope, plus the project scope
+/// when `projectId` is given *and* known. An unknown `projectId` is not an
+/// error here (unlike `save_agent`/`delete_agent`): the caller is just
+/// listing what's available, and "no project scope" is a perfectly good
+/// answer for e.g. a project that was removed out from under an open tab.
+async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<ListAgentsQuery>,
+) -> Json<AgentsResp> {
+    let ssh = state.ssh.read().await.clone();
+    let mut agents = Vec::new();
+
+    if let Ok(user_dir) = resolve_agents_dir(&state, "user", None).await {
+        agents.extend(list_agent_views(&ssh, &user_dir, "user").await);
+    }
+
+    if let Some(project_id) = q.project_id.as_deref().filter(|s| !s.is_empty()) {
+        if state.projects.read().await.contains_key(project_id) {
+            if let Ok(project_dir) = resolve_agents_dir(&state, "project", Some(project_id)).await {
+                agents.extend(list_agent_views(&ssh, &project_dir, "project").await);
+            }
+        }
+    }
+
+    agents.sort_by(|a, b| {
+        let rank = |s: &str| if s == "user" { 0u8 } else { 1u8 };
+        rank(&a.scope).cmp(&rank(&b.scope)).then_with(|| a.file_name.cmp(&b.file_name))
+    });
+
+    Json(AgentsResp { agents })
+}
+
+async fn list_agent_views(ssh: &SshConfig, dir: &AgentsDir, scope: &str) -> Vec<AgentView> {
+    read_agent_files(ssh, &dir.local, &dir.remote_expr)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(file_name, raw)| {
+            let parsed = parse_agent_md(&raw);
+            AgentView::new(scope, file_name, raw, parsed)
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct SaveAgentReq {
+    scope: String,
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    tools: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, rename = "systemPrompt")]
+    system_prompt: String,
+    /// Present when this save is renaming/overwriting a file that already
+    /// exists under a different (or the same) name — see `save_agent`.
+    #[serde(default, rename = "originalFileName")]
+    original_file_name: Option<String>,
+    /// When `Some`, write-verbatim mode: used by the frontend's raw editor,
+    /// primarily for round-tripping a file whose frontmatter didn't parse
+    /// (so there's no sane structured form to edit).
+    #[serde(default)]
+    raw: Option<String>,
+    #[serde(default, rename = "fileName")]
+    file_name: Option<String>,
+}
+
+/// Creates, updates, or renames one agent-definition file.
+///
+/// Two modes, chosen by whether `raw` is present:
+/// - Verbatim (`raw: Some`): writes `raw` byte-for-byte to `fileName`. Always
+///   an overwrite-or-create; there's no 409 in this mode since it's meant for
+///   editing a file that (by definition, since the UI fell back to raw mode)
+///   already exists.
+/// - Structured (`raw: None`): serializes `name`/`description`/`tools`/
+///   `model`/`systemPrompt` via `serialize_agent_md` and writes to
+///   `<name>.md`. `originalFileName` absent means "create" (409 if
+///   `<name>.md` already exists); present means "update/rename" — the new
+///   file is written *before* the old one (if renamed) is deleted, so a
+///   mid-operation failure can't lose the original.
+async fn save_agent(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SaveAgentReq>,
+) -> Result<Json<AgentView>, (StatusCode, String)> {
+    if let Some(orig) = &req.original_file_name {
+        if !valid_agent_file_component(orig) {
+            return Err((StatusCode::BAD_REQUEST, "invalid originalFileName".to_string()));
+        }
+    }
+
+    let dir = resolve_agents_dir(&state, &req.scope, req.project_id.as_deref()).await?;
+    let ssh = state.ssh.read().await.clone();
+
+    if let Some(raw) = &req.raw {
+        let file_name = req
+            .file_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or((StatusCode::BAD_REQUEST, "fileName is required when raw is set".to_string()))?;
+        if !valid_agent_file_component(&file_name) {
+            return Err((StatusCode::BAD_REQUEST, "invalid fileName".to_string()));
+        }
+
+        write_agent_file(&ssh, &dir.local, &dir.remote_expr, &file_name, raw)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        if let Some(orig) = &req.original_file_name {
+            if orig != &file_name {
+                let _ = delete_agent_file(&ssh, &dir.local, &dir.remote_expr, orig).await;
+            }
+        }
+
+        let parsed = parse_agent_md(raw);
+        return Ok(Json(AgentView::new(&req.scope, file_name, raw.clone(), parsed)));
+    }
+
+    let name = req.name.trim().to_string();
+    let description = req.description.trim().to_string();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name is required".to_string()));
+    }
+    if description.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "description is required".to_string()));
+    }
+    if !valid_agent_file_component(&name) {
+        return Err((StatusCode::BAD_REQUEST, "name must match ^[A-Za-z0-9._-]+$ and not contain '..'".to_string()));
+    }
+    let tools = req.tools.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let model = req.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    if has_line_break(&name)
+        || has_line_break(&description)
+        || tools.as_deref().is_some_and(has_line_break)
+        || model.as_deref().is_some_and(has_line_break)
+    {
+        return Err((StatusCode::BAD_REQUEST, "name/description/tools/model must not contain a newline".to_string()));
+    }
+
+    let file_name = format!("{name}.md");
+    if req.original_file_name.is_none() && agent_file_exists(&ssh, &dir.local, &dir.remote_expr, &file_name).await {
+        return Err((StatusCode::CONFLICT, "an agent named this already exists".to_string()));
+    }
+
+    // An update (as opposed to a create) carries forward whatever unknown
+    // frontmatter lines the previous version of this file had, so editing
+    // name/description/tools/model through the structured form doesn't
+    // silently drop fields this codec doesn't know about. A create, or an
+    // original file this server can't read/parse, has nothing to carry
+    // forward.
+    let mut extra = Vec::new();
+    if let Some(orig) = &req.original_file_name {
+        if let Some(old_raw) = read_agent_file(&ssh, &dir.local, &dir.remote_expr, orig).await {
+            let old_parsed = parse_agent_md(&old_raw);
+            if old_parsed.parse_error.is_none() {
+                extra = old_parsed.extra;
+            }
+        }
+    }
+
+    let raw = serialize_agent_md(&name, &description, tools.as_deref(), model.as_deref(), &extra, &req.system_prompt);
+    write_agent_file(&ssh, &dir.local, &dir.remote_expr, &file_name, &raw)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if let Some(orig) = &req.original_file_name {
+        if orig != &file_name {
+            let _ = delete_agent_file(&ssh, &dir.local, &dir.remote_expr, orig).await;
+        }
+    }
+
+    let parsed = parse_agent_md(&raw);
+    Ok(Json(AgentView::new(&req.scope, file_name, raw, parsed)))
+}
+
+#[derive(Deserialize)]
+struct DeleteAgentQuery {
+    scope: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+}
+
+async fn delete_agent(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<DeleteAgentQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if !valid_agent_file_component(&q.file_name) {
+        return Err((StatusCode::BAD_REQUEST, "invalid fileName".to_string()));
+    }
+    let dir = resolve_agents_dir(&state, &q.scope, q.project_id.as_deref()).await?;
+    let ssh = state.ssh.read().await.clone();
+
+    let existed = delete_agent_file(&ssh, &dir.local, &dir.remote_expr, &q.file_name)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if existed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, "agent file not found".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod agent_md_tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic() {
+        let raw = "---\nname: scout\ndescription: Fast codebase recon\ntools: read, grep, find, ls, bash\nmodel: claude-haiku-4-5\n---\n\nYou are a scout.\n";
+        let p = parse_agent_md(raw);
+        assert!(p.parse_error.is_none());
+        assert_eq!(p.name.as_deref(), Some("scout"));
+        assert_eq!(p.description.as_deref(), Some("Fast codebase recon"));
+        assert_eq!(p.tools.as_deref(), Some("read, grep, find, ls, bash"));
+        assert_eq!(p.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(p.system_prompt, "You are a scout.\n");
+        assert!(p.extra.is_empty());
+    }
+
+    #[test]
+    fn parse_quoted_values_with_embedded_colons() {
+        let raw = "---\nname: \"scout: v2\"\ndescription: 'Recon: fast and light'\n---\n\nBody.\n";
+        let p = parse_agent_md(raw);
+        assert!(p.parse_error.is_none());
+        assert_eq!(p.name.as_deref(), Some("scout: v2"));
+        assert_eq!(p.description.as_deref(), Some("Recon: fast and light"));
+    }
+
+    #[test]
+    fn parse_missing_closing_delimiter_is_reported() {
+        let raw = "---\nname: scout\ndescription: no closing delimiter here\n";
+        let p = parse_agent_md(raw);
+        assert!(p.parse_error.is_some());
+        assert_eq!(p.name.as_deref(), Some("scout"));
+    }
+
+    #[test]
+    fn parse_missing_opening_delimiter_is_reported() {
+        let raw = "just a plain markdown file\nwith no frontmatter\n";
+        let p = parse_agent_md(raw);
+        assert!(p.parse_error.is_some());
+        assert_eq!(p.name, None);
+        assert_eq!(p.system_prompt, raw);
+    }
+
+    #[test]
+    fn round_trip_preserves_unknown_lines_and_body() {
+        let raw = "---\nname: scout\ndescription: Recon\ncustomField: hello world\n---\n\nSystem prompt body.\nSecond line.\n";
+        let p = parse_agent_md(raw);
+        assert_eq!(p.extra, vec!["customField: hello world".to_string()]);
+
+        let out = serialize_agent_md(
+            p.name.as_deref().unwrap(),
+            p.description.as_deref().unwrap(),
+            p.tools.as_deref(),
+            p.model.as_deref(),
+            &p.extra,
+            &p.system_prompt,
+        );
+        let reparsed = parse_agent_md(&out);
+        assert!(reparsed.parse_error.is_none());
+        assert_eq!(reparsed.extra, p.extra);
+        assert_eq!(reparsed.system_prompt, p.system_prompt);
+        assert_eq!(reparsed.name.as_deref(), Some("scout"));
+    }
+
+    #[test]
+    fn serialize_omits_empty_optional_fields() {
+        let out = serialize_agent_md("scout", "desc", None, Some(""), &[], "body\n");
+        assert!(!out.contains("tools:"));
+        assert!(!out.contains("model:"));
+    }
 }
