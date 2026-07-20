@@ -9,10 +9,10 @@ import {
   exportSession,
   sendPrompt,
   setModel,
-  setSessionName,
   setThinkingLevel,
   store,
 } from "./pi.js";
+import { openRenameDialog } from "./renameDialog.js";
 import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
 
@@ -34,6 +34,23 @@ const SCI_FI_QUOTES = [
   "Violence is the last refuge of the incompetent. — Foundation",
   "The enemy's gate is down. — Ender's Game",
   "That is not dead which can eternal lie. — At the Mountains of Madness",
+  "Life before death. Strength before weakness. Journey before destination. — The Way of Kings",
+  "The most important step a man can take is the next one. — Oathbringer",
+  "Journey before destination. — Words of Radiance",
+  "I've a hankering to be a hero. — Mistborn: The Final Empire",
+  "There's always another secret. — Mistborn: The Well of Ascension",
+  "Not all those who wander are lost. — The Fellowship of the Ring",
+  "All we have to decide is what to do with the time that is given us. — The Fellowship of the Ring",
+  "It's a dangerous business, going out your door. — The Hobbit",
+  "A wizard is never late. — The Fellowship of the Ring",
+  "The wheel weaves as the wheel wills. — The Wheel of Time",
+  "It's like the people who believe they'll be happy if they go and live somewhere else. — The Colour of Magic",
+  "Words are pale shadows of forgotten names. — The Name of the Wind",
+  "It's the questions we can't answer that teach us the most. — The Wise Man's Fear",
+  "When you play the game of thrones, you win or you die. — A Game of Thrones",
+  "A reader lives a thousand lives before he dies. — A Dance with Dragons",
+  "To light a candle is to cast a shadow. — A Wizard of Earthsea",
+  "The unread story is not a story. — The Language of the Night",
 ];
 
 function randomPlaceholder() {
@@ -42,6 +59,21 @@ function randomPlaceholder() {
 }
 
 const composerPlaceholder = ref(randomPlaceholder());
+
+// A fork hands back the prompt it branched from (see forkFrom in pi.js) so it
+// can be edited and re-sent down the new branch.
+watch(
+  () => store.composerDraft,
+  (text) => {
+    if (!text) return;
+    input.value = text;
+    store.composerDraft = "";
+    nextTick(() => {
+      textareaEl.value?.focus();
+      autosize();
+    });
+  }
+);
 
 function showToast(message) {
   toast.value = message;
@@ -96,11 +128,7 @@ function chooseSlashCommand(cmd) {
 async function runBuiltinCommand(name) {
   try {
     if (name === "name") {
-      const next = window.prompt("Session name:", store.sessionName || "");
-      if (next && next.trim()) {
-        await setSessionName(next.trim());
-        showToast(`Session renamed to "${next.trim()}"`);
-      }
+      openRenameDialog();
     } else if (name === "export") {
       const { path } = await exportSession();
       showToast(`Exported to ${path}`);
@@ -123,6 +151,16 @@ const modelKey = computed(() =>
 const modelLabel = computed(() =>
   store.model ? store.model.id || store.model.name : "…"
 );
+
+const modelsByProvider = computed(() => {
+  const groups = new Map();
+  for (const m of store.availableModels) {
+    const key = m.provider || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+  return [...groups.entries()];
+});
 
 const thinkingDisabled = computed(() => !store.model?.reasoning);
 
@@ -312,13 +350,19 @@ function autosize() {
         <option v-if="!store.availableModels.length" :value="modelKey">
           {{ modelLabel }}
         </option>
-        <option
-          v-for="m in store.availableModels"
-          :key="`${m.provider}::${m.id}`"
-          :value="`${m.provider}::${m.id}`"
+        <optgroup
+          v-for="[provider, models] in modelsByProvider"
+          :key="provider"
+          :label="provider"
         >
-          {{ m.name || m.id }}
-        </option>
+          <option
+            v-for="m in models"
+            :key="`${m.provider}::${m.id}`"
+            :value="`${m.provider}::${m.id}`"
+          >
+            {{ m.name || m.id }}
+          </option>
+        </optgroup>
       </select>
       <span
         class="level-dot"
