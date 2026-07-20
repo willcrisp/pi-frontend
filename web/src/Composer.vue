@@ -13,6 +13,7 @@ import {
   store,
 } from "./pi.js";
 import { openRenameDialog } from "./renameDialog.js";
+import { startNewChat } from "./projects.js";
 import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
 
@@ -127,7 +128,9 @@ function chooseSlashCommand(cmd) {
 // wired here to the RPC command it maps to.
 async function runBuiltinCommand(name) {
   try {
-    if (name === "name") {
+    if (name === "new") {
+      startNewChat();
+    } else if (name === "name") {
       openRenameDialog();
     } else if (name === "export") {
       const { path } = await exportSession();

@@ -55,12 +55,13 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 // App.vue) rather than inserting text — unlike everything else in the dropdown,
 // these never get sent to pi as a prompt.
 //
-// Left out as redundant with existing UI: model (model <select>), new (sidebar "new
-// chat"), resume (sidebar chat history), session (usage popover). Left out as
+// Left out as redundant with existing UI: model (model <select>), resume (sidebar
+// chat history), session (usage popover). Left out as
 // unsupported outside a real terminal/TUI: settings, scoped-models, import, share,
 // changelog, hotkeys, trust, login, logout, quit, reload. Left out pending a
 // message/branch picker UI: fork, clone, tree.
 export const BUILTIN_SLASH_COMMANDS = [
+  { name: "new", description: "Start a new chat in this project" },
   { name: "name", description: "Set session display name" },
   { name: "export", description: "Export session as HTML" },
   { name: "copy", description: "Copy last agent message to clipboard" },
