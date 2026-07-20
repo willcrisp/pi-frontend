@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { setSessionName, store, subagentDetails } from "./pi.js";
+import { openAgents } from "./agents.js";
 import UsagePopover from "./UsagePopover.vue";
 import ColorProfilePopover from "./ColorProfilePopover.vue";
 import SshPopover from "./SshPopover.vue";
@@ -78,6 +79,14 @@ function scrollToRunningSubagent() {
         {{ subagentBadge.count }} agent{{ subagentBadge.count === 1 ? "" : "s" }}
       </button>
       <UsagePopover class="header-usage" />
+      <button type="button" class="colors-trigger" title="manage sub-agents" @click="openAgents">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="5.5" cy="5" r="2" stroke="currentColor" stroke-width="1.1" />
+          <path d="M1.8 13c0-2 1.6-3.3 3.7-3.3S9.2 11 9.2 13" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+          <circle cx="11" cy="5.5" r="1.6" stroke="currentColor" stroke-width="1.1" />
+          <path d="M8.7 9.9c.6-.5 1.4-.8 2.3-.8 1.9 0 3.4 1.2 3.4 2.9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+        </svg>
+      </button>
       <ColorProfilePopover />
     </div>
   </header>

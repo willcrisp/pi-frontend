@@ -1,12 +1,14 @@
 <script setup>
 import { projectsStore } from "./projects.js";
 import { authStore } from "./auth.js";
+import { agentsStore } from "./agents.js";
 import { store } from "./pi.js";
 import ChatHeader from "./ChatHeader.vue";
 import Composer from "./Composer.vue";
 import MessageList from "./MessageList.vue";
 import Sidebar from "./Sidebar.vue";
 import ConnectDialog from "./ConnectDialog.vue";
+import AgentsDialog from "./AgentsDialog.vue";
 </script>
 
 <template>
@@ -29,4 +31,5 @@ import ConnectDialog from "./ConnectDialog.vue";
   </div>
 
   <ConnectDialog v-if="authStore.open" />
+  <AgentsDialog v-if="agentsStore.open" />
 </template>
