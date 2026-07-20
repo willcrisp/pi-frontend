@@ -126,25 +126,39 @@ the Rust server on :3210.
   host, so the sidebar's history list is always empty there for now — new
   chats and switching still work, there's just no discovery of past ones)
 
-## TODO: pi-side setup for the token usage popover
+## Sub-agents
 
-The bar-chart icon in the header shows a hover popover with token/cost
-totals (via pi's `get_session_stats` RPC command) and a per-sub-agent
-breakdown. The session totals work out of the box against any reasonably
-current `pi` build. The sub-agent breakdown does **not** — pi core has no
-built-in concept of sub-agents (by design, see its docs), so there's
-nothing to show unless a sub-agent extension is installed in *your* `pi`
-directory (not this repo).
+pi-web has first-class UI support for pi-mono's example `subagent`
+extension (single/parallel/chain dispatch of markdown-defined agents):
 
-The frontend detects sub-agent runs heuristically: any tool call whose
-result contains `details.results` (an array of `{ agent, model, usage,
-stopReason, errorMessage }` objects) is treated as a sub-agent dispatch,
-matching the shape produced by pi-mono's own example `subagent` extension.
-Per-agent duration is measured client-side (start/end of the tool call),
-since that extension doesn't report elapsed time itself.
+- **Live monitoring** — a sub-agent dispatch renders as rich inline cards
+  in the chat instead of a generic tool block: per-agent status, model,
+  task, live token/cost/turn counts, an activity log of the agent's own
+  tool calls, and its final output. A badge in the header counts running
+  sub-agents and jumps to the active call on click, and the usage popover
+  (bar-chart icon) shows a per-agent usage breakdown next to the session
+  totals from `get_session_stats`.
+- **Agent editor** — the people icon in the header opens a dialog for
+  creating/editing/deleting agent definitions in user scope
+  (`~/.pi/agent/agents/*.md`) and project scope (`<project>/.pi/agents/*.md`),
+  including each agent's model and reasoning level. Reasoning is stored as
+  pi's `provider/id:<thinking>` model-string suffix, since the extension
+  has no dedicated frontmatter field for it. This works in `--ssh` relay
+  mode too — the files are read/written on the remote host, where pi
+  actually runs.
 
-To get the breakdown populated, install that example extension into your
-`~/.pi` config (run from a checkout of `badlogic/pi-mono`):
+pi core has no built-in concept of sub-agents (by design, see its docs),
+so there's nothing to monitor unless a sub-agent extension is installed
+in *your* `pi` directory (not this repo). Detection is heuristic: any
+tool call whose result contains `details.results` (an array of `{ agent,
+model, usage, stopReason, errorMessage }` objects) is treated as a
+sub-agent dispatch, matching the shape produced by pi-mono's own example
+`subagent` extension. Per-agent duration is measured client-side
+(start/end of the tool call), since that extension doesn't report
+elapsed time itself.
+
+To install that example extension into your `~/.pi` config (run from a
+checkout of `badlogic/pi-mono`):
 
 ```sh
 mkdir -p ~/.pi/agent/extensions/subagent
@@ -154,10 +168,12 @@ ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" \
   ~/.pi/agent/extensions/subagent/agents.ts
 
 mkdir -p ~/.pi/agent/agents
-for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
-done
+cp packages/coding-agent/examples/extensions/subagent/agents/*.md ~/.pi/agent/agents/
 ```
+
+The agent `.md` files are copied rather than symlinked so that edits made
+from pi-web's agent editor land in your config, not in the pi-mono
+checkout.
 
 If you use a different sub-agent extension (or your own), the popover
 will still pick it up automatically as long as its tool result includes

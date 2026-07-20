@@ -107,6 +107,8 @@ one pi child process per project (stdin/stdout, newline-delimited JSON)
    - per project: broadcast channel: pi stdout -> all WS clients on /ws/{projectId}
    - peeks get_session_stats responses to learn each project's session_dir
    - /api/projects (list/add/remove), /api/projects/{id}/sessions (list chats)
+   - /api/agents (list/save/delete sub-agent definition .md files, local
+     or over SSH — see "Sub-agent support" below)
         │  (WebSocket, one JSON object per text frame)
         ▼
 web/src/pi.js
@@ -125,8 +127,10 @@ web/src/projects.js — REST client + reactive `projectsStore` for the
         ▼
 web/src/App.vue (composer, header, model/thinking selects)
   ├─ Sidebar.vue (project list + add/remove, chat history for current project)
-  ├─ MessageView.vue (renders one message: text / thinking / toolCall blocks)
-  └─ UsagePopover.vue (session token/cost totals + sub-agent breakdown)
+  ├─ MessageView.vue (renders one message: text / thinking / toolCall blocks;
+  │    subagent tool calls delegate to SubagentView.vue)
+  ├─ UsagePopover.vue (session token/cost totals + sub-agent breakdown)
+  └─ AgentsDialog.vue (edit sub-agent definitions, backed by /api/agents)
 ```
 
 `store` (in `pi.js`, the active project's chat) and `projectsStore` (in `projects.js`, the project/session lists) are the reactive sources of truth for the whole UI — there is no other state management. Components read from them directly and call the exported functions to act.
@@ -140,6 +144,38 @@ web/src/App.vue (composer, header, model/thinking selects)
 - When an SSH target is set (`AppState.ssh: RwLock<SshConfig>`, runtime-editable via `/api/ssh` — see below — and persisted to `<data-dir>/ssh.json`), `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host. Changing the target via `PUT`/`DELETE /api/ssh` respawns every known project's pi process against it (`respawn_all`) — the watcher task that removes a dead process from `running` guards the removal with `Arc::ptr_eq` so a respawn's new process (inserted under the same id before the old one is killed) can't be evicted by the old process's own cleanup.
 - Windows spawns `pi` via `cmd /C` since it installs as a `.cmd` shim.
 
+### Sub-agent support (pi-mono's `subagent` extension)
+
+pi core has no built-in sub-agent concept; support targets the example
+`subagent` extension from pi-mono (one `subagent` tool; single/parallel/chain
+dispatch; agents defined as markdown files with YAML frontmatter — `name`,
+`description`, `tools`, `model` — whose body is the system prompt). Two
+halves:
+
+- **Live monitoring** is pure frontend (per the protocol-boundary rule):
+  the extension streams whole-state `details` snapshots (`{ mode, results:
+  [{ agent, task, exitCode, messages, usage, model, stopReason,
+  errorMessage, step }] }`, `exitCode === -1` = still running) through
+  `tool_execution_update` events; `handle()` in `pi.js` stores them on
+  `store.toolResults[id].details`, and the shared `subagentDetails()` helper
+  (also `pi.js`) is the single detection heuristic used by
+  `SubagentView.vue` (inline per-agent cards), `ChatHeader.vue` (running
+  count badge) and `UsagePopover.vue` (usage breakdown). Reasoning level is
+  encoded in the model string as pi's `provider/id:<thinking>` suffix — the
+  extension has no thinkingLevel frontmatter field; `agents.js` owns the
+  `splitModelThinking`/`joinModelThinking` codec.
+- **Agent definition editing** is the second sanctioned server-side feature
+  (alongside provider connect), since agent files are on-disk state pi's RPC
+  protocol doesn't expose: `/api/agents` (GET/PUT/DELETE) reads/writes
+  user-scope (`~/.pi/agent/agents/*.md`) and project-scope
+  (`<project>/.pi/agents/*.md`) files with a hand-rolled frontmatter codec
+  (unknown lines round-trip verbatim; unparseable files are listed with
+  `parseError` + raw contents for the dialog's raw-edit fallback). Unlike
+  provider connect, this **does** work in `--ssh` relay mode — the file ops
+  are dual-mode (local `tokio::fs`, or single-invocation ssh commands
+  following the `run_git`/`list_remote_dirs` pattern), because the agent
+  files live wherever pi runs.
+
 ### Frontend internals (`web/src/`)
 
 - `pi.js` — WebSocket client + the reactive `store` for one project's chat at a time. All RPC event handling funnels through `handle(ev)`.
@@ -148,8 +184,10 @@ web/src/App.vue (composer, header, model/thinking selects)
 - `App.vue` — top-level layout: sidebar, header (connection dot, model, session name, usage popover), scrollable message list, composer (textarea + send/stop), model/thinking-level selects. Auto-scrolls the message pane unless the user has scrolled up.
 - `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
 - `SshPopover.vue` — click-toggled popup on the header's connection dot (`ChatHeader.vue`) for viewing/testing/saving/clearing the SSH target. Unlike `UsagePopover.vue` (hover-triggered, read-only), this is click-toggled with outside-click/Escape-to-close since it's a form.
-- `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself.
-- `UsagePopover.vue` — session-level token/cost stats from `get_session_stats`, plus a **heuristic** sub-agent breakdown: any tool result whose `details.results` is an array of `{ agent, model, usage, stopReason, errorMessage }` is treated as a sub-agent dispatch (the shape produced by pi-mono's example `subagent` extension). Per-agent duration is measured client-side from tool-call start/end, since that extension doesn't report elapsed time itself. This degrades gracefully to "no sub-agents used this session" when no such extension is installed — see the README's "TODO: pi-side setup for the token usage popover" section for how to wire one up in a local `pi` config.
+- `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself. Sub-agent dispatches (tool name `subagent`, or any result matching `subagentDetails()`) render via `SubagentView.vue` instead of the generic tool block.
+- `SubagentView.vue` — rich inline view of one sub-agent dispatch: per-agent cards with live status/usage/duration, an activity log of the agent's nested tool calls, final output, and error/stderr surfaces; placeholder cards derived from the tool-call args cover the gap before the first streamed snapshot (see "Sub-agent support" above).
+- `UsagePopover.vue` — session-level token/cost stats from `get_session_stats`, plus a per-sub-agent usage breakdown (detection via `subagentDetails()` in `pi.js`). Per-agent duration is measured client-side from tool-call start/end, since the extension doesn't report elapsed time itself. Degrades gracefully to "no sub-agents used this session" when no sub-agent extension is installed — see the README's "Sub-agents" section for how to wire one up in a local `pi` config.
+- `agents.js` + `AgentsDialog.vue` — REST client/store (`agentsStore`, ssh.js conventions) and modal (ConnectDialog pattern, opened from a header button) for creating/editing/deleting agent definitions via `/api/agents`, including the model + reasoning-level selects.
 - Styling is a single hand-written `style.css` (CSS custom properties for the dark theme) — no CSS framework or utility classes.
 
 ### Known gaps (see README "Not yet implemented")
