@@ -12,17 +12,40 @@ const modelLabel = computed(() =>
   store.model ? store.model.id || store.model.name : "…"
 );
 
-const totalTokens = computed(() => {
-  const n = store.sessionStats?.tokens?.total;
-  if (n == null) return null;
+function fmtTokens(n) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}m`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+const totalTokens = computed(() => {
+  const n = store.sessionStats?.tokens?.total;
+  return n == null ? null : fmtTokens(n);
+});
+
+// Summed across every sub-agent dispatch in this chat, same flattening as
+// UsagePopover.vue (detection via the shared subagentDetails() helper).
+const subagentTokens = computed(() => {
+  let total = 0;
+  for (const r of Object.values(store.toolResults)) {
+    const details = subagentDetails(r);
+    if (!details) continue;
+    for (const sub of details.results) {
+      const u = sub && typeof sub === "object" ? sub.usage : null;
+      if (u) total += (u.input || 0) + (u.output || 0);
+    }
+  }
+  return total > 0 ? fmtTokens(total) : null;
 });
 
 const titleText = computed(() => {
   const name = store.sessionName || "untitled";
-  return totalTokens.value != null ? `${name} · ${totalTokens.value}` : name;
+  if (totalTokens.value == null) return name;
+  const tokens =
+    subagentTokens.value != null
+      ? `${totalTokens.value} : ${subagentTokens.value}`
+      : totalTokens.value;
+  return `${name} · ${tokens}`;
 });
 
 function renameSession() {
