@@ -18,9 +18,12 @@ function fmtTokens(n) {
   return String(n);
 }
 
+// Input + output only, excluding cache tokens: cache reads are priced at a
+// fraction of fresh input, so counting them buries the cost signal.
 const totalTokens = computed(() => {
-  const n = store.sessionStats?.tokens?.total;
-  return n == null ? null : fmtTokens(n);
+  const t = store.sessionStats?.tokens;
+  if (!t) return null;
+  return fmtTokens((t.input || 0) + (t.output || 0));
 });
 
 // Summed across every sub-agent dispatch in this chat, same flattening as
@@ -32,13 +35,7 @@ const subagentTokens = computed(() => {
     if (!details) continue;
     for (const sub of details.results) {
       const u = sub && typeof sub === "object" ? sub.usage : null;
-      // Cache tokens included, to match what sessionStats.tokens.total counts.
-      if (u)
-        total +=
-          (u.input || 0) +
-          (u.output || 0) +
-          (u.cacheRead || 0) +
-          (u.cacheWrite || 0);
+      if (u) total += (u.input || 0) + (u.output || 0);
     }
   }
   return total > 0 ? fmtTokens(total) : null;
