@@ -32,7 +32,13 @@ const subagentTokens = computed(() => {
     if (!details) continue;
     for (const sub of details.results) {
       const u = sub && typeof sub === "object" ? sub.usage : null;
-      if (u) total += (u.input || 0) + (u.output || 0);
+      // Cache tokens included, to match what sessionStats.tokens.total counts.
+      if (u)
+        total +=
+          (u.input || 0) +
+          (u.output || 0) +
+          (u.cacheRead || 0) +
+          (u.cacheWrite || 0);
     }
   }
   return total > 0 ? fmtTokens(total) : null;
