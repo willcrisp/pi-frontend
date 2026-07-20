@@ -195,10 +195,27 @@ function onThinkingChange(e) {
   setThinkingLevel(e.target.value);
 }
 
+// While streaming, sends queue instead of prompting directly: "steer" delivers
+// after the current turn's tool calls, "followUp" once the agent finishes.
+const queueMode = ref("steer");
+
+function toggleQueueMode() {
+  queueMode.value = queueMode.value === "steer" ? "followUp" : "steer";
+}
+
+// Extension commands (/name registered via get_commands) execute immediately
+// even mid-stream, so they must go as a plain prompt — pi rejects them as
+// steer/follow_up messages.
+function isExtensionCommand(text) {
+  const m = /^\/(\S+)/.exec(text);
+  return !!m && store.commands.some((c) => c.name === m[1]);
+}
+
 function submit() {
   const text = input.value.trim();
   if (!text && !pendingImages.value.length) return;
-  sendPrompt(text, pendingImages.value);
+  const queued = store.streaming && !isExtensionCommand(text);
+  sendPrompt(text, pendingImages.value, queued ? queueMode.value : null);
   input.value = "";
   pendingImages.value = [];
   nextTick(autosize);
@@ -279,6 +296,25 @@ function autosize() {
         <button class="remove-image" title="Remove" @click="removeImage(i)">×</button>
       </div>
     </div>
+    <div
+      v-if="store.queue.steering.length || store.queue.followUp.length"
+      class="queue-chips"
+    >
+      <span
+        v-for="(m, i) in store.queue.steering"
+        :key="`s${i}`"
+        class="queue-chip"
+        title="Steering message — delivered after the current turn"
+        >↪ {{ m }}</span
+      >
+      <span
+        v-for="(m, i) in store.queue.followUp"
+        :key="`f${i}`"
+        class="queue-chip follow-up"
+        title="Follow-up message — delivered when the agent finishes"
+        >⏲ {{ m }}</span
+      >
+    </div>
     <ul v-if="slashOpen" class="slash-menu">
       <li
         v-for="(cmd, i) in slashMatches"
@@ -317,19 +353,37 @@ function autosize() {
             </svg>
           </button>
           <button
-            class="composer-icon-btn send"
-            :aria-label="store.streaming ? 'Steer' : 'Send'"
-            :title="store.streaming ? 'Steer the agent with this message' : 'Send'"
-            :disabled="!input.trim() && !pendingImages.length"
-            @click="submit"
+            v-if="store.streaming"
+            class="composer-icon-btn queue-mode"
+            :aria-label="queueMode === 'steer' ? 'Switch to follow-up' : 'Switch to steer'"
+            :title="queueMode === 'steer'
+              ? 'Steer: delivered after the current turn. Click for follow-up (delivered when the agent finishes).'
+              : 'Follow-up: delivered when the agent finishes. Click for steer (delivered after the current turn).'"
+            @click="toggleQueueMode"
           >
-            <svg v-if="store.streaming" width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg v-if="queueMode === 'steer'" width="14" height="14" viewBox="0 0 16 16" fill="none">
               <line x1="4" y1="2" x2="4" y2="10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
               <circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.2" />
               <circle cx="4" cy="12" r="2" stroke="currentColor" stroke-width="1.2" />
               <path d="M12 6a6 6 0 0 1-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
             </svg>
-            <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2" />
+              <path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+            </svg>
+          </button>
+          <button
+            class="composer-icon-btn send"
+            :aria-label="store.streaming ? (queueMode === 'steer' ? 'Steer' : 'Queue follow-up') : 'Send'"
+            :title="store.streaming
+              ? (queueMode === 'steer'
+                ? 'Steer the agent with this message'
+                : 'Queue this message for after the agent finishes')
+              : 'Send'"
+            :disabled="!input.trim() && !pendingImages.length"
+            @click="submit"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path
                 d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
                 stroke="currentColor"

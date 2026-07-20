@@ -29,6 +29,16 @@ function initialStore() {
     // branched from, mirroring what pi's TUI does on /fork). Composer.vue
     // watches this and clears it once consumed.
     composerDraft: "",
+    // Pending steering/follow-up messages, mirrored from pi's queue_update
+    // events. Shown as chips above the composer until pi delivers them.
+    queue: { steering: [], followUp: [] },
+    // Blocking extension UI dialogs (select/confirm/input/editor) from the
+    // extension_ui_request sub-protocol, oldest first. The agent is blocked
+    // until each is answered via respondExtensionUI(). [{ id, method, ... }]
+    uiRequests: [],
+    // Fire-and-forget extension notifications, shown as transient toasts.
+    // [{ id, message, notifyType }]
+    uiNotices: [],
     // { message, exitCode } from a synthetic pi_web_process_error frame (see
     // spawn_process in server/src/main.rs) — the pi/ssh child failed to start
     // or crashed, with its stderr tail as the message. Cleared once the
@@ -250,18 +260,39 @@ export async function copyLastAssistantText() {
   return text;
 }
 
-// images: [{ mimeType, data }] with `data` as base64 (no data: prefix)
-export function sendPrompt(text, images = []) {
+// images: [{ mimeType, data }] with `data` as base64 (no data: prefix).
+// streamingBehavior: "steer" | "followUp" — required by pi when the agent is
+// already streaming (a bare prompt is rejected mid-stream), except for
+// extension commands which execute immediately. Queued sends aren't pushed to
+// store.messages optimistically: they aren't part of the conversation until pi
+// delivers them, which we learn about via queue_update (and refresh from).
+export function sendPrompt(text, images = [], streamingBehavior = null) {
   const imageBlocks = images.map((img) => ({
     type: "image",
     data: img.data,
     mimeType: img.mimeType,
   }));
-  const content = text ? [{ type: "text", text }, ...imageBlocks] : imageBlocks;
-  store.messages.push({ role: "user", content });
   const cmd = { type: "prompt", message: text };
   if (imageBlocks.length) cmd.images = imageBlocks;
+  if (streamingBehavior) {
+    cmd.streamingBehavior = streamingBehavior;
+  } else {
+    const content = text ? [{ type: "text", text }, ...imageBlocks] : imageBlocks;
+    store.messages.push({ role: "user", content });
+  }
   send(cmd);
+}
+
+// Answer a blocking extension UI dialog (select/confirm/input/editor).
+// payload is { value }, { confirmed }, or { cancelled: true } per the request's
+// method — see "Extension UI Responses" in pi's docs/rpc.md.
+export function respondExtensionUI(id, payload) {
+  send({ type: "extension_ui_response", id, ...payload });
+  store.uiRequests = store.uiRequests.filter((r) => r.id !== id);
+}
+
+export function dismissUiNotice(id) {
+  store.uiNotices = store.uiNotices.filter((n) => n.id !== id);
 }
 
 export function abort() {
@@ -292,6 +323,10 @@ function handle(ev) {
       // The turn that just settled added a user message to the branch, so the
       // set of fork points changed.
       send({ type: "get_fork_messages" });
+      // Queued steer/follow_up messages delivered during the run aren't pushed
+      // to store.messages when sent (see sendPrompt); pick them up now that
+      // replacing the transcript wholesale is safe.
+      send({ type: "get_messages" });
       // A freshly-started chat's session file isn't written (and has no user
       // message to title it) until its first turn runs, so it's absent from
       // the sidebar list fetched at new_session/select time. Re-list now that
@@ -345,6 +380,22 @@ function handle(ev) {
       store.toolResults[ev.toolCallId] = t;
       break;
     }
+    case "queue_update":
+      // Fires both when we enqueue (steer/follow_up accepted) and when pi
+      // delivers a queued message into the conversation. Deliberately not
+      // refetching get_messages here: it fires mid-stream, and a wholesale
+      // message replacement would invalidate currentIndex and drop running
+      // tool results. Delivered messages land via the agent_settled refetch.
+      store.queue = {
+        steering: ev.steering || [],
+        followUp: ev.followUp || [],
+      };
+      break;
+
+    case "extension_ui_request":
+      handleExtensionUiRequest(ev);
+      break;
+
     case "pi_web_process_error":
       store.processError = { message: ev.message, exitCode: ev.exitCode };
       break;
@@ -366,6 +417,37 @@ function handle(ev) {
       }
       break;
     }
+  }
+}
+
+// Extension UI sub-protocol (see "Extension UI Protocol" in pi's docs/rpc.md).
+// Dialog methods block the agent until answered; fire-and-forget methods are
+// informational. Methods that only make sense in a terminal (setStatus,
+// setWidget, setTitle) are ignored.
+function handleExtensionUiRequest(ev) {
+  switch (ev.method) {
+    case "select":
+    case "confirm":
+    case "input":
+    case "editor":
+      store.uiRequests.push(ev);
+      break;
+    case "notify": {
+      const notice = {
+        id: ev.id,
+        message: ev.message,
+        notifyType: ev.notifyType || "info",
+      };
+      store.uiNotices.push(notice);
+      setTimeout(() => {
+        store.uiNotices = store.uiNotices.filter((n) => n !== notice);
+      }, 6000);
+      break;
+    }
+    case "set_editor_text":
+      // Mirrors the TUI: extension asks to prefill the input editor.
+      store.composerDraft = ev.text || "";
+      break;
   }
 }
 

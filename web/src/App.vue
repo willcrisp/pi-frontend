@@ -3,7 +3,7 @@ import { projectsStore } from "./projects.js";
 import { authStore } from "./auth.js";
 import { agentsStore } from "./agents.js";
 import { renameDialogStore } from "./renameDialog.js";
-import { store } from "./pi.js";
+import { dismissUiNotice, store } from "./pi.js";
 import ChatHeader from "./ChatHeader.vue";
 import Composer from "./Composer.vue";
 import MessageList from "./MessageList.vue";
@@ -12,6 +12,7 @@ import ConnectDialog from "./ConnectDialog.vue";
 import AgentsDialog from "./AgentsDialog.vue";
 import RenameDialog from "./RenameDialog.vue";
 import SshPopover from "./SshPopover.vue";
+import ExtensionUIDialog from "./ExtensionUIDialog.vue";
 import CoderMenu from "./CoderMenu.vue";
 </script>
 
@@ -38,6 +39,19 @@ import CoderMenu from "./CoderMenu.vue";
     <Composer />
   </div>
 
+  <div v-if="store.uiNotices.length" class="ui-notices">
+    <div
+      v-for="n in store.uiNotices"
+      :key="n.id"
+      class="ui-notice"
+      :class="n.notifyType"
+      @click="dismissUiNotice(n.id)"
+    >
+      {{ n.message }}
+    </div>
+  </div>
+
+  <ExtensionUIDialog v-if="store.uiRequests.length" />
   <ConnectDialog v-if="authStore.open" />
   <AgentsDialog v-if="agentsStore.open" />
   <RenameDialog v-if="renameDialogStore.open" />
