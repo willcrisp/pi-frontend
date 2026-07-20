@@ -1,7 +1,8 @@
 // Minimal markdown -> HTML renderer for assistant text blocks.
 // No dependency: pi-web keeps Vue as its only runtime dependency, so this
 // covers the common subset (headings, bold/italic, inline/fenced code,
-// links, lists, blockquotes) rather than pulling in a full parser.
+// links, nested lists, tables, blockquotes, hr) rather than pulling in a
+// full parser.
 
 function escapeHtml(s) {
   return s
@@ -10,13 +11,94 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
-function inline(text) {
+// Inline rules for one segment of text with no code spans in it.
+function inlineText(text) {
   let s = escapeHtml(text);
-  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
+  s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bare URLs not already inside a rendered link.
+  s = s.replace(/(^|[^"=>])(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
   return s;
+}
+
+// Inline rules. The text is split on code spans first so that `**`, `*`,
+// `~~` etc. inside backticks are never touched by the other rules.
+function inline(text) {
+  return text
+    .split(/(`[^`]+`)/)
+    .map((part) => {
+      const code = part.match(/^`([^`]+)`$/);
+      if (code) return `<code>${escapeHtml(code[1])}</code>`;
+      return inlineText(part);
+    })
+    .join("");
+}
+
+// --- lists (nested via indentation) ---
+
+// items: [{ indent, type: "ul"|"ol", text }]
+// Renders one list at the indent level of items[0]; deeper runs become a
+// nested list inside the previous <li>.
+function renderList(items) {
+  const base = items[0].indent;
+  const type = items[0].type;
+  const html = [`<${type}>`];
+  let i = 0;
+  while (i < items.length) {
+    const it = items[i];
+    if (it.indent <= base && it.type !== type) {
+      // sibling list of the other type at the same level: close and restart
+      html.push(`</${type}>`);
+      return html.join("") + renderList(items.slice(i));
+    }
+    let li = `<li>${inline(it.text)}`;
+    i++;
+    const children = [];
+    while (i < items.length && items[i].indent > base) {
+      children.push(items[i]);
+      i++;
+    }
+    if (children.length) li += renderList(children);
+    html.push(li + "</li>");
+  }
+  html.push(`</${type}>`);
+  return html.join("");
+}
+
+// --- tables ---
+
+function splitRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  // split on | not preceded by backslash
+  return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+
+function isSeparatorRow(line) {
+  return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line) && line.includes("-");
+}
+
+function renderTable(headerLine, sepLine, bodyLines) {
+  const aligns = splitRow(sepLine).map((c) => {
+    const l = c.startsWith(":");
+    const r = c.endsWith(":");
+    if (l && r) return "center";
+    if (r) return "right";
+    return null;
+  });
+  const attr = (idx) => (aligns[idx] ? ` style="text-align:${aligns[idx]}"` : "");
+  const cells = (line, tag) =>
+    splitRow(line)
+      .map((c, idx) => `<${tag}${attr(idx)}>${inline(c)}</${tag}>`)
+      .join("");
+  const head = `<thead><tr>${cells(headerLine, "th")}</tr></thead>`;
+  const body = bodyLines.length
+    ? `<tbody>${bodyLines.map((l) => `<tr>${cells(l, "td")}</tr>`).join("")}</tbody>`
+    : "";
+  return `<table>${head}${body}</table>`;
 }
 
 export function renderMarkdown(src) {
@@ -24,31 +106,34 @@ export function renderMarkdown(src) {
   const lines = src.split("\n");
   const html = [];
   let i = 0;
-  let listType = null; // "ul" | "ol" | null
   let paragraph = [];
 
   function flushParagraph() {
     if (paragraph.length) {
-      html.push(`<p>${inline(paragraph.join(" "))}</p>`);
+      // Preserve intentional single line breaks instead of flattening.
+      html.push(`<p>${paragraph.map(inline).join("<br>")}</p>`);
       paragraph = [];
     }
   }
 
-  function closeList() {
-    if (listType) {
-      html.push(`</${listType}>`);
-      listType = null;
-    }
-  }
+  const listItem = (line) => {
+    const m = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (!m) return null;
+    return {
+      indent: m[1].replace(/\t/g, "  ").length,
+      type: /^\d+\.$/.test(m[2]) ? "ol" : "ul",
+      text: m[3],
+    };
+  };
 
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code block
-    const fence = line.match(/^```(\w*)\s*$/);
+    // Fenced code block (with optional language label)
+    const fence = line.match(/^```(\S*)\s*$/);
     if (fence) {
       flushParagraph();
-      closeList();
+      const lang = fence[1];
       const codeLines = [];
       i++;
       while (i < lines.length && !/^```\s*$/.test(lines[i])) {
@@ -56,41 +141,66 @@ export function renderMarkdown(src) {
         i++;
       }
       i++; // skip closing fence
-      html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
+      html.push(`<pre${langAttr}><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
       continue;
     }
 
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       flushParagraph();
-      closeList();
       const level = heading[1].length;
       html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       i++;
       continue;
     }
 
-    const ul = line.match(/^\s*[-*]\s+(.*)$/);
-    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ul || ol) {
+    // Horizontal rule
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       flushParagraph();
-      const wantType = ul ? "ul" : "ol";
-      if (listType !== wantType) {
-        closeList();
-        html.push(`<${wantType}>`);
-        listType = wantType;
-      }
-      html.push(`<li>${inline((ul || ol)[1])}</li>`);
+      html.push("<hr>");
       i++;
       continue;
     }
-    closeList();
 
-    const quote = line.match(/^>\s?(.*)$/);
-    if (quote) {
+    // Table: a | row whose next line is a separator row
+    if (line.includes("|") && i + 1 < lines.length && isSeparatorRow(lines[i + 1])) {
       flushParagraph();
-      html.push(`<blockquote>${inline(quote[1])}</blockquote>`);
-      i++;
+      const headerLine = line;
+      const sepLine = lines[i + 1];
+      i += 2;
+      const bodyLines = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        bodyLines.push(lines[i]);
+        i++;
+      }
+      html.push(renderTable(headerLine, sepLine, bodyLines));
+      continue;
+    }
+
+    // List block: collect consecutive list items, then render (handles nesting)
+    if (listItem(line)) {
+      flushParagraph();
+      const items = [];
+      while (i < lines.length) {
+        const it = listItem(lines[i]);
+        if (!it) break;
+        items.push(it);
+        i++;
+      }
+      html.push(renderList(items));
+      continue;
+    }
+
+    // Blockquote: collect consecutive quoted lines into one block
+    if (/^>\s?/.test(line)) {
+      flushParagraph();
+      const quoted = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      html.push(`<blockquote>${renderMarkdown(quoted.join("\n"))}</blockquote>`);
       continue;
     }
 
@@ -104,7 +214,6 @@ export function renderMarkdown(src) {
     i++;
   }
   flushParagraph();
-  closeList();
 
   return html.join("\n");
 }
