@@ -18,7 +18,13 @@ with a sidebar for switching between projects and each project's chat history.
   dependency). The browser speaks pi's RPC protocol directly over the
   WebSocket: streaming deltas, tool calls with live output, history hydration
   via `get_messages`. The sidebar lists known projects and, for the active
-  one, its past chats (via `switch_session`/`new_session`).
+  one, its past chats (via `switch_session`/`new_session`). Assistant text
+  renders as markdown; prompts can include pasted images; edit/write tool
+  calls render as a collapsed red/green diff instead of raw JSON; blocking
+  `extension_ui_request` dialogs (confirm/select/input/editor) and
+  fire-and-forget notifications render inline; every user message can be
+  copied or edited-and-resent (forks the chat from that point); and
+  Ctrl/Cmd+K opens a fuzzy command palette to jump between projects and chats.
 
 ## Run
 
@@ -117,14 +123,14 @@ the Rust server on :3210.
 
 ## Not yet implemented
 
-- Markdown rendering of assistant text (plain text for now)
-- `extension_ui_request` dialogs (confirm/select/input from extensions)
-- Images in prompts
 - Idle eviction of project processes (every added project's `pi` process runs
   until removed or the server restarts)
 - Chat-history browsing in `--ssh` mode (session files live on the remote
   host, so the sidebar's history list is always empty there for now — new
   chats and switching still work, there's just no discovery of past ones)
+- Desktop/browser notifications when a background project needs attention
+  (finishes a turn, or blocks on an `extension_ui_request` dialog) while
+  you're viewing a different project
 
 ## Sub-agents
 

@@ -6,9 +6,18 @@ import MessageRail from "./MessageRail.vue";
 
 const mainEl = ref(null);
 
-const visible = computed(() =>
-  store.messages.filter((m) => m.role === "user" || m.role === "assistant")
-);
+// Paired positionally with get_fork_messages (same rule as MessageRail.vue):
+// the nth user message's fork point is store.forkMessages[n]. Optimistic
+// messages sent this turn have no entry yet and get null.
+const visible = computed(() => {
+  let nth = 0;
+  return store.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      message: m,
+      forkEntryId: m.role === "user" ? store.forkMessages[nth++]?.entryId ?? null : null,
+    }));
+});
 
 // Follow the stream unless the user has scrolled up.
 watch(
@@ -30,10 +39,11 @@ watch(
     <main ref="mainEl">
       <div class="messages">
         <MessageView
-          v-for="(m, i) in visible"
+          v-for="(v, i) in visible"
           :id="`msg-${i}`"
           :key="i"
-          :message="m"
+          :message="v.message"
+          :fork-entry-id="v.forkEntryId"
         />
       </div>
     </main>

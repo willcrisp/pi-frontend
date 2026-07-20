@@ -14,6 +14,7 @@ import RenameDialog from "./RenameDialog.vue";
 import SshPopover from "./SshPopover.vue";
 import ExtensionUIDialog from "./ExtensionUIDialog.vue";
 import CoderMenu from "./CoderMenu.vue";
+import CommandPalette from "./CommandPalette.vue";
 </script>
 
 <template>
@@ -51,6 +52,7 @@ import CoderMenu from "./CoderMenu.vue";
     </div>
   </div>
 
+  <CommandPalette />
   <ExtensionUIDialog v-if="store.uiRequests.length" />
   <ConnectDialog v-if="authStore.open" />
   <AgentsDialog v-if="agentsStore.open" />

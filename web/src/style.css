@@ -2715,3 +2715,279 @@ button:hover {
   font-size: 12.5px;
   resize: vertical;
 }
+
+/* --- message hover actions (MessageView.vue) ----------------------------- */
+
+.msg {
+  position: relative;
+}
+
+.msg-actions {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 2;
+}
+
+.msg:hover .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+
+.msg-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.msg-action:hover {
+  color: var(--fg);
+}
+
+.msg-action.copied {
+  color: #4ade80;
+}
+
+.msg-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* copy button injected into markdown code blocks (markdown.js) */
+.markdown pre {
+  position: relative;
+}
+
+.markdown pre .code-copy {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 1;
+}
+
+.markdown pre:hover .code-copy {
+  opacity: 1;
+}
+
+.markdown pre .code-copy::before {
+  content: "copy";
+}
+
+.markdown pre .code-copy.copied {
+  color: #4ade80;
+}
+
+.markdown pre .code-copy.copied::before {
+  content: "copied";
+}
+
+/* the data-lang label sits where the copy button appears — nudge it left */
+.markdown pre[data-lang]::before {
+  right: 52px;
+}
+
+/* --- edit/write tool calls as diffs (MessageView.vue) --------------------- */
+
+.tool-diff summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-path {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.diff-stat {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.diff-stat-add {
+  color: #4ade80;
+}
+
+.diff-stat-del {
+  color: var(--msg-tool-error, #f7768e);
+}
+
+.diff {
+  border-top: 1px solid var(--border);
+  max-height: 420px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.diff-line {
+  display: flex;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+}
+
+.diff-sign {
+  flex-shrink: 0;
+  width: 14px;
+  user-select: none;
+  color: var(--dim);
+}
+
+.diff-line.add {
+  background: rgba(74, 222, 128, 0.09);
+  color: #86efac;
+}
+
+.diff-line.add .diff-sign {
+  color: #4ade80;
+}
+
+.diff-line.del {
+  background: rgba(247, 118, 142, 0.09);
+  color: #fca5b4;
+}
+
+.diff-line.del .diff-sign {
+  color: var(--msg-tool-error, #f7768e);
+}
+
+.diff-skip {
+  padding: 2px 10px;
+  color: var(--dim);
+  font-style: italic;
+  user-select: none;
+}
+
+/* --- command palette (CommandPalette.vue) --------------------------------- */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 24px 24px;
+}
+
+.palette {
+  width: 520px;
+  max-width: 100%;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.palette-input {
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font: inherit;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.palette-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.palette-list li.active {
+  background: var(--bg);
+}
+
+.palette-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.palette-kind.project {
+  color: var(--accent);
+}
+
+.palette-label {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-current {
+  color: var(--dim);
+}
+
+.palette-hint {
+  margin-left: auto;
+  flex-shrink: 1;
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.palette-empty {
+  padding: 12px;
+  color: var(--dim);
+}
+
+.diff-hunk-sep {
+  border-top: 1px dashed var(--border);
+  margin: 4px 0;
+}

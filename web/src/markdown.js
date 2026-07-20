@@ -142,7 +142,10 @@ export function renderMarkdown(src) {
       }
       i++; // skip closing fence
       const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
-      html.push(`<pre${langAttr}><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      // The copy button is static HTML wired up via event delegation in
+      // MessageView.vue (onMarkdownClick), since this output lands in v-html.
+      const copyBtn = '<button class="code-copy" type="button" title="Copy code" aria-label="Copy code"></button>';
+      html.push(`<pre${langAttr}>${copyBtn}<code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
       continue;
     }
 

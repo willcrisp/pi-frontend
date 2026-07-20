@@ -127,10 +127,12 @@ web/src/projects.js — REST client + reactive `projectsStore` for the
         ▼
 web/src/App.vue (composer, header, model/thinking selects)
   ├─ Sidebar.vue (project list + add/remove, chat history for current project)
-  ├─ MessageView.vue (renders one message: text / thinking / toolCall blocks;
-  │    subagent tool calls delegate to SubagentView.vue)
+  ├─ MessageView.vue (renders one message: markdown text / thinking / toolCall
+  │    blocks; subagent tool calls delegate to SubagentView.vue, edit/write
+  │    tool calls render as a diff via diff.js)
   ├─ UsagePopover.vue (session token/cost totals + sub-agent breakdown)
-  └─ AgentsDialog.vue (edit sub-agent definitions, backed by /api/agents)
+  ├─ AgentsDialog.vue (edit sub-agent definitions, backed by /api/agents)
+  └─ CommandPalette.vue (Ctrl/Cmd+K fuzzy jump across projects + chats)
 ```
 
 `store` (in `pi.js`, the active project's chat) and `projectsStore` (in `projects.js`, the project/session lists) are the reactive sources of truth for the whole UI — there is no other state management. Components read from them directly and call the exported functions to act.
@@ -184,7 +186,10 @@ halves:
 - `App.vue` — top-level layout: sidebar, header (connection dot, model, session name, usage popover), scrollable message list, composer (textarea + send/stop), model/thinking-level selects. Auto-scrolls the message pane unless the user has scrolled up.
 - `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
 - `SshPopover.vue` — click-toggled popup on the header's connection dot (`ChatHeader.vue`) for viewing/testing/saving/clearing the SSH target. Unlike `UsagePopover.vue` (hover-triggered, read-only), this is click-toggled with outside-click/Escape-to-close since it's a form.
-- `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself. Sub-agent dispatches (tool name `subagent`, or any result matching `subagentDetails()`) render via `SubagentView.vue` instead of the generic tool block.
+- `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself. Assistant text blocks render through `markdown.js`; user text renders as plain preformatted text. Sub-agent dispatches (tool name `subagent`, or any result matching `subagentDetails()`) render via `SubagentView.vue`; edit/write tool calls (detected by argument shape in `diff.js`, not a fixed tool-name list) render as a collapsed unified diff instead of the generic raw-args tool block. A hover toolbar on each message offers copy-to-clipboard, and — on user messages, when a fork point exists (paired positionally with `store.forkMessages` by `MessageList.vue`) — edit-and-resend, which is `forkFrom()` (see `pi.js`) plus the prefilled composer it already hands back.
+- `markdown.js` — dependency-free markdown → HTML for assistant text (headings, bold/italic/strikethrough, inline/fenced code, links, nested lists, tables, blockquotes, hr). Fenced code blocks get a static copy button whose click is handled via event delegation in `MessageView.vue` (the HTML lands in `v-html`, so it can't carry a Vue listener directly).
+- `diff.js` — detects edit-shaped tool-call arguments (old/new text pair, or a whole-file `write`/`create` call) and computes a line-level LCS diff, collapsed to a few lines of context around each change (`collapseRows`); used by `MessageView.vue`'s diff tool-call rendering, collapsed by default like opencode's tool cards.
+- `CommandPalette.vue` — Ctrl/Cmd+K fuzzy-jump palette over known projects and the current project's (non-archived) chats, subsequence-matched and scored client-side; always mounted from `App.vue`, owns its own global hotkey listener.
 - `SubagentView.vue` — rich inline view of one sub-agent dispatch: per-agent cards with live status/usage/duration, an activity log of the agent's nested tool calls, final output, and error/stderr surfaces; placeholder cards derived from the tool-call args cover the gap before the first streamed snapshot (see "Sub-agent support" above).
 - `UsagePopover.vue` — session-level token/cost stats from `get_session_stats`, plus a per-sub-agent usage breakdown (detection via `subagentDetails()` in `pi.js`). Per-agent duration is measured client-side from tool-call start/end, since the extension doesn't report elapsed time itself. Degrades gracefully to "no sub-agents used this session" when no sub-agent extension is installed — see the README's "Sub-agents" section for how to wire one up in a local `pi` config.
 - `agents.js` + `AgentsDialog.vue` — REST client/store (`agentsStore`, ssh.js conventions) and modal (ConnectDialog pattern, opened from a header button) for creating/editing/deleting agent definitions via `/api/agents`, including the model + reasoning-level selects.
@@ -192,10 +197,8 @@ halves:
 
 ### Known gaps (see README "Not yet implemented")
 
-- No markdown rendering of assistant text (plain text only).
-- No handling of `extension_ui_request` dialogs (confirm/select/input from extensions).
-- No image support in prompts.
 - No idle eviction of project processes (every added project's `pi` process runs until removed or the server restarts).
 - No chat-history browsing when an SSH target is set (session files live on the remote host; new chats and switching still work, there's just no discovery of past ones).
+- No notification/badge when a project running in the background (not the one currently viewed) finishes a turn or blocks on an `extension_ui_request` dialog — you have to switch to it to notice.
 
 When working in this area, check whether a change belongs in `pi.js` (protocol/state) versus the `.vue` components (presentation) before touching the server — the server almost never needs to change for frontend-visible features.
