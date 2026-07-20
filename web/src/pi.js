@@ -21,6 +21,14 @@ function initialStore() {
     // Extension/prompt-template/skill commands invocable via "/name args" in a prompt,
     // from get_commands: [{ name, description, source, sourceInfo }]
     commands: [],
+    // User messages on the active branch that can be forked from, from
+    // get_fork_messages: [{ entryId, text }] in send order. Paired positionally
+    // with the user messages in `messages` by MessageRail.vue.
+    forkMessages: [],
+    // Text to load into the composer (set when a fork hands back the prompt it
+    // branched from, mirroring what pi's TUI does on /fork). Composer.vue
+    // watches this and clears it once consumed.
+    composerDraft: "",
     // { message, exitCode } from a synthetic pi_web_process_error frame (see
     // spawn_process in server/src/main.rs) — the pi/ssh child failed to start
     // or crashed, with its stderr tail as the message. Cleared once the
@@ -63,8 +71,10 @@ let ws = null;
 let currentProjectId = null;
 // Index into store.messages of the assistant message currently streaming.
 let currentIndex = -1;
-// Called after new_session/switch_session completes, so the sidebar can
-// refresh its chat-history list. Wired up once from App.vue.
+// Called when the sidebar's chat-history list may have gone stale — after
+// new_session/switch_session completes, and after each turn settles (a new
+// chat is only persisted/titleable once its first turn runs). Wired up once
+// from App.vue.
 let onSessionSwitched = null;
 
 export function setOnSessionSwitched(fn) {
@@ -103,6 +113,7 @@ function connect() {
     send({ type: "get_available_models" });
     send({ type: "get_session_stats" });
     send({ type: "get_commands" });
+    send({ type: "get_fork_messages" });
   };
   ws.onclose = () => {
     if (projectId !== currentProjectId) return;
@@ -129,6 +140,24 @@ export function newSession() {
 
 export function switchSession(sessionPath) {
   send({ type: "switch_session", sessionPath });
+}
+
+// Branch the session at a previous user message (pi's `fork` RPC command / the
+// TUI's /fork). pi rewinds the active branch to just before that message and
+// hands back its text, which we load into the composer so it can be edited and
+// re-sent down the new branch. Returns null if an extension cancelled the fork.
+export async function forkFrom(entryId) {
+  const data = await request({ type: "fork", entryId });
+  if (data?.cancelled) return null;
+  store.messages = [];
+  store.toolResults = {};
+  send({ type: "get_state" });
+  send({ type: "get_messages" });
+  send({ type: "get_session_stats" });
+  send({ type: "get_fork_messages" });
+  onSessionSwitched?.();
+  store.composerDraft = data?.text || "";
+  return data?.text ?? "";
 }
 
 export function send(cmd) {
@@ -210,6 +239,15 @@ function handle(ev) {
       store.streaming = false;
       currentIndex = -1;
       send({ type: "get_session_stats" });
+      // The turn that just settled added a user message to the branch, so the
+      // set of fork points changed.
+      send({ type: "get_fork_messages" });
+      // A freshly-started chat's session file isn't written (and has no user
+      // message to title it) until its first turn runs, so it's absent from
+      // the sidebar list fetched at new_session/select time. Re-list now that
+      // the turn has settled so the active chat shows up — and keeps its
+      // mtime/title current — without waiting for a project re-select.
+      onSessionSwitched?.();
       break;
 
     case "message_start":
@@ -305,6 +343,8 @@ function handleResponse(ev) {
     store.sessionStats = ev.data || null;
   } else if (ev.command === "get_commands") {
     store.commands = ev.data?.commands || [];
+  } else if (ev.command === "get_fork_messages") {
+    store.forkMessages = ev.data?.messages || [];
   } else if (
     ev.command === "set_model" ||
     ev.command === "set_thinking_level" ||
@@ -320,6 +360,7 @@ function handleResponse(ev) {
     send({ type: "get_state" });
     send({ type: "get_messages" });
     send({ type: "get_session_stats" });
+    send({ type: "get_fork_messages" });
     onSessionSwitched?.();
   } else if (ev.command === "get_messages") {
     store.messages = ev.data.messages;

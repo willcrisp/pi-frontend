@@ -1,6 +1,17 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { COLOR_FIELDS, colorProfile, setColor, resetColors } from "./theme.js";
+import {
+  COLOR_FIELDS,
+  colorProfile,
+  setColor,
+  resetColors,
+  fontSize,
+  setFontSize,
+  contentWidth,
+  setContentWidth,
+  CONTENT_WIDTH_MIN,
+  CONTENT_WIDTH_MAX,
+} from "./theme.js";
 
 const root = ref(null);
 const open = ref(false);
@@ -62,6 +73,55 @@ onUnmounted(() => {
           @input="setColor(f.key, $event.target.value)"
         />
       </label>
+
+      <div class="colors-divider"></div>
+
+      <div class="colors-row font-size-row">
+        <span class="colors-label">font size</span>
+        <div class="font-size-control">
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Decrease font size"
+            @click="setFontSize(fontSize.px - 1)"
+          >−</button>
+          <span class="font-size-value">{{ fontSize.px }}</span>
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Increase font size"
+            @click="setFontSize(fontSize.px + 1)"
+          >+</button>
+        </div>
+      </div>
+
+      <div class="colors-divider"></div>
+
+      <div class="colors-row font-size-row">
+        <span class="colors-label">content width</span>
+        <div class="font-size-control">
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Decrease content width"
+            @click="setContentWidth(contentWidth.px - 20)"
+          >−</button>
+          <input
+            type="number"
+            class="content-width-value"
+            :min="CONTENT_WIDTH_MIN"
+            :max="CONTENT_WIDTH_MAX"
+            :value="contentWidth.px"
+            @change="setContentWidth(Number($event.target.value))"
+          />
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Increase content width"
+            @click="setContentWidth(contentWidth.px + 20)"
+          >+</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>

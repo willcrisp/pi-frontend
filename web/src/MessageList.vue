@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { store } from "./pi.js";
 import MessageView from "./MessageView.vue";
+import MessageRail from "./MessageRail.vue";
 
 const mainEl = ref(null);
 
@@ -25,9 +26,17 @@ watch(
 </script>
 
 <template>
-  <main ref="mainEl">
-    <div class="messages">
-      <MessageView v-for="(m, i) in visible" :key="i" :message="m" />
-    </div>
-  </main>
+  <div class="message-area">
+    <main ref="mainEl">
+      <div class="messages">
+        <MessageView
+          v-for="(m, i) in visible"
+          :id="`msg-${i}`"
+          :key="i"
+          :message="m"
+        />
+      </div>
+    </main>
+    <MessageRail :scroller="mainEl" />
+  </div>
 </template>

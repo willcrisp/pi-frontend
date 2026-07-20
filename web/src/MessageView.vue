@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { store, subagentDetails } from "./pi.js";
+import { renderMarkdown } from "./markdown.js";
 import SubagentView from "./SubagentView.vue";
 
 const props = defineProps({ message: { type: Object, required: true } });
@@ -30,7 +31,12 @@ function isSubagent(block) {
 <template>
   <div :class="message.role === 'user' ? 'msg-user' : 'msg-assistant'">
     <template v-for="(block, i) in blocks" :key="i">
-      <span v-if="block.type === 'text'">{{ block.text }}</span>
+      <div
+        v-if="block.type === 'text' && message.role !== 'user'"
+        class="markdown"
+        v-html="renderMarkdown(block.text)"
+      ></div>
+      <span v-else-if="block.type === 'text'">{{ block.text }}</span>
 
       <img
         v-else-if="block.type === 'image'"

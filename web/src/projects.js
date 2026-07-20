@@ -6,13 +6,42 @@ import { reactive } from "vue";
 import { connectToProject, newSession, resetChat, switchSession } from "./pi.js";
 
 const LAST_PROJECT_KEY = "pi-web:lastProjectId";
+const ARCHIVE_KEY = "pi-web:archivedSessions";
+
+function loadArchived() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ARCHIVE_KEY) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const archivedPaths = loadArchived();
+
+function saveArchived() {
+  localStorage.setItem(ARCHIVE_KEY, JSON.stringify([...archivedPaths]));
+}
 
 export const projectsStore = reactive({
   projects: [], // [{id, name, path}]
   currentProjectId: null,
   sessions: [], // [{path, title, mtimeMs}] for the current project
   loadingSessions: false,
+  archivedVersion: 0, // bumped on archive/unarchive to trigger reactivity
 });
+
+export function isArchived(path) {
+  projectsStore.archivedVersion; // reactive dependency
+  return archivedPaths.has(path);
+}
+
+export function toggleArchive(path) {
+  if (archivedPaths.has(path)) archivedPaths.delete(path);
+  else archivedPaths.add(path);
+  saveArchived();
+  projectsStore.archivedVersion++;
+}
 
 export async function fetchProjects() {
   const res = await fetch("/api/projects");

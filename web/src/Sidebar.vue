@@ -1,7 +1,16 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { store } from "./pi.js";
-import { addProject, openSession, projectsStore, removeProject, selectProject, startNewChat } from "./projects.js";
+import {
+  addProject,
+  isArchived,
+  openSession,
+  projectsStore,
+  removeProject,
+  selectProject,
+  startNewChat,
+  toggleArchive,
+} from "./projects.js";
 import { openConnect } from "./auth.js";
 
 const showAddForm = ref(false);
@@ -56,15 +65,20 @@ function onPathKeydown(e) {
 
 const PAGE_SIZE = 5;
 const historyLimit = ref(PAGE_SIZE);
+const showArchived = ref(false);
 watch(
   () => projectsStore.currentProjectId,
   () => {
     historyLimit.value = PAGE_SIZE;
+    showArchived.value = false;
   }
 );
 
-const visibleSessions = computed(() => projectsStore.sessions.slice(0, historyLimit.value));
-const hasMoreSessions = computed(() => projectsStore.sessions.length > historyLimit.value);
+const filteredSessions = computed(() =>
+  projectsStore.sessions.filter((s) => isArchived(s.path) === showArchived.value)
+);
+const visibleSessions = computed(() => filteredSessions.value.slice(0, historyLimit.value));
+const hasMoreSessions = computed(() => filteredSessions.value.length > historyLimit.value);
 
 function loadMoreSessions() {
   historyLimit.value += PAGE_SIZE;
@@ -117,7 +131,17 @@ function relativeTime(ms) {
   <aside class="sidebar">
     <div class="sidebar-header">
       <span class="sidebar-title">projects</span>
-      <button class="icon-btn" title="Add project" @click="showAddForm = !showAddForm">+</button>
+      <div class="sidebar-header-actions">
+        <button
+          class="icon-btn archive-toggle"
+          :class="{ active: showArchived }"
+          :title="showArchived ? 'Show active chats' : 'Show archived chats'"
+          @click="showArchived = !showArchived"
+        >
+          🗄
+        </button>
+        <button class="icon-btn" title="Add project" @click="showAddForm = !showAddForm">+</button>
+      </div>
     </div>
 
     <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
@@ -159,7 +183,7 @@ function relativeTime(ms) {
         </div>
 
         <div v-if="p.id === projectsStore.currentProjectId" class="chat-history">
-          <div class="chat-row new-chat" @click="startNewChat">+ new chat</div>
+          <div v-if="!showArchived" class="chat-row new-chat" @click="startNewChat">+ new chat</div>
           <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading…</div>
           <template v-else>
             <div
@@ -168,13 +192,22 @@ function relativeTime(ms) {
               class="chat-row"
               :class="{ active: s.path === activeSessionPath }"
               :title="s.title"
-              @click="openSession(s.path)"
+              @click="showArchived ? null : openSession(s.path)"
             >
               <span class="chat-title">{{ s.title }}</span>
               <span class="chat-time">{{ relativeTime(s.mtimeMs) }}</span>
+              <button
+                class="icon-btn archive-btn"
+                :title="showArchived ? 'Unarchive chat' : 'Archive chat'"
+                @click.stop="toggleArchive(s.path)"
+              >
+                {{ showArchived ? "↩" : "🗄" }}
+              </button>
             </div>
             <div v-if="hasMoreSessions" class="chat-row load-more" @click="loadMoreSessions">load more…</div>
-            <div v-if="!projectsStore.sessions.length" class="chat-row dim">no past chats</div>
+            <div v-if="!filteredSessions.length" class="chat-row dim">
+              {{ showArchived ? "no archived chats" : "no past chats" }}
+            </div>
           </template>
         </div>
       </div>

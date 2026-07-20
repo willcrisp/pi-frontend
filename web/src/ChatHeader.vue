@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from "vue";
-import { setSessionName, store, subagentDetails } from "./pi.js";
+import { store, subagentDetails } from "./pi.js";
 import { openAgents } from "./agents.js";
+import { openRenameDialog } from "./renameDialog.js";
 import UsagePopover from "./UsagePopover.vue";
 import ColorProfilePopover from "./ColorProfilePopover.vue";
 import SshPopover from "./SshPopover.vue";
@@ -21,14 +22,11 @@ const totalTokens = computed(() => {
 
 const titleText = computed(() => {
   const name = store.sessionName || "untitled";
-  return totalTokens.value != null ? `${name} · ${totalTokens.value} tok` : name;
+  return totalTokens.value != null ? `${name} · ${totalTokens.value}` : name;
 });
 
-async function renameSession() {
-  const next = window.prompt("Session name:", store.sessionName || "");
-  if (next && next.trim()) {
-    await setSessionName(next.trim());
-  }
+function renameSession() {
+  openRenameDialog();
 }
 
 // Currently-running sub-agents across all tool calls in this project's chat,
@@ -65,7 +63,7 @@ function scrollToRunningSubagent() {
       <span :title="modelLabel">{{ modelLabel }}</span>
     </div>
     <button class="header-title" :title="'Rename session: ' + (store.sessionName || 'untitled')" @click="renameSession">
-      {{ titleText }}
+      <span>{{ titleText }}</span>
     </button>
     <div class="header-right">
       <button

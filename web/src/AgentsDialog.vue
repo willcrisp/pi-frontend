@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { THINKING_LEVELS, store } from "./pi.js";
 import { projectsStore } from "./projects.js";
 import {
@@ -19,17 +19,57 @@ onMounted(fetchAgents);
 const userAgents = computed(() => agentsStore.agents.filter((a) => a.scope === "user"));
 const projectAgents = computed(() => agentsStore.agents.filter((a) => a.scope === "project"));
 
-const modelOptions = computed(() => {
-  const opts = store.availableModels.map((m) => ({
-    value: `${m.provider}/${m.id}`,
-    label: m.name || m.id,
-  }));
-  const base = agentsStore.editing && !agentsStore.editing.isRaw ? agentsStore.editing.modelBase : "";
-  if (base && !opts.some((o) => o.value === base)) {
-    opts.unshift({ value: base, label: base });
+const modelsByProvider = computed(() => {
+  const groups = new Map();
+  for (const m of store.availableModels) {
+    const provider = m.provider || "";
+    if (!groups.has(provider)) groups.set(provider, []);
+    groups.get(provider).push({ value: `${m.provider}/${m.id}`, label: m.name || m.id });
   }
-  return opts;
+  const base = agentsStore.editing && !agentsStore.editing.isRaw ? agentsStore.editing.modelBase : "";
+  if (base && ![...groups.values()].some((opts) => opts.some((o) => o.value === base))) {
+    groups.set("", [{ value: base, label: base }, ...(groups.get("") || [])]);
+  }
+  return [...groups.entries()];
 });
+
+const toolInput = ref("");
+
+const toolChips = computed(() => {
+  const raw = agentsStore.editing?.tools || "";
+  return raw.split(",").map((t) => t.trim()).filter(Boolean);
+});
+
+function addToolChips(raw) {
+  const names = raw.split(",").map((t) => t.trim()).filter(Boolean);
+  if (!names.length) return;
+  const existing = toolChips.value;
+  const merged = [...existing, ...names.filter((n) => !existing.includes(n))];
+  agentsStore.editing.tools = merged.join(",");
+}
+
+function onToolInputKeydown(e) {
+  if (e.key === "Enter" || e.key === ",") {
+    e.preventDefault();
+    addToolChips(toolInput.value);
+    toolInput.value = "";
+  } else if (e.key === "Backspace" && !toolInput.value && toolChips.value.length) {
+    removeToolChip(toolChips.value.length - 1);
+  }
+}
+
+function onToolInputBlur() {
+  if (toolInput.value.trim()) {
+    addToolChips(toolInput.value);
+    toolInput.value = "";
+  }
+}
+
+function removeToolChip(index) {
+  const chips = [...toolChips.value];
+  chips.splice(index, 1);
+  agentsStore.editing.tools = chips.join(",");
+}
 
 const nameError = computed(() => {
   const e = agentsStore.editing;
@@ -234,13 +274,21 @@ async function onDelete() {
 
         <label class="agents-field">
           <span class="agents-field-label">tools</span>
-          <input
-            v-model="agentsStore.editing.tools"
-            type="text"
-            placeholder="comma-separated, empty = all tools"
-            autocomplete="off"
-            spellcheck="false"
-          />
+          <div class="agents-tools-input">
+            <span v-for="(tool, i) in toolChips" :key="tool" class="agents-tool-chip">
+              {{ tool }}
+              <button type="button" @click="removeToolChip(i)" aria-label="Remove tool">×</button>
+            </span>
+            <input
+              v-model="toolInput"
+              type="text"
+              :placeholder="toolChips.length ? '' : 'empty = all tools'"
+              autocomplete="off"
+              spellcheck="false"
+              @keydown="onToolInputKeydown"
+              @blur="onToolInputBlur"
+            />
+          </div>
         </label>
 
         <div class="agents-field-row">
@@ -248,7 +296,13 @@ async function onDelete() {
             <span class="agents-field-label">model</span>
             <select v-model="agentsStore.editing.modelBase">
               <option value="">inherit (session default)</option>
-              <option v-for="o in modelOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              <optgroup
+                v-for="[provider, opts] in modelsByProvider"
+                :key="provider"
+                :label="provider"
+              >
+                <option v-for="o in opts" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </optgroup>
             </select>
           </label>
 

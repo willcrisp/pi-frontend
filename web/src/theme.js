@@ -102,3 +102,83 @@ watch(
   },
   { deep: true }
 );
+
+// Message font size (px), same persistence pattern as the color profile.
+const FONT_SIZE_KEY = "pi-web:font-size";
+const FONT_SIZE_DEFAULT = 14;
+const FONT_SIZE_MIN = 11;
+const FONT_SIZE_MAX = 22;
+
+function loadStoredFontSize() {
+  const raw = Number(localStorage.getItem(FONT_SIZE_KEY));
+  return Number.isFinite(raw) && raw >= FONT_SIZE_MIN && raw <= FONT_SIZE_MAX
+    ? raw
+    : FONT_SIZE_DEFAULT;
+}
+
+export const fontSize = reactive({ px: loadStoredFontSize() });
+
+function applyFontSize(px) {
+  document.documentElement.style.setProperty("--msg-font-size", `${px}px`);
+}
+
+export function setFontSize(px) {
+  fontSize.px = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, px));
+}
+
+applyFontSize(fontSize.px);
+watch(
+  () => fontSize.px,
+  (px) => {
+    applyFontSize(px);
+    try {
+      localStorage.setItem(FONT_SIZE_KEY, String(px));
+    } catch {
+      // storage unavailable — in-memory only
+    }
+  }
+);
+
+// Content width (px), same persistence pattern as font size. This is a
+// max-width applied to the message list / composer column — it only widens
+// the content, never forces it wider than the viewport, since max-width
+// still lets the (unset-width) block shrink to fit a narrow window.
+const CONTENT_WIDTH_KEY = "pi-web:content-width";
+const CONTENT_WIDTH_DEFAULT = 760;
+export const CONTENT_WIDTH_MIN = 480;
+export const CONTENT_WIDTH_MAX = 1400;
+
+function loadStoredContentWidth() {
+  const raw = Number(localStorage.getItem(CONTENT_WIDTH_KEY));
+  return Number.isFinite(raw) &&
+    raw >= CONTENT_WIDTH_MIN &&
+    raw <= CONTENT_WIDTH_MAX
+    ? raw
+    : CONTENT_WIDTH_DEFAULT;
+}
+
+export const contentWidth = reactive({ px: loadStoredContentWidth() });
+
+function applyContentWidth(px) {
+  document.documentElement.style.setProperty("--content-width", `${px}px`);
+}
+
+export function setContentWidth(px) {
+  contentWidth.px = Math.min(
+    CONTENT_WIDTH_MAX,
+    Math.max(CONTENT_WIDTH_MIN, Math.round(px))
+  );
+}
+
+applyContentWidth(contentWidth.px);
+watch(
+  () => contentWidth.px,
+  (px) => {
+    applyContentWidth(px);
+    try {
+      localStorage.setItem(CONTENT_WIDTH_KEY, String(px));
+    } catch {
+      // storage unavailable — in-memory only
+    }
+  }
+);

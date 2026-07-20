@@ -1,36 +1,19 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { projectsStore } from "./projects.js";
-import { gitStore, fetchBranches, checkoutBranch } from "./git.js";
+import { gitStore, fetchBranches } from "./git.js";
 
 const root = ref(null);
 const open = ref(false);
-const actionError = ref("");
 
 watch(
   () => projectsStore.currentProjectId,
   (id) => {
     open.value = false;
-    actionError.value = "";
     if (id) fetchBranches(id);
   },
   { immediate: true }
 );
-
-async function onPick(branch) {
-  const projectId = projectsStore.currentProjectId;
-  if (!projectId || branch === gitStore.current) {
-    open.value = false;
-    return;
-  }
-  actionError.value = "";
-  try {
-    await checkoutBranch(projectId, branch);
-    open.value = false;
-  } catch (e) {
-    actionError.value = e.message || String(e);
-  }
-}
 
 function onDocClick(e) {
   if (open.value && root.value && !root.value.contains(e.target)) open.value = false;
@@ -86,21 +69,16 @@ const label = computed(() => gitStore.current || (gitStore.loading ? "…" : "no
       </div>
 
       <template v-else>
-        <button
+        <div
           v-for="b in gitStore.branches"
           :key="b"
-          type="button"
           class="branch-row"
           :class="{ current: b === gitStore.current }"
-          :disabled="gitStore.switching"
-          @click="onPick(b)"
         >
           <span class="branch-check">{{ b === gitStore.current ? "✓" : "" }}</span>
           <span class="branch-name" :title="b">{{ b }}</span>
-        </button>
+        </div>
       </template>
-
-      <div v-if="actionError" class="branch-error">{{ actionError }}</div>
     </div>
   </div>
 </template>

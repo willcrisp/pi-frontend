@@ -1296,12 +1296,12 @@ struct SessionView {
     mtime_ms: u128,
 }
 
-/// Lists `session_dir` on this machine's filesystem. In `--ssh` mode
-/// `session_dir` is learned from the remote pi process's own
-/// `get_session_stats` response, so it's a path on the *remote* host —
-/// `read_dir` on it here will simply fail and this degrades to an empty
-/// list rather than erroring. Browsing chat history isn't supported over
-/// SSH relay yet.
+/// Lists the project's session `.jsonl` files. `session_dir` is learned from
+/// the pi process's own `get_session_stats` response, so it points at
+/// whatever machine runs pi — this host normally, or the SSH target's host
+/// when one is set. The listing is therefore dual-mode (local `read_dir`, or
+/// one ssh round-trip), same as the agent-definition file ops. A missing or
+/// not-yet-created session dir degrades to an empty list rather than erroring.
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1311,11 +1311,23 @@ async fn list_sessions(
     let Some(session_dir) = session_dir else {
         return Ok(Json(Vec::new()));
     };
+    let ssh = state.ssh.read().await.clone();
 
-    let Ok(mut dir_entries) = tokio::fs::read_dir(&session_dir).await else {
-        return Ok(Json(Vec::new()));
+    let mut sessions = if ssh.host.is_some() {
+        list_sessions_remote(&ssh, &session_dir).await
+    } else {
+        list_sessions_local(&session_dir).await
     };
+    sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    Ok(Json(sessions))
+}
 
+/// Local branch of `list_sessions`: read the session dir off this host's
+/// filesystem, one file at a time.
+async fn list_sessions_local(session_dir: &FsPath) -> Vec<SessionView> {
+    let Ok(mut dir_entries) = tokio::fs::read_dir(session_dir).await else {
+        return Vec::new();
+    };
     let mut sessions = Vec::new();
     while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
         let path = dir_entry.path();
@@ -1335,39 +1347,117 @@ async fn list_sessions(
             .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("session").to_string());
         sessions.push(SessionView { path: path.display().to_string(), title, mtime_ms });
     }
-    sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-    Ok(Json(sessions))
+    sessions
+}
+
+/// SSH branch of `list_sessions`: one round-trip lists every `*.jsonl` in the
+/// remote session dir and, per file, emits NUL-framed
+/// `(fileName, mtimeSeconds, head)` triples — `head` being the first 50 lines,
+/// enough for `session_title_from_lines` without shipping whole session files
+/// over the wire. `stat -c %Y` (GNU) falls back to `stat -f %m` (BSD/macOS)
+/// so mtime works regardless of the remote OS; the returned `path` is the
+/// absolute remote path pi's `switch_session` expects. Any failure (bad
+/// target, missing dir) degrades to an empty list, same as the local branch.
+async fn list_sessions_remote(ssh: &SshConfig, session_dir: &FsPath) -> Vec<SessionView> {
+    let dir_remote = session_dir.to_string_lossy();
+    let dir_quoted = shell_quote(dir_remote.as_ref());
+    let remote_cmd = format!(
+        "cd {dir_quoted} 2>/dev/null && for f in *.jsonl; do [ -f \"$f\" ] || continue; \
+         printf '%s\\0' \"$f\"; \
+         printf '%s\\0' \"$(stat -c %Y \"$f\" 2>/dev/null || stat -f %m \"$f\" 2>/dev/null)\"; \
+         head -n 50 \"$f\"; printf '\\0'; done"
+    );
+    let mut c = ssh_command(ssh, 8);
+    c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(10), c.output()).await {
+        Ok(Ok(out)) => out,
+        _ => return Vec::new(),
+    };
+
+    let mut parts = out.stdout.split(|b| *b == 0);
+    let mut sessions = Vec::new();
+    while let (Some(name), Some(mtime), Some(head)) = (parts.next(), parts.next(), parts.next()) {
+        let (Ok(name), Ok(mtime), Ok(head)) =
+            (std::str::from_utf8(name), std::str::from_utf8(mtime), std::str::from_utf8(head))
+        else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let mtime_ms = mtime.trim().parse::<u128>().map(|s| s * 1000).unwrap_or(0);
+        let title = session_title_from_lines(head.lines())
+            .unwrap_or_else(|| name.strip_suffix(".jsonl").unwrap_or(name).to_string());
+        let path = format!("{}/{name}", dir_remote.trim_end_matches('/'));
+        sessions.push(SessionView { path, title, mtime_ms });
+    }
+    sessions
 }
 
 /// Best-effort chat title: the first user message's text, truncated. Falls
 /// back to the filename (via the caller) if the file is empty, unreadable,
-/// or doesn't look like a pi session in the expected shape.
+/// or doesn't look like a pi session in the expected shape. Only the first
+/// 50 lines are read — enough to find the opening user message without
+/// slurping a large session file.
 async fn session_title(path: &FsPath) -> Option<String> {
     let file = tokio::fs::File::open(path).await.ok()?;
     let mut lines = BufReader::new(file).lines();
-    let mut scanned = 0;
-    while scanned < 50 {
+    let mut head: Vec<String> = Vec::new();
+    while head.len() < 50 {
         let Ok(Some(line)) = lines.next_line().await else { break };
-        scanned += 1;
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-        if v.get("role").and_then(|r| r.as_str()) != Some("user") {
-            continue;
-        }
-        let text = v
-            .get("content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")))
-            .and_then(|b| b.get("text"))
-            .and_then(|t| t.as_str());
-        let Some(text) = text else { continue };
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let truncated: String = trimmed.chars().take(60).collect();
-        return Some(if trimmed.chars().count() > 60 { format!("{truncated}…") } else { truncated });
+        head.push(line);
     }
-    None
+    session_title_from_lines(head.iter().map(String::as_str))
+}
+
+/// Shared title extraction over the first lines of a session `.jsonl`, used by
+/// both the local (`session_title`) and SSH (`list_sessions`) code paths.
+///
+/// Each line is a session-manager entry, not a bare chat message — pi wraps
+/// messages as `{"type":"message","message":{"role":...,"content":[...]}}`
+/// (see `SessionManager.appendMessage`), so a top-level `role` field never
+/// matches. An explicit display name set via `set_session_name` is its own
+/// entry, `{"type":"session_info","name":...}` (`appendSessionInfo`), and
+/// takes priority — it's what shows in the chat header, so the sidebar
+/// should show the same thing rather than falling back to message text. A
+/// rename later in a long session (past our bounded read window) won't be
+/// picked up here, but a rename within the scanned prefix should win even if
+/// it comes after the first user message, so both entry kinds are scanned
+/// together and the last name seen is preferred over the first user text.
+fn session_title_from_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut first_user_text: Option<String> = None;
+    let mut display_name: Option<String> = None;
+    for line in lines.take(50) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("session_info") => {
+                // An empty name explicitly clears the title (matches
+                // SessionManager.getSessionName's own semantics), so this
+                // still overwrites any earlier name in the scanned window.
+                let name = v.get("name").and_then(|n| n.as_str()).map(str::trim).filter(|n| !n.is_empty());
+                display_name = name.map(str::to_string);
+            }
+            Some("message") if first_user_text.is_none() => {
+                let msg = v.get("message");
+                if msg.and_then(|m| m.get("role")).and_then(|r| r.as_str()) != Some("user") {
+                    continue;
+                }
+                let text = msg
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")))
+                    .and_then(|b| b.get("text"))
+                    .and_then(|t| t.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty());
+                first_user_text = text.map(str::to_string);
+            }
+            _ => {}
+        }
+    }
+    let raw = display_name.or(first_user_text)?;
+    let truncated: String = raw.chars().take(60).collect();
+    Some(if raw.chars().count() > 60 { format!("{truncated}…") } else { truncated })
 }
 
 // ---- agent definitions REST API -----------------------------------------
