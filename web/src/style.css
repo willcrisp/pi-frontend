@@ -245,6 +245,8 @@ body {
 }
 
 .chat-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -252,6 +254,10 @@ body {
 
 .chat-time {
   flex-shrink: 0;
+  /* The title takes all the slack, so every timestamp lands on the same
+     right-hand edge instead of trailing its own title. */
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--dim);
 }
