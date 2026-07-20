@@ -7,6 +7,7 @@
 // accumulation needed.
 import { computed, onUnmounted, ref, watch } from "vue";
 import { store, subagentDetails } from "./pi.js";
+import { renderMarkdown } from "./markdown.js";
 
 const props = defineProps({
   toolCallId: { type: String, required: true },
@@ -69,18 +70,65 @@ function messageText(m) {
     .join("\n");
 }
 
-function finalOutputText(res) {
+// Index of the message the final answer comes from, so the activity log can
+// skip it — otherwise the agent's conclusion shows up twice (once mid-log,
+// once in the result block below it).
+function finalMessageIndex(res) {
   const messages = res.messages || [];
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant") return messageText(messages[i]);
+    if (messages[i].role === "assistant" && messageText(messages[i]).trim()) return i;
   }
-  return "";
+  return -1;
 }
 
+function finalOutputText(res) {
+  const i = finalMessageIndex(res);
+  return i === -1 ? "" : messageText(res.messages[i]);
+}
+
+// Flatten the agent's transcript into a display list: its narration (as
+// markdown), the tools it called, and their (clamped) results.
+function activityItems(res) {
+  const messages = res.messages || [];
+  const final = finalMessageIndex(res);
+  const items = [];
+  messages.forEach((m, mi) => {
+    if (m.role === "assistant") {
+      const blocks = Array.isArray(m.content) ? m.content : [];
+      for (const block of blocks) {
+        if (block.type === "text" && block.text.trim()) {
+          if (mi !== final) items.push({ kind: "text", text: block.text });
+        } else if (block.type === "toolCall") {
+          items.push({ kind: "tool", name: block.name, args: argsSummary(block.arguments) });
+        }
+      }
+    } else if (m.role === "toolResult") {
+      const text = messageText(m).trim();
+      if (text) items.push({ kind: "result", text });
+    }
+  });
+  return items;
+}
+
+// Tool arguments are shown as a one-line hint next to the tool name, so
+// prefer the few fields that actually identify the call over raw JSON.
 function argsSummary(args) {
   if (!args) return "";
-  const s = typeof args === "string" ? args : JSON.stringify(args);
-  return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+  const parsed = parseArgs(args);
+  if (parsed && typeof parsed === "object") {
+    const key = ["file_path", "path", "command", "pattern", "url", "query"].find(
+      (k) => typeof parsed[k] === "string"
+    );
+    if (key) return truncate(parsed[key], 90);
+    const vals = Object.values(parsed).filter((v) => typeof v === "string");
+    if (vals.length === 1) return truncate(vals[0], 90);
+  }
+  return truncate(typeof args === "string" ? args : JSON.stringify(args), 90);
+}
+
+function truncate(s, n) {
+  const flat = String(s).replace(/\s+/g, " ").trim();
+  return flat.length > n ? `${flat.slice(0, n)}…` : flat;
 }
 
 function formatTokens(n) {
@@ -158,23 +206,29 @@ const placeholderCards = computed(() => {
           </span>
         </summary>
         <div class="subagent-body">
-          <p v-if="res.task" class="subagent-task">{{ res.task }}</p>
+          <section v-if="res.task" class="subagent-section">
+            <h4 class="subagent-section-title">Task</h4>
+            <div class="subagent-task markdown" v-html="renderMarkdown(res.task)"></div>
+          </section>
 
-          <div class="subagent-activity">
-            <template v-for="(m, mi) in res.messages || []" :key="mi">
-              <template v-if="m.role === 'assistant'">
-                <template v-for="(block, bi) in Array.isArray(m.content) ? m.content : []" :key="bi">
-                  <p v-if="block.type === 'text' && block.text" class="subagent-line">{{ block.text }}</p>
-                  <p v-else-if="block.type === 'toolCall'" class="subagent-line subagent-toolcall">
-                    <span class="subagent-toolcall-name">{{ block.name }}</span> {{ argsSummary(block.arguments) }}
-                  </p>
-                </template>
+          <section v-if="activityItems(res).length" class="subagent-section">
+            <h4 class="subagent-section-title">Activity</h4>
+            <div class="subagent-activity">
+              <template v-for="(item, ii) in activityItems(res)" :key="ii">
+                <div v-if="item.kind === 'text'" class="subagent-line markdown" v-html="renderMarkdown(item.text)"></div>
+                <p v-else-if="item.kind === 'tool'" class="subagent-line subagent-toolcall">
+                  <span class="subagent-toolcall-name">{{ item.name }}</span>
+                  <span v-if="item.args" class="subagent-toolcall-args">{{ item.args }}</span>
+                </p>
+                <p v-else class="subagent-line subagent-toolresult">{{ item.text }}</p>
               </template>
-              <p v-else-if="m.role === 'toolResult'" class="subagent-line subagent-toolresult">{{ messageText(m) }}</p>
-            </template>
-          </div>
+            </div>
+          </section>
 
-          <pre v-if="finalOutputText(res)" class="subagent-output">{{ finalOutputText(res) }}</pre>
+          <section v-if="finalOutputText(res)" class="subagent-section">
+            <h4 class="subagent-section-title">Result</h4>
+            <div class="subagent-output markdown" v-html="renderMarkdown(finalOutputText(res))"></div>
+          </section>
 
           <div v-if="res.errorMessage" class="subagent-error-msg">{{ res.errorMessage }}</div>
           <pre v-if="res.stderr && (res.errorMessage || res.exitCode > 0)" class="subagent-stderr">{{ res.stderr }}</pre>
@@ -189,7 +243,7 @@ const placeholderCards = computed(() => {
           <span v-if="card.agent" class="subagent-agent">{{ card.agent }}</span>
           <span class="subagent-starting">starting…</span>
         </div>
-        <p v-if="card.task" class="subagent-task">{{ card.task }}</p>
+        <div v-if="card.task" class="subagent-task markdown" v-html="renderMarkdown(card.task)"></div>
       </div>
     </template>
   </div>
