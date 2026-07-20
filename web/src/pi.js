@@ -39,6 +39,49 @@ function initialStore() {
 
 export const store = reactive(initialStore());
 
+// --- Snapshot cache -------------------------------------------------------
+// Switching project or chat used to blank the UI and wait for a round trip of
+// get_state/get_messages/... before anything rendered. Instead we keep the last
+// rendered state of every project/session we've visited in memory, restore it
+// synchronously on switch, and let the refetch overwrite it when it lands. The
+// server is still the source of truth; this only removes the empty gap.
+const snapshots = new Map(); // key -> plain copy of the store's per-chat fields
+// projectId -> the key that was active last time we left that project, so
+// re-selecting a project lands back on the chat you were reading.
+const lastKeyForProject = new Map();
+let currentKey = null;
+
+const SNAPSHOT_FIELDS = [
+  "messages",
+  "toolResults",
+  "sessionName",
+  "sessionStats",
+  "model",
+  "thinkingLevel",
+  "availableModels",
+  "commands",
+  "forkMessages",
+];
+
+function saveSnapshot() {
+  if (!currentKey) return;
+  const snap = {};
+  for (const f of SNAPSHOT_FIELDS) snap[f] = store[f];
+  snapshots.set(currentKey, snap);
+  if (currentProjectId) lastKeyForProject.set(currentProjectId, currentKey);
+}
+
+// Swap the store over to `key`, showing its cached contents immediately if we
+// have any. Returns whether a cached snapshot was found.
+// Callers must saveSnapshot() first (before mutating currentProjectId).
+function restoreSnapshot(key) {
+  const snap = snapshots.get(key);
+  Object.assign(store, initialStore(), snap || {});
+  currentKey = key;
+  currentIndex = -1;
+  return !!snap;
+}
+
 // Detects a sub-agent dispatch tool result (the shape produced by pi-mono's
 // example `subagent` extension: `details = { mode, results: [...] }`, one
 // entry per dispatched task) shared by SubagentView.vue, MessageView.vue and
@@ -88,9 +131,9 @@ export function connectToProject(projectId) {
     ws.close();
     ws = null;
   }
+  saveSnapshot();
   currentProjectId = projectId;
-  currentIndex = -1;
-  Object.assign(store, initialStore());
+  restoreSnapshot(projectId ? lastKeyForProject.get(projectId) || `p:${projectId}` : null);
   connect();
 }
 
@@ -136,10 +179,16 @@ function connect() {
 }
 
 export function newSession() {
+  saveSnapshot();
+  restoreSnapshot(`new:${currentProjectId}:${Date.now()}`);
   send({ type: "new_session" });
 }
 
 export function switchSession(sessionPath) {
+  saveSnapshot();
+  // Render the cached copy of that chat right away; the get_messages triggered
+  // by the switch_session response replaces it once pi confirms.
+  restoreSnapshot(`s:${sessionPath}`);
   send({ type: "switch_session", sessionPath });
 }
 
@@ -342,6 +391,14 @@ function handleResponse(ev) {
     store.availableModels = ev.data.models || [];
   } else if (ev.command === "get_session_stats") {
     store.sessionStats = ev.data || null;
+    // Now that we know which session file this chat actually is, re-key its
+    // snapshot so a later switchSession() to that path finds the cache.
+    const file = ev.data?.sessionFile;
+    if (file && currentKey && currentKey !== `s:${file}`) {
+      snapshots.delete(currentKey);
+      currentKey = `s:${file}`;
+      if (currentProjectId) lastKeyForProject.set(currentProjectId, currentKey);
+    }
   } else if (ev.command === "get_commands") {
     store.commands = ev.data?.commands || [];
   } else if (ev.command === "get_fork_messages") {
@@ -356,8 +413,10 @@ function handleResponse(ev) {
     // authoritative state instead of trying to parse them individually.
     send({ type: "get_state" });
   } else if (ev.command === "new_session" || ev.command === "switch_session") {
-    store.messages = [];
-    store.toolResults = {};
+    // Deliberately not clearing messages here: switchSession() already swapped
+    // the store over to that chat's cached copy, and blanking it would
+    // reintroduce the flash this cache exists to remove. get_messages below
+    // replaces the contents wholesale when it arrives.
     send({ type: "get_state" });
     send({ type: "get_messages" });
     send({ type: "get_session_stats" });
@@ -365,6 +424,9 @@ function handleResponse(ev) {
     onSessionSwitched?.();
   } else if (ev.command === "get_messages") {
     store.messages = ev.data.messages;
+    // Authoritative replacement: drop any results carried over from the
+    // snapshot cache so a restored chat can't keep another chat's tool output.
+    store.toolResults = {};
     // Backfill tool results from history so past tool calls show output.
     for (const m of ev.data.messages) {
       if (m.role === "toolResult") {

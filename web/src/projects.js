@@ -70,6 +70,7 @@ export async function removeProject(id) {
     throw new Error(`failed to remove project (${res.status})`);
   }
   projectsStore.projects = projectsStore.projects.filter((p) => p.id !== id);
+  sessionsCache.delete(id);
   if (projectsStore.currentProjectId === id) {
     projectsStore.currentProjectId = null;
     projectsStore.sessions = [];
@@ -77,13 +78,23 @@ export async function removeProject(id) {
   }
 }
 
+// Last fetched chat list per project, so re-selecting a project shows its
+// history instantly and the refetch just updates it in place. Pairs with the
+// message-level snapshot cache in pi.js.
+const sessionsCache = new Map();
+
 export async function fetchSessions(id) {
   if (!id) return;
-  projectsStore.loadingSessions = true;
+  const cached = sessionsCache.get(id);
+  projectsStore.sessions = cached || [];
+  // Only show the spinner when there's genuinely nothing to look at.
+  projectsStore.loadingSessions = !cached;
   try {
     const res = await fetch(`/api/projects/${id}/sessions`);
+    const sessions = res.ok ? await res.json() : [];
+    sessionsCache.set(id, sessions);
     if (id !== projectsStore.currentProjectId) return; // stale response
-    projectsStore.sessions = res.ok ? await res.json() : [];
+    projectsStore.sessions = sessions;
   } finally {
     if (id === projectsStore.currentProjectId) projectsStore.loadingSessions = false;
   }
