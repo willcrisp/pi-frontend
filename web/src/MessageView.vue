@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
-import { store } from "./pi.js";
+import { store, subagentDetails } from "./pi.js";
+import SubagentView from "./SubagentView.vue";
 
 const props = defineProps({ message: { type: Object, required: true } });
 
@@ -20,6 +21,10 @@ function argsSummary(args) {
 function toolResult(id) {
   return store.toolResults[id];
 }
+
+function isSubagent(block) {
+  return block.name === "subagent" || !!subagentDetails(toolResult(block.id));
+}
 </script>
 
 <template>
@@ -38,6 +43,12 @@ function toolResult(id) {
         <summary title="Click to expand/collapse">thinking</summary>
         {{ block.thinking }}
       </details>
+
+      <SubagentView
+        v-else-if="block.type === 'toolCall' && isSubagent(block)"
+        :tool-call-id="block.id"
+        :args="block.arguments"
+      />
 
       <details
         v-else-if="block.type === 'toolCall'"

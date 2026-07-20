@@ -31,6 +31,14 @@ function initialStore() {
 
 export const store = reactive(initialStore());
 
+// Detects a sub-agent dispatch tool result (the shape produced by pi-mono's
+// example `subagent` extension: `details = { mode, results: [...] }`, one
+// entry per dispatched task) shared by SubagentView.vue, MessageView.vue and
+// UsagePopover.vue so they all agree on what counts as a sub-agent call.
+export function subagentDetails(r) {
+  return Array.isArray(r?.details?.results) ? r.details : null;
+}
+
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // Subset of pi's BUILTIN_SLASH_COMMANDS (core/slash-commands.js) that both (a) have
@@ -230,11 +238,25 @@ function handle(ev) {
         startedAt: Date.now(),
       };
       break;
-    case "tool_execution_update":
-      if (store.toolResults[ev.toolCallId]) {
-        store.toolResults[ev.toolCallId].text = resultText(ev.partialResult);
+    case "tool_execution_update": {
+      // Mid-run reconnect can miss tool_execution_start, so lazily create
+      // the entry here too.
+      const t = store.toolResults[ev.toolCallId] || {
+        name: ev.toolName,
+        running: true,
+        text: "",
+        isError: false,
+        startedAt: Date.now(),
+      };
+      t.text = resultText(ev.partialResult);
+      // details is a whole-state snapshot (not a delta) per pi-mono's
+      // subagent extension, so a wholesale replacement is correct here.
+      if (ev.partialResult?.details !== undefined) {
+        t.details = ev.partialResult.details;
       }
+      store.toolResults[ev.toolCallId] = t;
       break;
+    }
     case "pi_web_process_error":
       store.processError = { message: ev.message, exitCode: ev.exitCode };
       break;

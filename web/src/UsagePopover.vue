@@ -1,19 +1,19 @@
 <script setup>
 import { computed } from "vue";
-import { store } from "./pi.js";
+import { store, subagentDetails } from "./pi.js";
 
 // Flattened from store.toolResults rather than tracked separately, so a
 // reconnect's get_messages backfill can't produce duplicate entries.
-// Detection is heuristic: any tool result carrying `details.results` with
-// per-item `usage` is treated as a sub-agent dispatch (this is the shape
-// produced by pi-mono's example `subagent` extension — see README).
+// Detection goes through the shared subagentDetails() helper (pi.js) so
+// this stays in sync with SubagentView.vue / MessageView.vue on what
+// counts as a sub-agent dispatch.
 const subagentRuns = computed(() => {
   const runs = [];
   for (const [toolCallId, r] of Object.entries(store.toolResults)) {
-    const results = r.details?.results;
-    if (!Array.isArray(results)) continue;
+    const details = subagentDetails(r);
+    if (!details) continue;
     const durationMs = r.startedAt && r.endedAt ? r.endedAt - r.startedAt : null;
-    results.forEach((sub, i) => {
+    details.results.forEach((sub, i) => {
       if (!sub || typeof sub !== "object") return;
       runs.push({
         id: `${toolCallId}:${i}`,
@@ -22,6 +22,7 @@ const subagentRuns = computed(() => {
         usage: sub.usage || null,
         stopReason: sub.stopReason || null,
         errorMessage: sub.errorMessage || null,
+        running: sub.exitCode === -1,
         durationMs,
       });
     });
@@ -135,12 +136,15 @@ function formatDuration(ms) {
         </div>
         <div v-for="run in subagentRuns" :key="run.id" class="usage-agent">
           <div class="usage-row">
-            <span class="usage-agent-name" :class="{ error: run.errorMessage }">{{ run.agent }}</span>
+            <span class="usage-agent-name" :class="{ error: run.errorMessage }">
+              <span v-if="run.running" class="subagent-dot running"></span>
+              {{ run.agent }}
+            </span>
             <span class="usage-dim">{{ run.model || "" }}</span>
           </div>
           <div class="usage-row usage-dim">
             <span>{{ formatTokens((run.usage?.input || 0) + (run.usage?.output || 0)) }} tok · {{ formatCost(run.usage?.cost) }}</span>
-            <span>{{ formatDuration(run.durationMs) }}</span>
+            <span>{{ run.running ? "running…" : formatDuration(run.durationMs) }}</span>
           </div>
         </div>
       </template>
