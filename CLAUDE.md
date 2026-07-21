@@ -134,14 +134,19 @@ web/src/stores/projects.js — REST client + reactive `projectsStore` for the
    project list and the current project's session (chat) list
         │
         ▼
-web/src/App.vue (composer, header, model/thinking selects)
-  ├─ Sidebar.vue (project list + add/remove, chat history for current project)
-  ├─ MessageView.vue (renders one message: markdown text / thinking / toolCall
-  │    blocks; subagent tool calls delegate to SubagentView.vue, edit/write
-  │    tool calls render as a diff via diff.js)
-  ├─ UsagePopover.vue (session token/cost totals + sub-agent breakdown)
-  ├─ AgentsDialog.vue (edit sub-agent definitions, backed by /api/agents)
-  └─ CommandPalette.vue (Ctrl/Cmd+K fuzzy jump across projects + chats)
+web/src/App.vue (top-level layout + every globally-mounted overlay)
+  ├─ components/sidebar/Sidebar.vue (project list + add/remove, chat history
+  │    for current project)
+  ├─ components/chat/ — ChatHeader.vue, MessageList.vue, Composer.vue
+  │    (header / message column / prompt box; MessageView.vue renders each
+  │    message: subagent calls delegate to SubagentView.vue, edit/write
+  │    tool calls render as a diff via lib/diff.js)
+  ├─ components/popovers/UsagePopover.vue (token/cost totals + sub-agent
+  │    breakdown)
+  ├─ components/dialogs/AgentsDialog.vue (edit sub-agent definitions,
+  │    backed by /api/agents)
+  └─ components/dialogs/CommandPalette.vue (Ctrl/Cmd+K fuzzy jump across
+       projects + chats)
 ```
 
 `store` (in `pi.js`, a proxy over the active chat's state) and `projectsStore` (in `projects.js`, the project/session lists) are the reactive sources of truth for the whole UI — there is no other state management. Components read from them directly and call the exported functions to act.
@@ -190,19 +195,37 @@ halves:
 
 ### Frontend internals (`web/src/`)
 
+Layout: `stores/` (reactive state + REST/WS clients), `lib/` (pure helpers, no server state), `components/{chat,sidebar,dialogs,popovers}/` (presentation), with `App.vue`, `main.js`, `style.css`, and `assets/` at the root. Every module and component starts with a header doc-comment stating its responsibility and key exports — read that first when opening a file; the notes below only cover the load-bearing ones.
+
+`stores/`:
+
 - `pi.js` — WebSocket client, one connection + reactive state per visited chat (`connIndex`), with the exported `store` a proxy over the active chat's state. All RPC event handling funnels through `handle(conn, ev)`, for background chats too — their transcripts stay live, so switching to one is instant. The session-path→server-chatId mapping and each project's last-viewed chat persist in localStorage, so a reload re-attaches to the same (possibly still-running) processes.
 - `projects.js` — REST client + reactive `projectsStore` (project list, current project's session/chat list). Opening a chat goes through `pi.js`'s per-chat connections; a `switch_session` RPC is only ever sent to a non-streaming process (see `syncOnOpen`).
-- `Sidebar.vue` — project list (add/remove, backed by `/api/projects`) and, for the active project, its paginated chat history (backed by `/api/projects/{id}/sessions`), each row with a status dot from `chatIndicator()`/`projectIndicator()` (amber pulse = agent working, green = unread response / blocked dialog in a chat you're not viewing).
-- `App.vue` — top-level layout: sidebar, header (connection dot, model, session name, usage popover), scrollable message list, composer (textarea + send/stop), model/thinking-level selects. Auto-scrolls the message pane unless the user has scrolled up.
 - `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
-- `SshPopover.vue` — click-toggled popup on the header's connection dot (`ChatHeader.vue`) for viewing/testing/saving/clearing the SSH target. Unlike `UsagePopover.vue` (hover-triggered, read-only), this is click-toggled with outside-click/Escape-to-close since it's a form.
-- `MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself. Assistant text blocks render through `markdown.js`; user text renders as plain preformatted text. Sub-agent dispatches (tool name `subagent`, or any result matching `subagentDetails()`) render via `SubagentView.vue`; edit/write tool calls (detected by argument shape in `diff.js`, not a fixed tool-name list) render as a collapsed unified diff instead of the generic raw-args tool block. A hover toolbar on each message offers copy-to-clipboard, and — on user messages, when a fork point exists (paired positionally with `store.forkMessages` by `MessageList.vue`) — edit-and-resend, which is `forkFrom()` (see `pi.js`) plus the prefilled composer it already hands back.
+- `auth.js` — `authStore` + the `/ws-auth` WebSocket client for provider connect (see "Provider connect" above).
+- `agents.js` — `agentsStore` (ssh.js conventions) for sub-agent definition CRUD via `/api/agents`, plus the `splitModelThinking`/`joinModelThinking` model-string codec (see "Sub-agent support" above).
+- `git.js` — `gitStore` for the current project's git branches (`/api/projects/{id}/git/*`): read-only listing + plain checkout.
+- `coder.js` — `coderStore` for the Coder cloud-workspace integration (`/api/coder/*`, list/start/stop). Independent of the pi bridge — these are the user's own cloud machines.
+- `theme.js` — client-side UI preferences (color profile, font sizes, content width), persisted to localStorage and applied as CSS custom properties on the document root.
+- `renameDialog.js` — tiny open/closed store for the rename dialog (pure UI state, deliberately not part of `pi.js`'s per-chat state).
+
+`lib/`:
+
 - `markdown.js` — dependency-free markdown → HTML for assistant text (headings, bold/italic/strikethrough, inline/fenced code, links, nested lists, tables, blockquotes, hr). Fenced code blocks get a static copy button whose click is handled via event delegation in `MessageView.vue` (the HTML lands in `v-html`, so it can't carry a Vue listener directly).
 - `diff.js` — detects edit-shaped tool-call arguments (old/new text pair, or a whole-file `write`/`create` call) and computes a line-level LCS diff, collapsed to a few lines of context around each change (`collapseRows`); used by `MessageView.vue`'s diff tool-call rendering, collapsed by default like opencode's tool cards.
-- `CommandPalette.vue` — Ctrl/Cmd+K fuzzy-jump palette over known projects and the current project's (non-archived) chats, subsequence-matched and scored client-side; always mounted from `App.vue`, owns its own global hotkey listener.
-- `SubagentView.vue` — rich inline view of one sub-agent dispatch: per-agent cards with live status/usage/duration, an activity log of the agent's nested tool calls, final output, and error/stderr surfaces; placeholder cards derived from the tool-call args cover the gap before the first streamed snapshot (see "Sub-agent support" above).
-- `UsagePopover.vue` — session-level token/cost stats from `get_session_stats`, plus a per-sub-agent usage breakdown (detection via `subagentDetails()` in `pi.js`). Per-agent duration is measured client-side from tool-call start/end, since the extension doesn't report elapsed time itself. Degrades gracefully to "no sub-agents used this session" when no sub-agent extension is installed — see the README's "Sub-agents" section for how to wire one up in a local `pi` config.
-- `agents.js` + `AgentsDialog.vue` — REST client/store (`agentsStore`, ssh.js conventions) and modal (ConnectDialog pattern, opened from a header button) for creating/editing/deleting agent definitions via `/api/agents`, including the model + reasoning-level selects.
+- `pageTitle.js` — document title + status-dot favicon (`<project> - <session>`, yellow = streaming / green = idle), wired once from `main.js`.
+
+`components/`:
+
+- `App.vue` (root) — top-level layout: sidebar, active-chat panel (header / messages / composer), and every globally-mounted overlay (dialogs, palette, toasts). Purely presentational — it owns no logic beyond wiring `v-if`s to store flags.
+- `chat/ChatHeader.vue` — top chat bar: connection dot, Coder menu, model label, session-name/usage title, running-sub-agent count badge, and the popover trigger buttons. All derived data is computed from `store`.
+- `chat/Composer.vue` — the prompt textarea and everything around it: image paste/attach, slash-command autocomplete (`BUILTIN_SLASH_COMMANDS` run immediately as RPC calls), model + reasoning-level selects, steer/follow-up queue toggle while streaming, and the git branch select (`chat/GitBranchSelect.vue`). `chat/D20Die.vue` is the pure-fidget d20 next to it.
+- `chat/MessageList.vue` — scrollable message column; auto-scrolls to follow the stream unless the user has scrolled up. Mounts `chat/MessageRail.vue`, the floating prompt-index gutter with per-prompt fork buttons.
+- `chat/MessageView.vue` — renders a single message's content blocks (`text`, `thinking`, `toolCall`). Tool call results are looked up live from `store.toolResults` by `toolCallId`, not embedded in the message itself. Assistant text blocks render through `lib/markdown.js`; user text renders as plain preformatted text. Sub-agent dispatches (tool name `subagent`, or any result matching `subagentDetails()`) render via `SubagentView.vue`; edit/write tool calls (detected by argument shape in `lib/diff.js`, not a fixed tool-name list) render as a collapsed unified diff instead of the generic raw-args tool block. A hover toolbar on each message offers copy-to-clipboard, and — on user messages, when a fork point exists (paired positionally with `store.forkMessages` by `MessageList.vue`) — edit-and-resend, which is `forkFrom()` (see `pi.js`) plus the prefilled composer it already hands back.
+- `chat/SubagentView.vue` — rich inline view of one sub-agent dispatch: per-agent cards with live status/usage/duration, an activity log of the agent's nested tool calls, final output, and error/stderr surfaces; placeholder cards derived from the tool-call args cover the gap before the first streamed snapshot (see "Sub-agent support" above).
+- `sidebar/Sidebar.vue` — project list (add/remove, backed by `/api/projects`) and, for the active project, its paginated chat history (backed by `/api/projects/{id}/sessions`), each row with a status dot from `chatIndicator()`/`projectIndicator()` (amber pulse = agent working, green = unread response / blocked dialog in a chat you're not viewing).
+- `dialogs/` — modals, all following the ConnectDialog pattern: `ConnectDialog.vue` (provider connect, see above), `AgentsDialog.vue` (sub-agent definition editor over `agents.js`, including the model + reasoning-level selects), `RenameDialog.vue` (session rename via `setSessionName`), `ExtensionUIDialog.vue` (pi's blocking `extension_ui_request` dialogs — renders the oldest pending `store.uiRequests[0]` and works through the queue), and `CommandPalette.vue` (Ctrl/Cmd+K fuzzy-jump over projects + non-archived chats, subsequence-matched client-side; owns its own global hotkey listener).
+- `popovers/` — small header-anchored popups: `UsagePopover.vue` (hover-triggered, read-only: session token/cost stats from `get_session_stats` + per-sub-agent breakdown via `subagentDetails()`; per-agent duration is measured client-side from tool-call start/end, and it degrades gracefully when no sub-agent extension is installed), `SshPopover.vue` (click-toggled form on the connection dot for viewing/testing/saving/clearing the SSH target), `ColorProfilePopover.vue` (theme.js preference controls), `CoderMenu.vue` (Coder workspace list with start/stop, polls while open).
 - Styling is a single hand-written `style.css` (CSS custom properties for the dark theme) — no CSS framework or utility classes.
 
 ### Known gaps (see README "Not yet implemented")
