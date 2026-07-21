@@ -29,19 +29,39 @@ with a sidebar for switching between projects and each project's chat history.
   copied or edited-and-resent (forks the chat from that point); and
   Ctrl/Cmd+K opens a fuzzy command palette to jump between projects and chats.
 
-## Run
+## Build
 
-Prerequisites: Rust (`cargo`), Node.js, and `pi` installed and importable
-(check with `pi --version`; on this machine `pi` is a shim in
-`C:\Users\crispy\AppData\Local\pi-node\current`, already on `PATH`).
+Build prerequisites: Rust (`cargo`) and Node.js. The build has two steps, in
+this order — the Rust build embeds the built frontend (`web/dist`) and the
+login helper script into the binary at compile time, so the frontend must
+exist before `cargo build` runs (a missing `web/dist` is a compile error):
 
 ```sh
-# one-time: build the frontend (the server embeds web/dist into the binary
-# at compile time, so build it first)
+# 1. build the frontend
 cd web && npm install && npm run build
 
-# build/run the server (from the repo root), pointing --cwd at the project
-# you want pi to work on — NOT at pi's own install directory
+# 2. build the server, which embeds web/dist
+cd ../server && cargo build --release
+```
+
+The result is a single self-contained executable at
+`server/target/release/pi-web-server` (`.exe` on Windows). It can be copied
+anywhere and run without the source tree, Node.js, or npm — at runtime it
+only needs `pi` itself installed (plus `ssh` in `--ssh` relay mode) and a
+writable data dir (`~/.pi-web` by default). After changing frontend code,
+re-run both steps: `npm run build`, then `cargo build --release` to re-embed.
+
+## Run
+
+Runtime prerequisite: `pi` installed and on `PATH` (check with
+`pi --version`); if it isn't, pass its full path via `--pi-bin` (see below).
+
+```sh
+# point --cwd at the project you want pi to work on —
+# NOT at pi's own install directory
+./pi-web-server --cwd C:\path\to\your\project
+
+# or straight from the repo, building if needed:
 cd server && cargo run --release -- --cwd C:\path\to\your\project
 ```
 
@@ -50,19 +70,11 @@ first run (so the old single-project workflow still works out of the box);
 after that, add/remove projects from the sidebar and the list persists across
 restarts.
 
-`cargo build --release` produces a single self-contained
-`server/target/release/pi-web-server(.exe)` — the frontend and the login
-helper script are embedded into the binary at compile time, so it can be
-copied anywhere and run without the source tree (it still needs `pi` itself
-installed and a writable `--data-dir`, `~/.pi-web` by default). `--web-dir`
-and `--login-helper` remain available to override the embedded copies, e.g.
-for the frontend dev loop.
+`--web-dir` and `--login-helper` remain available to override the embedded
+frontend/helper with on-disk copies, e.g. for the frontend dev loop.
 
-If `pi` isn't on `PATH`, pass its full path explicitly instead:
-
-```sh
-cargo run --release -- --cwd C:\path\to\your\project --pi-bin "C:\Users\crispy\AppData\Local\pi-node\current\pi.cmd"
-```
+If `pi` isn't on `PATH`, pass its full path explicitly instead, e.g.
+`--pi-bin "C:\Users\crispy\AppData\Local\pi-node\current\pi.cmd"`.
 
 Server flags:
 
