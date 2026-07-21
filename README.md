@@ -4,16 +4,19 @@ Minimal dark-themed web frontend for the [pi coding agent](https://github.com/ba
 with a sidebar for switching between projects and each project's chat history.
 
 - `server/` — Rust (axum) server. Manages a pool of `pi --mode rpc` child
-  processes, one per project, and transparently bridges each one's
-  newline-delimited JSON stdio to WebSocket clients at `/ws/{projectId}`. It
-  doesn't parse the protocol (so it stays compatible as pi evolves) beyond one
-  small exception: it peeks at `get_session_stats` responses to learn where a
-  project's session history lives on disk. Projects run concurrently — an
-  agent keeps working in a project you're not currently viewing — and are
-  added/removed via the `/api/projects` REST endpoints from the sidebar,
-  persisted to `<data-dir>/projects.json`. With `--ssh`, every project's pi
-  process runs on one remote host over SSH instead of locally (see "Remote
-  setup" below). Also serves the built frontend.
+  processes, one per *chat*, and transparently bridges each one's
+  newline-delimited JSON stdio to WebSocket clients at
+  `/ws/{projectId}?chat={chatId}`. It doesn't parse the protocol (so it stays
+  compatible as pi evolves) beyond two small read-only peeks: at
+  `get_session_stats` responses to learn where a project's session history
+  lives on disk, and at `agent_start`/`agent_settled` events so idle
+  processes (no clients, no run in flight) can be reaped and respawned on
+  demand. Chats run concurrently — an agent keeps working in a chat (or a
+  whole project) you're not currently viewing, and switching chats never
+  interrupts it. Projects are added/removed via the `/api/projects` REST
+  endpoints from the sidebar, persisted to `<data-dir>/projects.json`. With
+  `--ssh`, every pi process runs on one remote host over SSH instead of
+  locally (see "Remote setup" below). Also serves the built frontend.
 - `web/` — Vue 3 + Vite frontend (plain JS, Vue is the only runtime
   dependency). The browser speaks pi's RPC protocol directly over the
   WebSocket: streaming deltas, tool calls with live output, history hydration
@@ -123,14 +126,13 @@ the Rust server on :3210.
 
 ## Not yet implemented
 
-- Idle eviction of project processes (every added project's `pi` process runs
-  until removed or the server restarts)
 - Chat-history browsing in `--ssh` mode (session files live on the remote
   host, so the sidebar's history list is always empty there for now — new
   chats and switching still work, there's just no discovery of past ones)
-- Desktop/browser notifications when a background project needs attention
-  (finishes a turn, or blocks on an `extension_ui_request` dialog) while
-  you're viewing a different project
+- Desktop/browser notifications when a background chat needs attention —
+  the sidebar shows a status dot per chat (amber pulse = agent working,
+  green = unread response or blocked dialog), but nothing reaches you
+  outside the tab yet
 
 ## Sub-agents
 

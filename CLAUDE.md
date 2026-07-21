@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 pi-web: a minimal dark-themed web frontend for the [pi coding agent](https://github.com/badlogic/pi-mono), with a sidebar for switching between projects and each project's chat history. It's a two-part system:
 
-- `server/` — a Rust (axum) server. It manages a pool of `pi --mode rpc` child processes, one per "project" working directory, and transparently bridges each one's newline-delimited JSON stdio to WebSocket clients at `/ws/{projectId}`. It does **not** parse pi's RPC protocol at all — beyond one small exception (peeking at `get_session_stats` responses to learn where a project's session history lives on disk) it's a dumb byte-for-line pipe, which is what keeps it compatible as pi evolves. Projects run concurrently (an agent keeps working in a project you're not currently viewing) and are added/removed via `/api/projects` REST endpoints from the sidebar, persisted to `<data-dir>/projects.json`. With `--ssh`, every project's pi process runs on one remote host over SSH instead of locally (see "Remote setup" in the README). It also serves the built frontend as static files.
-- `web/` — a Vue 3 + Vite frontend (plain JS, no TypeScript; Vue is the only runtime dependency). The browser speaks pi's RPC protocol directly over the WebSocket — the server has no involvement in interpreting messages. The sidebar lists known projects and, for the active one, its past chats (via `switch_session`/`new_session`).
+- `server/` — a Rust (axum) server. It manages a pool of `pi --mode rpc` child processes, one per *chat* (a project working directory × one conversation), and transparently bridges each one's newline-delimited JSON stdio to WebSocket clients at `/ws/{projectId}?chat={chatId}` (`chatId` is an opaque client-chosen token). It does **not** parse pi's RPC protocol at all — beyond two small read-only peeks (at `get_session_stats` responses to learn where a project's session history lives on disk, and at `agent_start`/`agent_settled` events so the idle sweeper knows a process is safe to reap) it's a dumb byte-for-line pipe, which is what keeps it compatible as pi evolves. Chats run concurrently (an agent keeps working in a chat — or a project — you're not currently viewing; switching chats never touches its process), idle processes with no clients are reaped after a grace period and respawned on demand, and projects are added/removed via `/api/projects` REST endpoints from the sidebar, persisted to `<data-dir>/projects.json`. With `--ssh`, every pi process runs on one remote host over SSH instead of locally (see "Remote setup" in the README). It also serves the built frontend as static files.
+- `web/` — a Vue 3 + Vite frontend (plain JS, no TypeScript; Vue is the only runtime dependency). The browser speaks pi's RPC protocol directly over the WebSocket — the server has no involvement in interpreting messages. The sidebar lists known projects and, for the active one, its past chats, each with a live status dot (working / unread) fed by that chat's own connection.
 
 There is no root `package.json`; `server/` and `web/` are independent projects (Cargo and npm respectively) built and run separately.
 
@@ -100,25 +100,34 @@ The single most important thing to know: `server/src/main.rs` never deserializes
 ### Data flow
 
 ```
-one pi child process per project (stdin/stdout, newline-delimited JSON)
+one pi child process per chat (stdin/stdout, newline-delimited JSON)
         │
-   server/src/main.rs  (a pool: HashMap<projectId, RunningProcess>)
-   - per project: mpsc channel:      WS client -> pi stdin
-   - per project: broadcast channel: pi stdout -> all WS clients on /ws/{projectId}
-   - peeks get_session_stats responses to learn each project's session_dir
+   server/src/main.rs  (a pool: HashMap<"projectId/chatId", RunningProcess>)
+   - per chat: mpsc channel:      WS client -> pi stdin
+   - per chat: broadcast channel: pi stdout -> all WS clients on
+     /ws/{projectId}?chat={chatId}
+   - peeks get_session_stats responses to learn each project's session_dir,
+     and agent_start/agent_settled to track per-process streaming state for
+     the idle sweeper (no clients + not streaming + grace period -> reaped)
    - /api/projects (list/add/remove), /api/projects/{id}/sessions (list chats)
    - /api/agents (list/save/delete sub-agent definition .md files, local
      or over SSH — see "Sub-agent support" below)
         │  (WebSocket, one JSON object per text frame)
         ▼
 web/src/pi.js
-   - connectToProject(id) opens /ws/{id}, sends get_state / get_messages /
-     get_available_models / get_session_stats on open; switching projects
-     tears down the old socket and opens a new one
+   - one live connection + reactive state object per visited chat
+     (connIndex); the exported `store` is a proxy over the active chat's
+     state, so switching chats/projects just re-points it — nothing is
+     torn down, and background agents keep streaming into their own state
+   - a chat targeting a past session sends switch_session itself after
+     connecting, only if the process isn't already on it and isn't
+     streaming (per-chat processes are what make mid-run switching safe)
    - send(cmd) / sendPrompt(text) / abort() / setModel() /
-     setThinkingLevel() / newSession() / switchSession() write RPC commands
-   - handle(ev) is the single switch over incoming event types,
-     mutating the reactive `store` object (one project's chat at a time)
+     setThinkingLevel() / newSession() / switchSession() act on the active
+     chat; chatIndicator()/projectIndicator() expose per-chat
+     working/unread status for the sidebar dots
+   - handle(conn, ev) is the single switch over incoming event types,
+     mutating that chat's reactive state
         │
         ▼
 web/src/projects.js — REST client + reactive `projectsStore` for the
@@ -135,15 +144,16 @@ web/src/App.vue (composer, header, model/thinking selects)
   └─ CommandPalette.vue (Ctrl/Cmd+K fuzzy jump across projects + chats)
 ```
 
-`store` (in `pi.js`, the active project's chat) and `projectsStore` (in `projects.js`, the project/session lists) are the reactive sources of truth for the whole UI — there is no other state management. Components read from them directly and call the exported functions to act.
+`store` (in `pi.js`, a proxy over the active chat's state) and `projectsStore` (in `projects.js`, the project/session lists) are the reactive sources of truth for the whole UI — there is no other state management. Components read from them directly and call the exported functions to act.
 
 ### Server internals (`server/src/main.rs`)
 
-- `AppState` holds `projects: RwLock<HashMap<id, ProjectEntry>>` (persisted metadata) and `running: RwLock<HashMap<id, RunningProcess>>` (live pi processes) separately — a project can exist without a running process, and `ensure_running` lazily spawns/respawns one on demand (all known projects are also started eagerly at boot).
-- Per project: one `mpsc::channel` carries lines from any connected WS client into that project's pi stdin; one `broadcast::channel` carries every line of that pi process's stdout out to all WS clients on `/ws/{projectId}` — this means multiple browser tabs on the same project stay in sync automatically.
-- A lagging client (slow consumer) just skips missed broadcast messages rather than blocking others; the frontend recovers by re-requesting `get_messages` on reconnect (see `ws.onclose` in `pi.js`, which retries the connection after 1.5s).
-- If a project's `pi` child process exits, only that project's entry is dropped from `running` (next connect respawns it) — the server itself keeps running, unlike the old single-process design.
-- When an SSH target is set (`AppState.ssh: RwLock<SshConfig>`, runtime-editable via `/api/ssh` — see below — and persisted to `<data-dir>/ssh.json`), `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host. Changing the target via `PUT`/`DELETE /api/ssh` respawns every known project's pi process against it (`respawn_all`) — the watcher task that removes a dead process from `running` guards the removal with `Arc::ptr_eq` so a respawn's new process (inserted under the same id before the old one is killed) can't be evicted by the old process's own cleanup.
+- `AppState` holds `projects: RwLock<HashMap<id, ProjectEntry>>` (persisted metadata) and `running: RwLock<HashMap<"projectId/chatId", RunningProcess>>` (live pi processes, one per chat) separately — a project can exist without any running process, and `ensure_running` lazily spawns/respawns one per chat on demand (each project also gets a `default`-chat warm-up process at boot, mainly so the `get_session_stats` probe teaches the server its session dir before the first page load).
+- Per chat: one `mpsc::channel` carries lines from any connected WS client into that chat's pi stdin; one `broadcast::channel` carries every line of that pi process's stdout out to all WS clients on `/ws/{projectId}?chat={chatId}` — this means multiple browser tabs on the same chat stay in sync automatically.
+- A lagging client (slow consumer) just skips missed broadcast messages rather than blocking others; the frontend recovers by re-requesting `get_messages` on reconnect (see the `onclose` handler in `pi.js`, which retries the connection after 1.5s).
+- If a chat's `pi` child process exits, only that chat's entry is dropped from `running` (next connect respawns it) — the server itself keeps running.
+- An idle sweeper reaps processes with zero WS clients and no agent run in flight after a grace period (`IDLE_REAP_SECS`), since per-chat processes would otherwise accumulate without bound; `RunningProcess.streaming` is peeked from pi's own `agent_start`/`agent_settled` events, so a working agent whose tab was closed still runs to completion before becoming reapable.
+- When an SSH target is set (`AppState.ssh: RwLock<SshConfig>`, runtime-editable via `/api/ssh` — see below — and persisted to `<data-dir>/ssh.json`), `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host. Changing the target via `PUT`/`DELETE /api/ssh` respawns every running chat's pi process against it (`respawn_all`) — the watcher task that removes a dead process from `running` guards the removal with `Arc::ptr_eq` so a respawn's new process (inserted under the same key before the old one is killed) can't be evicted by the old process's own cleanup.
 - Windows spawns `pi` via `cmd /C` since it installs as a `.cmd` shim.
 
 ### Sub-agent support (pi-mono's `subagent` extension)
@@ -180,9 +190,9 @@ halves:
 
 ### Frontend internals (`web/src/`)
 
-- `pi.js` — WebSocket client + the reactive `store` for one project's chat at a time. All RPC event handling funnels through `handle(ev)`.
-- `projects.js` — REST client + reactive `projectsStore` (project list, current project's session/chat list). Session switching itself goes over the WebSocket via pi's `new_session`/`switch_session` RPC commands.
-- `Sidebar.vue` — project list (add/remove, backed by `/api/projects`) and, for the active project, its paginated chat history (backed by `/api/projects/{id}/sessions`).
+- `pi.js` — WebSocket client, one connection + reactive state per visited chat (`connIndex`), with the exported `store` a proxy over the active chat's state. All RPC event handling funnels through `handle(conn, ev)`, for background chats too — their transcripts stay live, so switching to one is instant. The session-path→server-chatId mapping and each project's last-viewed chat persist in localStorage, so a reload re-attaches to the same (possibly still-running) processes.
+- `projects.js` — REST client + reactive `projectsStore` (project list, current project's session/chat list). Opening a chat goes through `pi.js`'s per-chat connections; a `switch_session` RPC is only ever sent to a non-streaming process (see `syncOnOpen`).
+- `Sidebar.vue` — project list (add/remove, backed by `/api/projects`) and, for the active project, its paginated chat history (backed by `/api/projects/{id}/sessions`), each row with a status dot from `chatIndicator()`/`projectIndicator()` (amber pulse = agent working, green = unread response / blocked dialog in a chat you're not viewing).
 - `App.vue` — top-level layout: sidebar, header (connection dot, model, session name, usage popover), scrollable message list, composer (textarea + send/stop), model/thinking-level selects. Auto-scrolls the message pane unless the user has scrolled up.
 - `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
 - `SshPopover.vue` — click-toggled popup on the header's connection dot (`ChatHeader.vue`) for viewing/testing/saving/clearing the SSH target. Unlike `UsagePopover.vue` (hover-triggered, read-only), this is click-toggled with outside-click/Escape-to-close since it's a form.
@@ -197,8 +207,7 @@ halves:
 
 ### Known gaps (see README "Not yet implemented")
 
-- No idle eviction of project processes (every added project's `pi` process runs until removed or the server restarts).
 - No chat-history browsing when an SSH target is set (session files live on the remote host; new chats and switching still work, there's just no discovery of past ones).
-- No notification/badge when a project running in the background (not the one currently viewed) finishes a turn or blocks on an `extension_ui_request` dialog — you have to switch to it to notice.
+- No desktop/browser notification when a background chat finishes a turn or blocks on an `extension_ui_request` dialog — the sidebar's per-chat status dots cover it inside the tab, but nothing reaches you outside it.
 
 When working in this area, check whether a change belongs in `pi.js` (protocol/state) versus the `.vue` components (presentation) before touching the server — the server almost never needs to change for frontend-visible features.

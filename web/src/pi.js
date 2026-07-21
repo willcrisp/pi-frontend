@@ -1,9 +1,14 @@
 // WebSocket client for the pi RPC protocol.
-// The server is a transparent bridge: every WS text frame is one JSON line
-// to/from `pi --mode rpc`. See pi's docs/rpc.md for the protocol.
-// One project = one pi process = one `/ws/{projectId}` connection; switching
-// the active project tears down the old socket and opens a new one.
-import { reactive } from "vue";
+// The server bridges one `pi --mode rpc` process per *chat* (project ×
+// conversation) at `/ws/{projectId}?chat={chatId}`. Every chat the UI has
+// visited keeps its own live connection and reactive state object here, so
+// an agent keeps running — and keeps streaming into its own chat's state —
+// while a different chat (or project) is in view. Switching chats is just
+// re-pointing the exported `store` proxy at another chat's state; nothing
+// is torn down and no `switch_session` is ever sent to a busy process.
+// The sidebar reads per-chat working/unread status from the same registry
+// via chatIndicator()/projectIndicator().
+import { reactive, shallowRef } from "vue";
 
 function initialStore() {
   return {
@@ -44,52 +49,101 @@ function initialStore() {
     // or crashed, with its stderr tail as the message. Cleared once the
     // process is confirmed alive again (get_state succeeds).
     processError: null,
+    // Set when this chat's agent settled while another chat was in view;
+    // cleared when the chat is activated. Drives the sidebar's unread dot.
+    unread: false,
   };
 }
 
-export const store = reactive(initialStore());
+// --- Connection registry --------------------------------------------------
+// One conn per chat: { projectId, key, chatId, intendedSession, ws, state,
+// currentIndex, closed, lastActiveAt }. `key` is the UI-level identity —
+// "s:<sessionPath>" once the chat's session file is known, "new:<uuid>" /
+// "p:<projectId>" before that. `chatId` is the server-side pool token baked
+// into the WS URL; it never changes for the life of the process, which is
+// why the sessionPath -> chatId mapping is remembered (localStorage) so a
+// reload re-attaches to the same still-running process instead of spawning
+// a second one against the same session file.
+export const connIndex = reactive({}); // key -> conn
 
-// --- Snapshot cache -------------------------------------------------------
-// Switching project or chat used to blank the UI and wait for a round trip of
-// get_state/get_messages/... before anything rendered. Instead we keep the last
-// rendered state of every project/session we've visited in memory, restore it
-// synchronously on switch, and let the refetch overwrite it when it lands. The
-// server is still the source of truth; this only removes the empty gap.
-const snapshots = new Map(); // key -> plain copy of the store's per-chat fields
-// projectId -> the key that was active last time we left that project, so
-// re-selecting a project lands back on the chat you were reading.
-const lastKeyForProject = new Map();
-let currentKey = null;
+const activeRef = shallowRef(null); // conn whose state the `store` proxy shows
+const detachedState = reactive(initialStore()); // shown when no project is selected
+let currentProjectId = null;
 
-const SNAPSHOT_FIELDS = [
-  "messages",
-  "toolResults",
-  "sessionName",
-  "sessionStats",
-  "model",
-  "thinkingLevel",
-  "availableModels",
-  "commands",
-  "forkMessages",
-];
+// Cap on simultaneously-open chat connections; beyond it, the least
+// recently viewed idle chat (not streaming, nothing unread) is dropped.
+// Its pi process lives on server-side until the idle sweeper reaps it, and
+// re-opening the chat reconnects to it.
+const MAX_CONNS = 12;
 
-function saveSnapshot() {
-  if (!currentKey) return;
-  const snap = {};
-  for (const f of SNAPSHOT_FIELDS) snap[f] = store[f];
-  snapshots.set(currentKey, snap);
-  if (currentProjectId) lastKeyForProject.set(currentProjectId, currentKey);
+function activeState() {
+  const conn = activeRef.value;
+  return conn ? conn.state : detachedState;
 }
 
-// Swap the store over to `key`, showing its cached contents immediately if we
-// have any. Returns whether a cached snapshot was found.
-// Callers must saveSnapshot() first (before mutating currentProjectId).
-function restoreSnapshot(key) {
-  const snap = snapshots.get(key);
-  Object.assign(store, initialStore(), snap || {});
-  currentKey = key;
-  currentIndex = -1;
-  return !!snap;
+// The active chat's state, behind a stable identity so components can keep
+// importing a single `store` object. Reads/writes fall through to the
+// active conn's reactive state; reading also touches `activeRef` so every
+// consumer re-renders when the active chat changes.
+export const store = new Proxy(
+  {},
+  {
+    get: (_, prop) => activeState()[prop],
+    set: (_, prop, value) => {
+      activeState()[prop] = value;
+      return true;
+    },
+    has: (_, prop) => prop in activeState(),
+    ownKeys: () => Reflect.ownKeys(activeState()),
+    getOwnPropertyDescriptor: (_, prop) => Object.getOwnPropertyDescriptor(activeState(), prop),
+  }
+);
+
+// --- Persistence (survive reloads) ---------------------------------------
+// lastChat:<projectId> -> which chat to land on when selecting the project.
+// sessionChatIds -> sessionPath -> server chatId, so a reload (or a later
+// sidebar click) re-attaches to the process already running that session.
+const LAST_CHAT_PREFIX = "pi-web:lastChat:";
+const SESSION_CHAT_IDS_KEY = "pi-web:sessionChatIds";
+
+function loadSessionChatIds() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SESSION_CHAT_IDS_KEY) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+const sessionChatIds = loadSessionChatIds();
+
+function rememberSessionChatId(sessionPath, chatId) {
+  if (sessionChatIds[sessionPath] === chatId) return;
+  // Re-insert so iteration order doubles as least-recently-used order.
+  delete sessionChatIds[sessionPath];
+  sessionChatIds[sessionPath] = chatId;
+  const keys = Object.keys(sessionChatIds);
+  for (let i = 0; i < keys.length - 200; i++) delete sessionChatIds[keys[i]];
+  try {
+    localStorage.setItem(SESSION_CHAT_IDS_KEY, JSON.stringify(sessionChatIds));
+  } catch {}
+}
+
+function rememberLastChat(conn) {
+  try {
+    localStorage.setItem(
+      LAST_CHAT_PREFIX + conn.projectId,
+      JSON.stringify({ key: conn.key, chatId: conn.chatId, session: conn.intendedSession })
+    );
+  } catch {}
+}
+
+function loadLastChat(projectId) {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_CHAT_PREFIX + projectId) || "null");
+    return v && v.key && v.chatId ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // Detects a sub-agent dispatch tool result (the shape produced by pi-mono's
@@ -121,123 +175,282 @@ export const BUILTIN_SLASH_COMMANDS = [
   { name: "compact", description: "Manually compact the session context" },
 ];
 
-let ws = null;
-let currentProjectId = null;
-// Index into store.messages of the assistant message currently streaming.
-let currentIndex = -1;
-// Called when the sidebar's chat-history list may have gone stale — after
-// new_session/switch_session completes, and after each turn settles (a new
-// chat is only persisted/titleable once its first turn runs). Wired up once
-// from App.vue.
+// Called when the sidebar's chat-history list may have gone stale — after a
+// chat is created/switched, and after each turn settles (a new chat is only
+// persisted/titleable once its first turn runs). Wired up once from App.vue.
 let onSessionSwitched = null;
 
 export function setOnSessionSwitched(fn) {
   onSessionSwitched = fn;
 }
 
-export function connectToProject(projectId) {
-  if (ws) {
-    ws.onclose = null; // don't auto-reconnect the socket we're intentionally closing
-    ws.close();
-    ws = null;
+// --- Conn lifecycle -------------------------------------------------------
+
+function createConn(projectId, key, chatId, intendedSession, { freshChat = false } = {}) {
+  evictIdleConns();
+  const conn = {
+    projectId,
+    key,
+    chatId,
+    intendedSession,
+    // Created as a brand-new empty chat (vs opened onto a past session);
+    // lets newSession() reuse an untouched new chat instead of spawning
+    // another process. Cleared implicitly once messages exist.
+    freshChat,
+    state: reactive(initialStore()),
+    ws: null,
+    closed: false,
+    currentIndex: -1, // index into state.messages of the streaming assistant message
+    lastActiveAt: Date.now(),
+  };
+  connIndex[key] = conn;
+  connectConn(conn);
+  return conn;
+}
+
+function evictIdleConns() {
+  const conns = Object.values(connIndex);
+  if (conns.length < MAX_CONNS) return;
+  const idle = conns
+    .filter(
+      (c) =>
+        c !== activeRef.value && !c.state.streaming && !c.state.unread && !c.state.uiRequests.length
+    )
+    .sort((a, b) => a.lastActiveAt - b.lastActiveAt);
+  for (const c of idle.slice(0, conns.length - MAX_CONNS + 1)) closeConn(c);
+}
+
+function closeConn(conn) {
+  conn.closed = true;
+  if (conn.ws) {
+    conn.ws.onclose = null; // no auto-reconnect for an intentional close
+    conn.ws.close();
+    conn.ws = null;
   }
-  saveSnapshot();
-  currentProjectId = projectId;
-  restoreSnapshot(projectId ? lastKeyForProject.get(projectId) || `p:${projectId}` : null);
-  connect();
+  delete connIndex[conn.key];
 }
 
-// Tear down the active connection with no replacement (e.g. the current
-// project was removed).
-export function resetChat() {
-  connectToProject(null);
+// Tear down every connection for a removed project (their processes are
+// killed server-side by DELETE /api/projects/{id}).
+export function dropProject(projectId) {
+  for (const key of Object.keys(connIndex)) {
+    if (connIndex[key].projectId === projectId) closeConn(connIndex[key]);
+  }
+  if (activeRef.value?.projectId === projectId) activeRef.value = null;
+  if (currentProjectId === projectId) currentProjectId = null;
 }
 
-function connect() {
-  const projectId = currentProjectId;
-  if (!projectId) return;
+function connectConn(conn) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws/${projectId}`);
-
+  const ws = new WebSocket(
+    `${proto}//${location.host}/ws/${conn.projectId}?chat=${encodeURIComponent(conn.chatId)}`
+  );
+  conn.ws = ws;
   ws.onopen = () => {
-    if (projectId !== currentProjectId) return;
-    store.connected = true;
-    send({ type: "get_state" });
-    send({ type: "get_messages" });
-    send({ type: "get_available_models" });
-    send({ type: "get_session_stats" });
-    send({ type: "get_commands" });
-    send({ type: "get_fork_messages" });
+    if (conn.ws !== ws || conn.closed) return;
+    conn.state.connected = true;
+    syncOnOpen(conn);
   };
   ws.onclose = () => {
-    if (projectId !== currentProjectId) return;
-    store.connected = false;
+    if (conn.ws !== ws) return;
+    conn.state.connected = false;
+    // Background conns reconnect too — their dot stays live and a server
+    // restart re-establishes every chat (each conditional-switching back to
+    // its session via syncOnOpen).
     setTimeout(() => {
-      if (projectId === currentProjectId) connect();
+      if (conn.ws === ws && !conn.closed) connectConn(conn);
     }, 1500);
   };
   ws.onmessage = (e) => {
-    if (projectId !== currentProjectId) return;
+    if (conn.ws !== ws) return;
     let ev;
     try {
       ev = JSON.parse(e.data);
     } catch {
       return;
     }
-    handle(ev);
+    handle(conn, ev);
   };
 }
 
-export function newSession() {
-  saveSnapshot();
-  restoreSnapshot(`new:${currentProjectId}:${Date.now()}`);
-  send({ type: "new_session" });
-}
-
-export function switchSession(sessionPath) {
-  saveSnapshot();
-  // Render the cached copy of that chat right away; the get_messages triggered
-  // by the switch_session response replaces it once pi confirms.
-  restoreSnapshot(`s:${sessionPath}`);
-  send({ type: "switch_session", sessionPath });
-}
-
-// Branch the session at a previous user message (pi's `fork` RPC command / the
-// TUI's /fork). pi rewinds the active branch to just before that message and
-// hands back its text, which we load into the composer so it can be edited and
-// re-sent down the new branch. Returns null if an extension cancelled the fork.
-export async function forkFrom(entryId) {
-  const data = await request({ type: "fork", entryId });
-  if (data?.cancelled) return null;
-  store.messages = [];
-  store.toolResults = {};
-  send({ type: "get_state" });
-  send({ type: "get_messages" });
-  send({ type: "get_session_stats" });
-  send({ type: "get_fork_messages" });
-  onSessionSwitched?.();
-  store.composerDraft = data?.text || "";
-  return data?.text ?? "";
-}
-
-export function send(cmd) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(cmd));
+// On (re)connect: if this chat targets a specific past session but the
+// process on the other end (freshly spawned on a new empty session, or a
+// respawn after a server restart/reap) isn't on it, switch to it before
+// fetching messages. Never switches while the process is streaming — that
+// would abort the run, which is exactly what per-chat processes exist to
+// prevent; in that case the process's current session is shown as-is.
+async function syncOnOpen(conn) {
+  sendTo(conn, { type: "get_available_models" });
+  sendTo(conn, { type: "get_commands" });
+  if (conn.intendedSession) {
+    try {
+      const st = await requestOn(conn, { type: "get_state" });
+      const stats = await requestOn(conn, { type: "get_session_stats" });
+      if (stats?.sessionFile && stats.sessionFile !== conn.intendedSession && !st?.isStreaming) {
+        await requestOn(conn, { type: "switch_session", sessionPath: conn.intendedSession });
+      }
+    } catch {
+      // Keep whatever session the process is on; the fetches below still run.
+    }
   }
+  sendTo(conn, { type: "get_state" });
+  sendTo(conn, { type: "get_messages" });
+  sendTo(conn, { type: "get_session_stats" });
+  sendTo(conn, { type: "get_fork_messages" });
+}
+
+function activate(conn) {
+  conn.lastActiveAt = Date.now();
+  conn.state.unread = false;
+  activeRef.value = conn;
+  rememberLastChat(conn);
+}
+
+// Re-key a conn to its now-known session file, so sidebar clicks on that
+// session find this live conn (and process) instead of spawning another
+// process against the same session file.
+function rekeyConn(conn, sessionFile) {
+  const newKey = `s:${sessionFile}`;
+  if (conn.key === newKey) return;
+  const existing = connIndex[newKey];
+  if (existing && existing !== conn) {
+    // Duplicate conn for the same session (e.g. opened from the sidebar
+    // while a stale mapping pointed elsewhere) — keep this one.
+    const wasActive = existing === activeRef.value;
+    closeConn(existing);
+    if (wasActive) activeRef.value = conn;
+  }
+  delete connIndex[conn.key];
+  conn.key = newKey;
+  conn.intendedSession = sessionFile;
+  connIndex[newKey] = conn;
+  rememberSessionChatId(sessionFile, conn.chatId);
+  if (conn === activeRef.value) rememberLastChat(conn);
+}
+
+// --- Public chat navigation ----------------------------------------------
+
+export function connectToProject(projectId) {
+  currentProjectId = projectId;
+  if (!projectId) {
+    activeRef.value = null;
+    return;
+  }
+  const last = loadLastChat(projectId);
+  let conn = last ? connIndex[last.key] : null;
+  if (!conn && last) conn = createConn(projectId, last.key, last.chatId, last.session || null);
+  if (!conn)
+    conn =
+      connIndex[`p:${projectId}`] ||
+      createConn(projectId, `p:${projectId}`, "default", null, { freshChat: true });
+  activate(conn);
+}
+
+// Tear down the active view with no replacement (e.g. the current project
+// was removed).
+export function resetChat() {
+  connectToProject(null);
+}
+
+// "+ new chat": a brand-new chat = a brand-new conn (and pi process), so
+// whatever the current chat's agent is doing keeps running untouched. If
+// we're already sitting on an unused new chat, reuse it instead of
+// spawning another process.
+export function newSession() {
+  if (!currentProjectId) return;
+  const a = activeRef.value;
+  if (
+    a &&
+    a.projectId === currentProjectId &&
+    a.freshChat &&
+    !a.state.streaming &&
+    a.state.messages.length === 0
+  ) {
+    return;
+  }
+  const id = crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  activate(createConn(currentProjectId, `new:${id}`, id, null, { freshChat: true }));
+  onSessionSwitched?.();
+}
+
+// Open a past chat from the sidebar. If it's already live (its agent may
+// well be mid-run), just re-point the view at it; otherwise open a
+// connection — preferring the chatId of the process already running this
+// session, if one is remembered — and let syncOnOpen land it on the session.
+export function switchSession(sessionPath) {
+  if (!currentProjectId) return;
+  const key = `s:${sessionPath}`;
+  let conn = connIndex[key];
+  if (!conn) {
+    const chatId = sessionChatIds[sessionPath] || sessionPath;
+    conn = createConn(currentProjectId, key, chatId, sessionPath);
+  }
+  activate(conn);
+}
+
+// --- Sidebar status indicators -------------------------------------------
+// "working": the chat's agent is running. "attention": it finished (or is
+// blocked on an extension dialog) while the user was looking elsewhere.
+
+export function chatIndicator(sessionPath) {
+  const conn = connIndex[`s:${sessionPath}`];
+  if (!conn) return null;
+  const attention =
+    conn !== activeRef.value && (conn.state.unread || conn.state.uiRequests.length > 0);
+  if (attention) return "attention";
+  return conn.state.streaming ? "working" : null;
+}
+
+export function projectIndicator(projectId) {
+  let working = false;
+  for (const key in connIndex) {
+    const conn = connIndex[key];
+    if (conn.projectId !== projectId) continue;
+    if (conn !== activeRef.value && (conn.state.unread || conn.state.uiRequests.length > 0)) {
+      return "attention";
+    }
+    if (conn.state.streaming) working = true;
+  }
+  return working ? "working" : null;
+}
+
+// --- RPC plumbing ---------------------------------------------------------
+
+function sendTo(conn, cmd) {
+  if (conn.ws && conn.ws.readyState === WebSocket.OPEN) {
+    conn.ws.send(JSON.stringify(cmd));
+  }
+}
+
+// Sends on the active chat's connection.
+export function send(cmd) {
+  const conn = activeRef.value;
+  if (conn) sendTo(conn, cmd);
 }
 
 // Commands sent via request() get their response's `data` (or a thrown error)
 // delivered back through this promise instead of the generic handleResponse
-// branching below, keyed by the id pi's RPC protocol echoes back on the response.
+// branching below, keyed by the id pi's RPC protocol echoes back on the
+// response. The random prefix keeps ids from colliding across browser tabs
+// sharing one process's broadcast stream.
 let reqId = 0;
+const reqPrefix = Math.random().toString(36).slice(2, 8);
 const pending = new Map();
 
-function request(cmd) {
-  const id = `req-${++reqId}`;
+function requestOn(conn, cmd) {
+  const id = `req-${reqPrefix}-${++reqId}`;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    send({ ...cmd, id });
+    sendTo(conn, { ...cmd, id });
   });
+}
+
+function request(cmd) {
+  const conn = activeRef.value;
+  if (!conn) return Promise.reject(new Error("no active chat"));
+  return requestOn(conn, cmd);
 }
 
 export async function setSessionName(name) {
@@ -258,6 +471,24 @@ export async function copyLastAssistantText() {
   const { text } = await request({ type: "get_last_assistant_text" });
   if (text) await navigator.clipboard.writeText(text);
   return text;
+}
+
+// Branch the session at a previous user message (pi's `fork` RPC command / the
+// TUI's /fork). pi rewinds the active branch to just before that message and
+// hands back its text, which we load into the composer so it can be edited and
+// re-sent down the new branch. Returns null if an extension cancelled the fork.
+export async function forkFrom(entryId) {
+  const data = await request({ type: "fork", entryId });
+  if (data?.cancelled) return null;
+  store.messages = [];
+  store.toolResults = {};
+  send({ type: "get_state" });
+  send({ type: "get_messages" });
+  send({ type: "get_session_stats" });
+  send({ type: "get_fork_messages" });
+  onSessionSwitched?.();
+  store.composerDraft = data?.text || "";
+  return data?.text ?? "";
 }
 
 // images: [{ mimeType, data }] with `data` as base64 (no data: prefix).
@@ -307,26 +538,34 @@ export function setThinkingLevel(level) {
   send({ type: "set_thinking_level", level });
 }
 
-function handle(ev) {
+// --- Event handling -------------------------------------------------------
+// Every conn's events flow through here, active or not — a background chat
+// keeps accumulating its own messages/tool results, so switching to it shows
+// live state instantly with no refetch.
+
+function handle(conn, ev) {
+  const s = conn.state;
   switch (ev.type) {
     case "response":
-      handleResponse(ev);
+      handleResponse(conn, ev);
       break;
 
     case "agent_start":
-      store.streaming = true;
+      s.streaming = true;
       break;
     case "agent_settled":
-      store.streaming = false;
-      currentIndex = -1;
-      send({ type: "get_session_stats" });
+      s.streaming = false;
+      conn.currentIndex = -1;
+      sendTo(conn, { type: "get_session_stats" });
       // The turn that just settled added a user message to the branch, so the
       // set of fork points changed.
-      send({ type: "get_fork_messages" });
+      sendTo(conn, { type: "get_fork_messages" });
       // Queued steer/follow_up messages delivered during the run aren't pushed
-      // to store.messages when sent (see sendPrompt); pick them up now that
+      // to messages when sent (see sendPrompt); pick them up now that
       // replacing the transcript wholesale is safe.
-      send({ type: "get_messages" });
+      sendTo(conn, { type: "get_messages" });
+      // Finished while another chat was in view -> unread dot until visited.
+      if (conn !== activeRef.value) s.unread = true;
       // A freshly-started chat's session file isn't written (and has no user
       // message to title it) until its first turn runs, so it's absent from
       // the sidebar list fetched at new_session/select time. Re-list now that
@@ -337,23 +576,23 @@ function handle(ev) {
 
     case "message_start":
       if (ev.message.role === "assistant") {
-        currentIndex = store.messages.push(ev.message) - 1;
+        conn.currentIndex = s.messages.push(ev.message) - 1;
       }
       break;
     case "message_update":
-      if (currentIndex >= 0) {
-        store.messages[currentIndex] = ev.message;
+      if (conn.currentIndex >= 0) {
+        s.messages[conn.currentIndex] = ev.message;
       }
       break;
     case "message_end":
-      if (currentIndex >= 0 && ev.message.role === "assistant") {
-        store.messages[currentIndex] = ev.message;
-        currentIndex = -1;
+      if (conn.currentIndex >= 0 && ev.message.role === "assistant") {
+        s.messages[conn.currentIndex] = ev.message;
+        conn.currentIndex = -1;
       }
       break;
 
     case "tool_execution_start":
-      store.toolResults[ev.toolCallId] = {
+      s.toolResults[ev.toolCallId] = {
         name: ev.toolName,
         running: true,
         text: "",
@@ -364,7 +603,7 @@ function handle(ev) {
     case "tool_execution_update": {
       // Mid-run reconnect can miss tool_execution_start, so lazily create
       // the entry here too.
-      const t = store.toolResults[ev.toolCallId] || {
+      const t = s.toolResults[ev.toolCallId] || {
         name: ev.toolName,
         running: true,
         text: "",
@@ -377,7 +616,7 @@ function handle(ev) {
       if (ev.partialResult?.details !== undefined) {
         t.details = ev.partialResult.details;
       }
-      store.toolResults[ev.toolCallId] = t;
+      s.toolResults[ev.toolCallId] = t;
       break;
     }
     case "queue_update":
@@ -386,34 +625,34 @@ function handle(ev) {
       // refetching get_messages here: it fires mid-stream, and a wholesale
       // message replacement would invalidate currentIndex and drop running
       // tool results. Delivered messages land via the agent_settled refetch.
-      store.queue = {
+      s.queue = {
         steering: ev.steering || [],
         followUp: ev.followUp || [],
       };
       break;
 
     case "extension_ui_request":
-      handleExtensionUiRequest(ev);
+      handleExtensionUiRequest(conn, ev);
       break;
 
     case "pi_web_process_error":
-      store.processError = { message: ev.message, exitCode: ev.exitCode };
+      s.processError = { message: ev.message, exitCode: ev.exitCode };
       break;
 
     case "tool_execution_end": {
-      const r = store.toolResults[ev.toolCallId] || { name: ev.toolName };
+      const r = s.toolResults[ev.toolCallId] || { name: ev.toolName };
       r.running = false;
       r.text = resultText(ev.result);
       r.isError = !!ev.isError;
       r.details = ev.result?.details;
       r.endedAt = Date.now();
-      store.toolResults[ev.toolCallId] = r;
+      s.toolResults[ev.toolCallId] = r;
       // Sub-agent extensions (e.g. pi-mono's examples/extensions/subagent)
       // spawn separate pi processes whose token usage isn't counted in this
       // session's own get_session_stats — refresh so totals stay current
       // and the usage popover picks up any per-agent breakdown.
       if (r.details?.results) {
-        send({ type: "get_session_stats" });
+        sendTo(conn, { type: "get_session_stats" });
       }
       break;
     }
@@ -424,13 +663,14 @@ function handle(ev) {
 // Dialog methods block the agent until answered; fire-and-forget methods are
 // informational. Methods that only make sense in a terminal (setStatus,
 // setWidget, setTitle) are ignored.
-function handleExtensionUiRequest(ev) {
+function handleExtensionUiRequest(conn, ev) {
+  const s = conn.state;
   switch (ev.method) {
     case "select":
     case "confirm":
     case "input":
     case "editor":
-      store.uiRequests.push(ev);
+      s.uiRequests.push(ev);
       break;
     case "notify": {
       const notice = {
@@ -438,20 +678,21 @@ function handleExtensionUiRequest(ev) {
         message: ev.message,
         notifyType: ev.notifyType || "info",
       };
-      store.uiNotices.push(notice);
+      s.uiNotices.push(notice);
       setTimeout(() => {
-        store.uiNotices = store.uiNotices.filter((n) => n !== notice);
+        s.uiNotices = s.uiNotices.filter((n) => n !== notice);
       }, 6000);
       break;
     }
     case "set_editor_text":
       // Mirrors the TUI: extension asks to prefill the input editor.
-      store.composerDraft = ev.text || "";
+      s.composerDraft = ev.text || "";
       break;
   }
 }
 
-function handleResponse(ev) {
+function handleResponse(conn, ev) {
+  const s = conn.state;
   if (ev.id && pending.has(ev.id)) {
     const { resolve, reject } = pending.get(ev.id);
     pending.delete(ev.id);
@@ -464,27 +705,24 @@ function handleResponse(ev) {
     return;
   }
   if (ev.command === "get_state") {
-    store.model = ev.data.model || null;
-    store.thinkingLevel = ev.data.thinkingLevel || null;
-    store.streaming = ev.data.isStreaming;
-    store.sessionName = ev.data.sessionName || null;
-    store.processError = null;
+    s.model = ev.data.model || null;
+    s.thinkingLevel = ev.data.thinkingLevel || null;
+    s.streaming = ev.data.isStreaming;
+    s.sessionName = ev.data.sessionName || null;
+    s.processError = null;
   } else if (ev.command === "get_available_models") {
-    store.availableModels = ev.data.models || [];
+    s.availableModels = ev.data.models || [];
   } else if (ev.command === "get_session_stats") {
-    store.sessionStats = ev.data || null;
-    // Now that we know which session file this chat actually is, re-key its
-    // snapshot so a later switchSession() to that path finds the cache.
+    s.sessionStats = ev.data || null;
+    // Now that we know which session file this chat actually is, re-key the
+    // conn so a later switchSession() to that path finds it (and its
+    // process) instead of opening a duplicate.
     const file = ev.data?.sessionFile;
-    if (file && currentKey && currentKey !== `s:${file}`) {
-      snapshots.delete(currentKey);
-      currentKey = `s:${file}`;
-      if (currentProjectId) lastKeyForProject.set(currentProjectId, currentKey);
-    }
+    if (file) rekeyConn(conn, file);
   } else if (ev.command === "get_commands") {
-    store.commands = ev.data?.commands || [];
+    s.commands = ev.data?.commands || [];
   } else if (ev.command === "get_fork_messages") {
-    store.forkMessages = ev.data?.messages || [];
+    s.forkMessages = ev.data?.messages || [];
   } else if (
     ev.command === "set_model" ||
     ev.command === "set_thinking_level" ||
@@ -493,26 +731,24 @@ function handleResponse(ev) {
   ) {
     // These commands' response shapes vary by pi version; re-fetch the
     // authoritative state instead of trying to parse them individually.
-    send({ type: "get_state" });
+    sendTo(conn, { type: "get_state" });
   } else if (ev.command === "new_session" || ev.command === "switch_session") {
-    // Deliberately not clearing messages here: switchSession() already swapped
-    // the store over to that chat's cached copy, and blanking it would
-    // reintroduce the flash this cache exists to remove. get_messages below
-    // replaces the contents wholesale when it arrives.
-    send({ type: "get_state" });
-    send({ type: "get_messages" });
-    send({ type: "get_session_stats" });
-    send({ type: "get_fork_messages" });
+    // Another client of this same process switched its session (e.g. a
+    // second browser tab) — refetch everything for the new one.
+    sendTo(conn, { type: "get_state" });
+    sendTo(conn, { type: "get_messages" });
+    sendTo(conn, { type: "get_session_stats" });
+    sendTo(conn, { type: "get_fork_messages" });
     onSessionSwitched?.();
   } else if (ev.command === "get_messages") {
-    store.messages = ev.data.messages;
-    // Authoritative replacement: drop any results carried over from the
-    // snapshot cache so a restored chat can't keep another chat's tool output.
-    store.toolResults = {};
+    s.messages = ev.data.messages;
+    // Authoritative replacement: drop stale results so a chat can't keep
+    // another session's tool output after a switch.
+    s.toolResults = {};
     // Backfill tool results from history so past tool calls show output.
     for (const m of ev.data.messages) {
       if (m.role === "toolResult") {
-        store.toolResults[m.toolCallId] = {
+        s.toolResults[m.toolCallId] = {
           name: m.toolName,
           running: false,
           text: resultText(m),

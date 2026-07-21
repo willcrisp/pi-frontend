@@ -3,7 +3,7 @@
 // WebSocket via pi's `new_session`/`switch_session` RPC commands (pi.js);
 // this module only deals with discovering what projects/sessions exist.
 import { reactive } from "vue";
-import { connectToProject, newSession, resetChat, switchSession } from "./pi.js";
+import { connectToProject, dropProject, newSession, resetChat, switchSession } from "./pi.js";
 
 const LAST_PROJECT_KEY = "pi-web:lastProjectId";
 const ARCHIVE_KEY = "pi-web:archivedSessions";
@@ -71,6 +71,7 @@ export async function removeProject(id) {
   }
   projectsStore.projects = projectsStore.projects.filter((p) => p.id !== id);
   sessionsCache.delete(id);
+  dropProject(id); // close this project's chat connections (processes die server-side)
   if (projectsStore.currentProjectId === id) {
     projectsStore.currentProjectId = null;
     projectsStore.sessions = [];

@@ -1,19 +1,28 @@
-//! Bridge between one or more `pi --mode rpc` child processes (one per
-//! "project" working directory) and browser clients.
+//! Bridge between `pi --mode rpc` child processes (one per *chat* — a
+//! project working directory plus one conversation) and browser clients.
 //!
-//! pi speaks newline-delimited JSON on stdin/stdout. For each project this
+//! pi speaks newline-delimited JSON on stdin/stdout. For each chat this
 //! server pipes those lines verbatim to/from WebSocket clients at
-//! `/ws/{projectId}` — it does not parse the protocol, so it stays
-//! compatible as pi evolves. The one deliberate exception: right after
-//! spawning a project's pi process, it sends a `get_session_stats` probe
-//! and peeks at the `sessionFile` field of the response to learn where pi
-//! is writing that project's session history, so it can list past chats
-//! without needing to know pi's session-directory naming scheme.
+//! `/ws/{projectId}?chat={chatId}` — it does not parse the protocol, so it
+//! stays compatible as pi evolves. Two deliberate exceptions, both
+//! read-only peeks at pi's stdout: right after spawning a pi process, it
+//! sends a `get_session_stats` probe and peeks at the `sessionFile` field
+//! of the response to learn where pi is writing that project's session
+//! history (so it can list past chats without knowing pi's
+//! session-directory naming scheme); and it watches for
+//! `agent_start`/`agent_settled` events to know whether a process is
+//! mid-run, so the idle sweeper below never kills a working agent.
 //!
-//! Projects run concurrently: each one keeps its own pi process alive in
-//! the background (added/removed via the `/api/projects` REST endpoints)
-//! so work continues even while a different project is in view. The list
-//! is persisted to `<data-dir>/projects.json`.
+//! Chats run concurrently: every chat keeps its own pi process alive in
+//! the background, so an agent keeps working while a different chat — or a
+//! different project — is in view. `chatId` is an opaque client-chosen
+//! token; the frontend maps it to a pi session (pi.js sends
+//! `switch_session` itself after connecting when it wants a specific past
+//! session). Because processes are now per chat rather than per project,
+//! a process with no connected clients that hasn't run anything for a
+//! while is reaped (see `IDLE_REAP_SECS`) and transparently respawned on
+//! the next connect. Projects are added/removed via the `/api/projects`
+//! REST endpoints and persisted to `<data-dir>/projects.json`.
 //!
 //! When an SSH target is set (via `--ssh user@host` at first boot, or
 //! afterwards through the `/api/ssh` endpoints and the frontend's popup on
@@ -39,8 +48,11 @@ use std::{
     collections::HashMap,
     path::{Path as FsPath, PathBuf},
     process::Stdio,
-    sync::Arc,
-    time::UNIX_EPOCH,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -65,11 +77,33 @@ struct ProjectEntry {
     session_dir: Mutex<Option<PathBuf>>,
 }
 
-/// A live pi process for a project.
+/// The chat id used when a client connects without `?chat=` (and for the
+/// warm-up process spawned per project at boot, whose probe response teaches
+/// us the project's session dir before any client shows up).
+const DEFAULT_CHAT: &str = "default";
+
+/// A pi process with no WebSocket clients that hasn't started/finished an
+/// agent run for this long is killed by the sweeper; the next connect to its
+/// chat respawns one. Keeps per-chat processes from accumulating forever.
+const IDLE_REAP_SECS: u64 = 300;
+
+/// A live pi process for one chat. `streaming` is peeked from pi's own
+/// `agent_start`/`agent_settled` events; together with `clients` and
+/// `idle_since` it drives the idle sweeper — a process is only ever reaped
+/// when nothing is connected to it *and* no agent run is in flight.
 struct RunningProcess {
     to_pi: mpsc::Sender<String>,
     from_pi: broadcast::Sender<String>,
     kill_tx: mpsc::Sender<()>,
+    clients: AtomicUsize,
+    streaming: AtomicBool,
+    idle_since: std::sync::Mutex<Instant>,
+}
+
+/// Key into `AppState.running` for one chat's process. Project ids are
+/// UUIDs (never contain `/`), so the prefix `{projectId}/` is unambiguous.
+fn chat_key(project_id: &str, chat_id: &str) -> String {
+    format!("{project_id}/{chat_id}")
 }
 
 struct Config {
@@ -102,6 +136,9 @@ struct SshConfig {
 struct AppState {
     cfg: Config,
     projects: RwLock<HashMap<String, Arc<ProjectEntry>>>,
+    /// Live pi processes, keyed by `chat_key(projectId, chatId)` — one per
+    /// chat, so agents in different chats of the same project run
+    /// concurrently and switching chats never disturbs a running one.
     running: RwLock<HashMap<String, Arc<RunningProcess>>>,
     ssh: RwLock<SshConfig>,
 }
@@ -222,12 +259,45 @@ async fn main() {
         persist_ssh_config(&state).await;
     }
 
-    // Projects run concurrently: bring every known project's pi process up
-    // at startup rather than waiting for a client to connect.
+    // Warm up one process per project at startup. Beyond saving the first
+    // visitor a pi cold-start, its get_session_stats probe response is what
+    // teaches us the project's session dir, so the sidebar's chat history
+    // works from the first page load. (The sweeper reaps these later if no
+    // one ever connects.)
     let ids: Vec<String> = state.projects.read().await.keys().cloned().collect();
     for id in ids {
-        ensure_running(&state, &id).await;
+        ensure_running(&state, &id, DEFAULT_CHAT).await;
     }
+
+    // Idle sweeper: with one process per chat (not per project), every chat
+    // ever opened would otherwise keep a pi process alive until the server
+    // exits. Reap processes that have no connected clients and no agent run
+    // in flight — an agent that was left working in a closed tab still runs
+    // to completion (its session file is written), and only then becomes
+    // eligible.
+    let sweeper_state = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let doomed: Vec<(String, Arc<RunningProcess>)> = sweeper_state
+                .running
+                .read()
+                .await
+                .iter()
+                .filter(|(_, p)| {
+                    p.clients.load(Ordering::Relaxed) == 0
+                        && !p.streaming.load(Ordering::Relaxed)
+                        && p.idle_since.lock().unwrap().elapsed().as_secs() >= IDLE_REAP_SECS
+                })
+                .map(|(k, p)| (k.clone(), p.clone()))
+                .collect();
+            for (key, p) in doomed {
+                eprintln!("reaping idle pi process for chat {key}");
+                let _ = p.kill_tx.try_send(());
+            }
+        }
+    });
 
     let port = state.cfg.port;
     let web_dir = state.cfg.web_dir.clone();
@@ -323,7 +393,9 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
     }
 }
 
-fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh: SshConfig) -> Arc<RunningProcess> {
+/// Spawns one chat's pi process and its bridge tasks. `key` is the
+/// `chat_key` this process is stored under in `running`.
+fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ssh: SshConfig) -> Arc<RunningProcess> {
     let mut child = spawn_child(&state.cfg, &ssh, &entry.path);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
@@ -335,16 +407,35 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
 
     // Built up front (rather than at the end) so the watcher task below can
     // compare identity against it — see the Arc::ptr_eq comment there.
-    let proc = Arc::new(RunningProcess { to_pi: to_pi.clone(), from_pi: from_pi.clone(), kill_tx });
+    let proc = Arc::new(RunningProcess {
+        to_pi: to_pi.clone(),
+        from_pi: from_pi.clone(),
+        kill_tx,
+        clients: AtomicUsize::new(0),
+        streaming: AtomicBool::new(false),
+        idle_since: std::sync::Mutex::new(Instant::now()),
+    });
 
-    // pi stdout -> broadcast to this project's clients, also peeked for
-    // the get_session_stats probe response.
+    // pi stdout -> broadcast to this chat's clients, also peeked for the
+    // get_session_stats probe response and the agent_start/agent_settled
+    // events that drive the idle sweeper.
     let from_pi_tx = from_pi.clone();
     let entry_for_probe = entry.clone();
+    let proc_for_stdout = proc.clone();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            learn_session_dir(&entry_for_probe, &line).await;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                learn_session_dir(&entry_for_probe, &v).await;
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("agent_start") => proc_for_stdout.streaming.store(true, Ordering::Relaxed),
+                    Some("agent_settled") => {
+                        proc_for_stdout.streaming.store(false, Ordering::Relaxed);
+                        *proc_for_stdout.idle_since.lock().unwrap() = Instant::now();
+                    }
+                    _ => {}
+                }
+            }
             let _ = from_pi_tx.send(line);
         }
     });
@@ -353,7 +444,7 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
     // around so a failing exit can report *why* (version mismatch, bad cwd,
     // crash) instead of just an opaque exit code.
     let stderr_tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let id_for_stderr = id.clone();
+    let id_for_stderr = key.clone();
     let stderr_tail_writer = stderr_tail.clone();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
@@ -384,20 +475,20 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
     let _ = to_pi.try_send(r#"{"type":"get_session_stats"}"#.to_string());
 
     // Own the child exclusively: either it exits on its own, or someone
-    // asks us to kill it. Either way, drop this project out of `running` —
+    // asks us to kill it. Either way, drop this chat out of `running` —
     // but only if `running` still points at *this* process. A respawn (e.g.
-    // from an SSH config change) inserts the new process under the same id
+    // from an SSH config change) inserts the new process under the same key
     // before killing this one, so by the time this task's kill/wait
     // resolves, the map may already hold a newer, unrelated process for
     // `id_for_exit`; removing unconditionally would leak that one.
-    let id_for_exit = id.clone();
+    let id_for_exit = key.clone();
     let proc_for_exit = proc.clone();
     let from_pi_tx_exit = from_pi.clone();
     tokio::spawn(async move {
         let mut killed = false;
         tokio::select! {
             status = child.wait() => {
-                eprintln!("pi exited for project {id_for_exit}: {status:?}");
+                eprintln!("pi exited for chat {id_for_exit}: {status:?}");
                 // A clean exit (status 0) is a normal shutdown, not an error worth
                 // surfacing — e.g. pi quitting on its own. Anything else (nonzero
                 // exit, or the process never even started) gets reported to the
@@ -440,54 +531,62 @@ fn spawn_process(state: Arc<AppState>, id: String, entry: Arc<ProjectEntry>, ssh
     proc
 }
 
-/// Returns the running process for a project, spawning (or respawning, if
-/// it previously died) one on demand. `None` only if `id` isn't a known
-/// project at all.
-async fn ensure_running(state: &Arc<AppState>, id: &str) -> Option<Arc<RunningProcess>> {
-    if let Some(p) = state.running.read().await.get(id) {
+/// Returns the running process for one chat, spawning (or respawning, if
+/// it previously died or was reaped) one on demand. `None` only if
+/// `project_id` isn't a known project at all.
+async fn ensure_running(state: &Arc<AppState>, project_id: &str, chat_id: &str) -> Option<Arc<RunningProcess>> {
+    let key = chat_key(project_id, chat_id);
+    if let Some(p) = state.running.read().await.get(&key) {
         return Some(p.clone());
     }
-    let entry = state.projects.read().await.get(id)?.clone();
+    let entry = state.projects.read().await.get(project_id)?.clone();
     let ssh = state.ssh.read().await.clone();
     let mut running = state.running.write().await;
-    if let Some(p) = running.get(id) {
+    if let Some(p) = running.get(&key) {
         return Some(p.clone());
     }
-    let proc = spawn_process(state.clone(), id.to_string(), entry, ssh);
-    running.insert(id.to_string(), proc.clone());
+    let proc = spawn_process(state.clone(), key.clone(), entry, ssh);
+    running.insert(key, proc.clone());
     Some(proc)
 }
 
-/// Kills and respawns one project's pi process against the current SSH
+/// Kills and respawns one chat's pi process against the current SSH
 /// target, inserting the new process into `running` before signalling the
 /// old one to exit — the `Arc::ptr_eq` guard in `spawn_process`'s watcher
 /// task is what makes this ordering safe (see its comment).
-async fn respawn_project(state: &Arc<AppState>, id: &str) {
-    let Some(entry) = state.projects.read().await.get(id).cloned() else { return };
+async fn respawn_key(state: &Arc<AppState>, key: &str) {
+    let Some((project_id, _)) = key.split_once('/') else { return };
+    let Some(entry) = state.projects.read().await.get(project_id).cloned() else {
+        // Project no longer exists; just make sure the process is gone.
+        if let Some(p) = state.running.write().await.remove(key) {
+            let _ = p.kill_tx.try_send(());
+        }
+        return;
+    };
     let ssh = state.ssh.read().await.clone();
     let old = {
         let mut running = state.running.write().await;
-        let old = running.remove(id);
-        let new_proc = spawn_process(state.clone(), id.to_string(), entry, ssh);
-        running.insert(id.to_string(), new_proc);
+        let old = running.remove(key);
+        let new_proc = spawn_process(state.clone(), key.to_string(), entry, ssh);
+        running.insert(key.to_string(), new_proc);
         old
     };
     if let Some(old) = old {
-        let _ = old.kill_tx.send(()).await;
+        let _ = old.kill_tx.try_send(());
     }
 }
 
-/// Respawns every known project's pi process, e.g. after the SSH target
-/// changes.
+/// Respawns every running chat's pi process in place, e.g. after the SSH
+/// target changes. Connected clients notice their old bridge die and
+/// reconnect onto the fresh process.
 async fn respawn_all(state: &Arc<AppState>) {
-    let ids: Vec<String> = state.projects.read().await.keys().cloned().collect();
-    for id in ids {
-        respawn_project(state, &id).await;
+    let keys: Vec<String> = state.running.read().await.keys().cloned().collect();
+    for key in keys {
+        respawn_key(state, &key).await;
     }
 }
 
-async fn learn_session_dir(entry: &Arc<ProjectEntry>, line: &str) {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
+async fn learn_session_dir(entry: &Arc<ProjectEntry>, v: &serde_json::Value) {
     if v.get("command").and_then(|c| c.as_str()) != Some("get_session_stats") {
         return;
     }
@@ -504,16 +603,27 @@ async fn learn_session_dir(entry: &Arc<ProjectEntry>, line: &str) {
 
 // ---- WebSocket bridge --------------------------------------------------
 
+#[derive(Deserialize)]
+struct WsQuery {
+    /// Opaque client-chosen chat token; each distinct value gets its own pi
+    /// process for the project. Absent (old clients, curl) = the project's
+    /// default chat.
+    chat: Option<String>,
+}
+
 async fn ws_handler(
     Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<WsQuery>,
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let proc = ensure_running(&state, &id).await.ok_or(StatusCode::NOT_FOUND)?;
+    let chat = q.chat.unwrap_or_else(|| DEFAULT_CHAT.to_string());
+    let proc = ensure_running(&state, &id, &chat).await.ok_or(StatusCode::NOT_FOUND)?;
     Ok(ws.on_upgrade(move |socket| handle_socket(socket, proc)))
 }
 
 async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>) {
+    proc.clients.fetch_add(1, Ordering::Relaxed);
     let mut from_pi = proc.from_pi.subscribe();
     loop {
         tokio::select! {
@@ -538,6 +648,11 @@ async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>) {
                 Some(Err(_)) => break,
             },
         }
+    }
+    // Restart the idle clock when the last client leaves so the sweeper's
+    // grace period counts from disconnect, not from process spawn.
+    if proc.clients.fetch_sub(1, Ordering::Relaxed) == 1 {
+        *proc.idle_since.lock().unwrap() = Instant::now();
     }
 }
 
@@ -734,7 +849,7 @@ async fn add_project(
     let entry = Arc::new(ProjectEntry { name: name.clone(), path: path.clone(), session_dir: Mutex::new(None) });
     state.projects.write().await.insert(id.clone(), entry);
     persist_projects(&state).await;
-    ensure_running(&state, &id).await;
+    ensure_running(&state, &id, DEFAULT_CHAT).await;
 
     Ok(Json(ProjectView { id, name, path: path.display().to_string() }))
 }
@@ -838,8 +953,15 @@ async fn remove_project(State(state): State<Arc<AppState>>, Path(id): Path<Strin
     if !existed {
         return StatusCode::NOT_FOUND;
     }
-    if let Some(p) = state.running.write().await.remove(&id) {
-        let _ = p.kill_tx.send(()).await;
+    // Kill every chat process belonging to this project.
+    let prefix = format!("{id}/");
+    let doomed: Vec<Arc<RunningProcess>> = {
+        let mut running = state.running.write().await;
+        let keys: Vec<String> = running.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        keys.into_iter().filter_map(|k| running.remove(&k)).collect()
+    };
+    for p in doomed {
+        let _ = p.kill_tx.try_send(());
     }
     persist_projects(&state).await;
     StatusCode::NO_CONTENT

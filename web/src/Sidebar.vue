@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { store } from "./pi.js";
+import { chatIndicator, projectIndicator, store } from "./pi.js";
 import {
   addProject,
   isArchived,
@@ -178,6 +178,12 @@ function relativeTime(ms) {
           :class="{ active: p.id === projectsStore.currentProjectId }"
           @click="selectProject(p.id)"
         >
+          <span
+            v-if="projectIndicator(p.id)"
+            class="status-dot"
+            :class="projectIndicator(p.id)"
+            :title="projectIndicator(p.id) === 'working' ? 'Agent working' : 'Unread response'"
+          ></span>
           <span class="project-name" :title="p.path">{{ p.name }}</span>
           <button class="icon-btn remove-btn" title="Remove project" @click.stop="onRemove(p.id, p.name)">×</button>
         </div>
@@ -194,6 +200,12 @@ function relativeTime(ms) {
               :title="s.title"
               @click="showArchived ? null : openSession(s.path)"
             >
+              <span
+                v-if="chatIndicator(s.path)"
+                class="status-dot"
+                :class="chatIndicator(s.path)"
+                :title="chatIndicator(s.path) === 'working' ? 'Agent working' : 'Unread response'"
+              ></span>
               <span class="chat-title">{{ s.title }}</span>
               <span class="chat-time">{{ relativeTime(s.mtimeMs) }}</span>
               <button
