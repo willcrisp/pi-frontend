@@ -1,21 +1,48 @@
 <!--
   Ctrl/Cmd+K command palette: fuzzy jump between projects and the current
   project's (non-archived) chats, subsequence-matched and scored client-side.
-  Always mounted from App.vue; owns its own global hotkey listener.
+  Once the query reaches 3+ characters it also runs a debounced cross-chat
+  content search of the current project (stores/search.js) and appends any
+  matches below the fuzzy results as a third `message` kind, deduplicated
+  against chats already shown as a title match. Always mounted from App.vue;
+  owns its own global hotkey listener.
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { isArchived, openSession, projectsStore, selectProject } from "../../stores/projects.js";
+import { resetSearch, searchMessages, searchStore } from "../../stores/search.js";
 
 const open = ref(false);
 const query = ref("");
 const index = ref(0);
 const inputEl = ref(null);
 
+// Content search runs debounced (~200ms) rather than on every keystroke, and
+// is superseded automatically (stores/search.js drops stale responses by
+// sequence number) if the query keeps changing while a request is in flight.
+const SEARCH_MIN_LEN = 3;
+const SEARCH_DEBOUNCE_MS = 200;
+let searchTimer = null;
+
+function scheduleSearch(q) {
+  if (searchTimer) clearTimeout(searchTimer);
+  const trimmed = q.trim();
+  if (trimmed.length < SEARCH_MIN_LEN) {
+    resetSearch();
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    searchMessages(projectsStore.currentProjectId, trimmed);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+watch(query, scheduleSearch);
+
 function openPalette() {
   open.value = true;
   query.value = "";
   index.value = 0;
+  resetSearch();
   nextTick(() => inputEl.value?.focus());
 }
 
@@ -34,7 +61,10 @@ function onGlobalKey(e) {
 }
 
 onMounted(() => window.addEventListener("keydown", onGlobalKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onGlobalKey);
+  if (searchTimer) clearTimeout(searchTimer);
+});
 
 // Subsequence fuzzy match; higher score = better. Consecutive matches and
 // matches at word starts score extra; null = no match.
@@ -75,21 +105,45 @@ const items = computed(() => {
       kind: "chat",
       label: s.title || "(untitled)",
       hint: currentProjectName.value,
+      path: s.path, // lets the appended message-search results dedupe against this
       run: () => openSession(s.path),
     });
   }
   return out;
 });
 
+// Content-search results to append below the fuzzy matches, once the query
+// is long enough (see scheduleSearch/SEARCH_MIN_LEN above). Deduplicated
+// against chats already present as a title match — a chat already in view
+// above doesn't need to reappear just because it also contains the text.
+const MAX_MESSAGE_MATCHES = 8;
+
+function messageMatches(fuzzy) {
+  if (query.value.trim().length < SEARCH_MIN_LEN) return [];
+  const knownPaths = new Set(fuzzy.filter((it) => it.kind === "chat").map((it) => it.path));
+  return searchStore.results
+    .filter((r) => !knownPaths.has(r.path))
+    .slice(0, MAX_MESSAGE_MATCHES)
+    .map((r) => ({
+      kind: "message",
+      label: r.title || "(untitled)",
+      snippet: r.snippet,
+      path: r.path,
+      run: () => openSession(r.path),
+    }));
+}
+
 const matches = computed(() => {
   const q = query.value.trim().toLowerCase();
-  if (!q) return items.value.slice(0, 20);
-  return items.value
-    .map((it) => ({ it, score: fuzzyScore(q, `${it.label} ${it.hint || ""}`.toLowerCase()) }))
-    .filter((x) => x.score !== null)
-    .sort((a, b) => b.score - a.score)
-    .map((x) => x.it)
-    .slice(0, 20);
+  const fuzzy = !q
+    ? items.value.slice(0, 20)
+    : items.value
+        .map((it) => ({ it, score: fuzzyScore(q, `${it.label} ${it.hint || ""}`.toLowerCase()) }))
+        .filter((x) => x.score !== null)
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.it)
+        .slice(0, 20);
+  return [...fuzzy, ...messageMatches(fuzzy)];
 });
 
 watch(matches, () => {
@@ -134,16 +188,25 @@ function onBackdrop(e) {
       <ul v-if="matches.length" class="palette-list">
         <li
           v-for="(it, i) in matches"
-          :key="`${it.kind}:${it.label}:${i}`"
-          :class="{ active: i === index }"
+          :key="it.kind === 'message' ? `message:${it.path}` : `${it.kind}:${it.label}:${i}`"
+          :class="{ active: i === index, message: it.kind === 'message' }"
           @mousedown.prevent="choose(it)"
           @mouseenter="index = i"
         >
-          <span class="palette-kind" :class="it.kind">{{ it.kind }}</span>
-          <span class="palette-label">
-            {{ it.label }}<span v-if="it.active" class="palette-current"> · current</span>
-          </span>
-          <span class="palette-hint">{{ it.hint }}</span>
+          <template v-if="it.kind === 'message'">
+            <div class="palette-message-row">
+              <span class="palette-kind message">chat</span>
+              <span class="palette-label">{{ it.label }}</span>
+            </div>
+            <span class="palette-snippet">{{ it.snippet }}</span>
+          </template>
+          <template v-else>
+            <span class="palette-kind" :class="it.kind">{{ it.kind }}</span>
+            <span class="palette-label">
+              {{ it.label }}<span v-if="it.active" class="palette-current"> · current</span>
+            </span>
+            <span class="palette-hint">{{ it.hint }}</span>
+          </template>
         </li>
       </ul>
       <div v-else class="palette-empty">no matches</div>

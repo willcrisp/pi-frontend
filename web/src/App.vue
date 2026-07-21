@@ -2,7 +2,7 @@
   Top-level layout: sidebar, active chat panel (header/messages/composer) or
   an empty-state placeholder when no project is selected, plus every
   globally-mounted overlay (toasts, command palette, extension UI dialog,
-  connect/agents/rename dialogs). Purely presentational — all state comes
+  connect/agents/rename/confirm dialogs). Purely presentational — all state comes
   from the imported stores; this component owns no logic of its own beyond
   wiring `v-if`s to store flags.
 -->
@@ -11,6 +11,7 @@ import { projectsStore } from "./stores/projects.js";
 import { authStore } from "./stores/auth.js";
 import { agentsStore } from "./stores/agents.js";
 import { renameDialogStore } from "./stores/renameDialog.js";
+import { confirmStore } from "./stores/confirm.js";
 import { dismissUiNotice, store } from "./stores/pi.js";
 import ChatHeader from "./components/chat/ChatHeader.vue";
 import Composer from "./components/chat/Composer.vue";
@@ -19,6 +20,7 @@ import Sidebar from "./components/sidebar/Sidebar.vue";
 import ConnectDialog from "./components/dialogs/ConnectDialog.vue";
 import AgentsDialog from "./components/dialogs/AgentsDialog.vue";
 import RenameDialog from "./components/dialogs/RenameDialog.vue";
+import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SshPopover from "./components/popovers/SshPopover.vue";
 import ExtensionUIDialog from "./components/dialogs/ExtensionUIDialog.vue";
 import CoderMenu from "./components/popovers/CoderMenu.vue";
@@ -65,4 +67,5 @@ import CommandPalette from "./components/dialogs/CommandPalette.vue";
   <ConnectDialog v-if="authStore.open" />
   <AgentsDialog v-if="agentsStore.open" />
   <RenameDialog v-if="renameDialogStore.open" />
+  <ConfirmDialog v-if="confirmStore.open" />
 </template>

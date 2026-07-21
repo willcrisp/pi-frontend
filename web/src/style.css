@@ -3133,3 +3133,202 @@ button:hover {
   border-top: 1px dashed var(--border);
   margin: 4px 0;
 }
+
+/* --- Confirm/alert dialog (ConfirmDialog.vue) ---------------------------- */
+/* Reuses .connect-backdrop/.connect-panel/.connect-head/.connect-close/
+   .connect-actions/.connect-secondary from the connect-model dialog above —
+   only the bits unique to this dialog are defined here. */
+
+.confirm-panel {
+  width: 380px;
+}
+
+.confirm-message {
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.confirm-danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.confirm-danger:hover {
+  background: var(--error);
+  color: var(--bg);
+}
+
+/* --- Sidebar chat-history filter (Sidebar.vue) --------------------------- */
+
+.chat-filter-wrap {
+  padding: 4px 12px 6px 24px;
+}
+
+.chat-filter-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.chat-filter-input:focus {
+  border-color: #2c3540;
+}
+
+.chat-filter-input::placeholder {
+  color: var(--dim);
+}
+
+/* --- find-in-transcript bar (FindBar.vue) --------------------------------- */
+
+/* Floats over the top of the message column (message-area is
+   position:relative — see the msg-rail comment above it) rather than
+   pushing content down. Right-anchored so it doesn't collide with the
+   prompt rail floating in the left gutter. */
+.find-bar {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.find-input {
+  width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.find-input:focus {
+  border-color: var(--accent);
+}
+
+.find-count {
+  flex: none;
+  min-width: 64px;
+  color: var(--dim);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.find-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.find-nav:hover:not(:disabled) {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.find-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.find-close {
+  flex: none;
+  padding: 2px 6px;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.find-close:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Not enough room to float the bar over a narrow message column without
+   overlapping the rail. */
+@media (max-width: 640px) {
+  .find-bar {
+    left: 16px;
+    right: 16px;
+  }
+
+  .find-input {
+    width: auto;
+    flex: 1;
+  }
+}
+
+/* CSS Custom Highlight API — registered from FindBar.vue over Range objects
+   built with a TreeWalker, deliberately not injected DOM wrapper nodes (the
+   message column contains v-html markdown regions Vue rewrites on every
+   streaming update, which would clobber wrapper elements). Same blue as
+   --accent, tinted for the full match set and solid for the current one. */
+::highlight(pi-find) {
+  background-color: rgba(122, 162, 247, 0.28);
+  color: inherit;
+}
+
+::highlight(pi-find-current) {
+  background-color: rgba(122, 162, 247, 0.75);
+  color: var(--bg);
+}
+
+/* Command palette: content-search ("message" kind) result rows.
+   Appended below the existing .palette-kind / .palette-label / .palette-hint
+   rules in style.css (~line 3033-3130). Reuses those classes as-is for the
+   title row; adds a stacked layout + a second line for the match snippet. */
+
+.palette-list li.message {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.palette-message-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.palette-kind.message {
+  color: var(--dim);
+}
+
+.palette-snippet {
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 34px; /* roughly align under the label, past the kind badge */
+}

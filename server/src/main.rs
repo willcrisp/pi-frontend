@@ -331,6 +331,7 @@ async fn main() {
         .route("/api/projects", get(list_projects).post(add_project))
         .route("/api/projects/{id}", delete(remove_project))
         .route("/api/projects/{id}/sessions", get(list_sessions))
+        .route("/api/projects/{id}/search", get(search_sessions))
         .route("/api/agents", get(list_agents).put(save_agent).delete(delete_agent))
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
@@ -1570,6 +1571,249 @@ async fn list_sessions_remote(ssh: &SshConfig, session_dir: &FsPath) -> Vec<Sess
         sessions.push(SessionView { path, title, mtime_ms });
     }
     sessions
+}
+
+// ---- content search REST API --------------------------------------------
+//
+// Cross-chat search scoped to one project, modeled closely on `list_sessions`
+// above (same `session_dir` lookup, same local/remote split, same
+// empty-list-on-anything-missing degradation). Unlike `list_sessions` this
+// reads message *content*, not just the first 50 lines, so the local/remote
+// branches each bound their own work — capped file count, capped bytes read
+// per file, capped total results — so a large session history can't stall
+// the server. Per the protocol-boundary rule, this never parses pi's message
+// schema: it's a raw case-insensitive substring scan over each JSONL line's
+// text, which is enough to find a match and build a readable snippet without
+// knowing pi's content-block shape.
+
+/// Query string for `GET /api/projects/{id}/search`; `q` defaults to empty
+/// (rather than rejecting a missing param) so a short/absent query just
+/// yields an empty result list like a too-short one does.
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// One matching session file. `snippet` is a short, human-readable excerpt
+/// around the first match (JSON escape sequences stripped, whitespace
+/// collapsed); `match_count` is how many times `q` occurs in the file
+/// (case-insensitive), not just in the snippet's line.
+#[derive(Serialize)]
+struct SearchResultView {
+    path: String,
+    title: String,
+    #[serde(rename = "mtimeMs")]
+    mtime_ms: u128,
+    snippet: String,
+    #[serde(rename = "matchCount")]
+    match_count: usize,
+}
+
+/// Queries shorter than this are ignored (empty result) rather than scanning
+/// every session file for a near-useless match.
+const SEARCH_MIN_QUERY_LEN: usize = 2;
+/// At most this many of the newest session files are scanned at all; older
+/// history is never searched. Bounds worst-case work independent of how long
+/// a project's history is.
+const SEARCH_MAX_FILES_SCANNED: usize = 300;
+/// At most this many bytes are read from any single session file while
+/// scanning for matches — long-running chats can have very large session
+/// files, and a match (or the title) is almost always near the start anyway.
+const SEARCH_MAX_BYTES_PER_FILE: u64 = 2_000_000;
+/// Final result cap returned to the client, applied after newest-first sort.
+const SEARCH_MAX_RESULTS: usize = 30;
+
+/// Lists sessions in the current project whose content (not just title)
+/// contains `q`, newest-first. See the section comment above for the
+/// bounding strategy and the protocol-boundary rationale for a raw substring
+/// scan instead of parsing pi's message schema.
+async fn search_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<SearchQuery>,
+) -> Result<Json<Vec<SearchResultView>>, StatusCode> {
+    let entry = state.projects.read().await.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?;
+    let query = q.q.trim().to_string();
+    if query.chars().count() < SEARCH_MIN_QUERY_LEN {
+        return Ok(Json(Vec::new()));
+    }
+    let session_dir = entry.session_dir.lock().await.clone();
+    let Some(session_dir) = session_dir else {
+        return Ok(Json(Vec::new()));
+    };
+    let ssh = state.ssh.read().await.clone();
+
+    let mut results = if ssh.host.is_some() {
+        search_sessions_remote(&ssh, &session_dir, &query).await
+    } else {
+        search_sessions_local(&session_dir, &query).await
+    };
+    results.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    results.truncate(SEARCH_MAX_RESULTS);
+    Ok(Json(results))
+}
+
+/// Local branch of `search_sessions`: sorts session files newest-first, keeps
+/// only the newest `SEARCH_MAX_FILES_SCANNED`, then reads each (up to
+/// `SEARCH_MAX_BYTES_PER_FILE`) line by line looking for a case-insensitive
+/// substring match. The same head lines used to look for a match are reused
+/// for `session_title_from_lines` (matching `list_sessions_local`'s title
+/// derivation) rather than re-reading the file.
+async fn search_sessions_local(session_dir: &FsPath, query: &str) -> Vec<SearchResultView> {
+    let Ok(mut dir_entries) = tokio::fs::read_dir(session_dir).await else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, u128)> = Vec::new();
+    while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
+        let path = dir_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let mtime_ms = dir_entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        files.push((path, mtime_ms));
+    }
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.truncate(SEARCH_MAX_FILES_SCANNED);
+
+    let query_lower = query.to_ascii_lowercase();
+    let mut results = Vec::new();
+    for (path, mtime_ms) in files {
+        let Ok(file) = tokio::fs::File::open(&path).await else { continue };
+        let mut lines = BufReader::new(file).lines();
+        let mut head: Vec<String> = Vec::new();
+        let mut match_count = 0usize;
+        let mut snippet: Option<String> = None;
+        let mut bytes_read: u64 = 0;
+        while let Ok(Some(line)) = lines.next_line().await {
+            bytes_read += line.len() as u64 + 1;
+            if head.len() < 50 {
+                head.push(line.clone());
+            }
+            // Skip pathologically long lines (e.g. an embedded base64 image
+            // block) rather than scanning megabytes of non-prose text.
+            if line.len() <= 200_000 {
+                let lower = line.to_ascii_lowercase();
+                let mut start = 0;
+                while let Some(idx) = lower[start..].find(&query_lower) {
+                    let abs = start + idx;
+                    match_count += 1;
+                    if snippet.is_none() {
+                        snippet = Some(make_snippet(&line, abs, query.len()));
+                    }
+                    start = abs + query_lower.len().max(1);
+                }
+            }
+            if bytes_read >= SEARCH_MAX_BYTES_PER_FILE {
+                break;
+            }
+        }
+        let Some(snippet) = snippet else { continue };
+        let title = session_title_from_lines(head.iter().map(String::as_str))
+            .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("session").to_string());
+        results.push(SearchResultView { path: path.display().to_string(), title, mtime_ms, snippet, match_count });
+    }
+    results
+}
+
+/// SSH branch of `search_sessions`: greps every project session file on the
+/// remote host in one round-trip, same NUL-framed-fields shape as
+/// `list_sessions_remote`. Candidate files are pre-sorted newest-first via
+/// `ls -1t` and capped at `SEARCH_MAX_FILES_SCANNED` *before* grepping, so the
+/// remote side has the same bound as the local branch. `grep -icF` (fixed
+/// string, case-insensitive, count-only) decides whether a file matches at
+/// all and how many times; `grep -im1 -F` pulls just the first matching line,
+/// which is all that's needed to build the snippet locally with the same
+/// `make_snippet` helper the local branch uses. The same 50-line head
+/// `list_sessions_remote` fetches for the title is reused here too. Any
+/// failure (bad target, missing dir, no grep) degrades to an empty list.
+async fn search_sessions_remote(ssh: &SshConfig, session_dir: &FsPath, query: &str) -> Vec<SearchResultView> {
+    let dir_remote = session_dir.to_string_lossy();
+    let dir_quoted = shell_quote(dir_remote.as_ref());
+    let query_quoted = shell_quote(query);
+    let remote_cmd = format!(
+        "cd {dir_quoted} 2>/dev/null && ls -1t *.jsonl 2>/dev/null | head -n {SEARCH_MAX_FILES_SCANNED} | \
+         while IFS= read -r f; do \
+         cnt=$(grep -icF -- {query_quoted} \"$f\" 2>/dev/null); \
+         [ \"$cnt\" -gt 0 ] 2>/dev/null || continue; \
+         printf '%s\\0' \"$f\"; \
+         printf '%s\\0' \"$(stat -c %Y \"$f\" 2>/dev/null || stat -f %m \"$f\" 2>/dev/null)\"; \
+         printf '%s\\0' \"$cnt\"; \
+         grep -im1 -F -- {query_quoted} \"$f\" 2>/dev/null; printf '\\0'; \
+         head -n 50 \"$f\"; printf '\\0'; \
+         done"
+    );
+    let mut c = ssh_command(ssh, 8);
+    c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(15), c.output()).await {
+        Ok(Ok(out)) => out,
+        _ => return Vec::new(),
+    };
+
+    let query_lower = query.to_ascii_lowercase();
+    let mut parts = out.stdout.split(|b| *b == 0);
+    let mut results = Vec::new();
+    while let (Some(name), Some(mtime), Some(cnt), Some(first_line), Some(head)) =
+        (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
+    {
+        let (Ok(name), Ok(mtime), Ok(cnt), Ok(first_line), Ok(head)) = (
+            std::str::from_utf8(name),
+            std::str::from_utf8(mtime),
+            std::str::from_utf8(cnt),
+            std::str::from_utf8(first_line),
+            std::str::from_utf8(head),
+        ) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let mtime_ms = mtime.trim().parse::<u128>().map(|s| s * 1000).unwrap_or(0);
+        let match_count: usize = cnt.trim().parse().unwrap_or(1);
+        let first_line = first_line.trim_end_matches('\n');
+        // grep already confirmed a match exists in this file; if the
+        // first-match line itself doesn't parse back to an index (shouldn't
+        // happen, but grep and our own lowercasing could disagree on some
+        // multi-byte edge case) fall back to a snippet-less skip rather than
+        // panicking on the slice below.
+        let Some(match_idx) = first_line.to_ascii_lowercase().find(&query_lower) else { continue };
+        let snippet = make_snippet(first_line, match_idx, query.len());
+        let title = session_title_from_lines(head.lines())
+            .unwrap_or_else(|| name.strip_suffix(".jsonl").unwrap_or(name).to_string());
+        let path = format!("{}/{name}", dir_remote.trim_end_matches('/'));
+        results.push(SearchResultView { path, title, mtime_ms, snippet, match_count });
+    }
+    results
+}
+
+/// Builds a ~140-char human-readable excerpt around a substring match found
+/// at byte offset `match_idx` in a raw JSONL line. Since pi's session lines
+/// are JSON, matched text is almost always inside a `"..."` string value with
+/// JSON escaping still in place (`\n`, `\"`, `\\`); this strips the common
+/// escape sequences and collapses whitespace runs so the excerpt reads like
+/// plain prose instead of raw JSON. Indices are snapped to UTF-8 char
+/// boundaries since `match_idx` comes from an ASCII-lowercased search over a
+/// string that may contain multi-byte characters outside the match itself.
+fn make_snippet(line: &str, match_idx: usize, query_len: usize) -> String {
+    const RADIUS: usize = 90;
+    let raw_start = match_idx.saturating_sub(RADIUS);
+    let raw_end = (match_idx + query_len + RADIUS).min(line.len());
+    let start = (0..=raw_start).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0);
+    let end = (raw_end..=line.len()).find(|&i| line.is_char_boundary(i)).unwrap_or(line.len());
+    let window = &line[start..end];
+    let unescaped =
+        window.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ").replace("\\\"", "\"").replace("\\\\", "\\");
+    let collapsed = unescaped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prefix = if start > 0 { "…" } else { "" };
+    let suffix = if end < line.len() { "…" } else { "" };
+    format!("{prefix}{collapsed}{suffix}")
 }
 
 /// Best-effort chat title: the first user message's text, truncated. Falls

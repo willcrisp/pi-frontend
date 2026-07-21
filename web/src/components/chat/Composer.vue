@@ -3,9 +3,13 @@
   command autocomplete (dynamic extension commands + BUILTIN_SLASH_COMMANDS
   run immediately as RPC calls, others insert "/name "), model + reasoning-
   level selects, steer/follow-up queue toggle while streaming, pending-
-  handover chip, and the git branch select. All actions dispatch through
-  pi.js on the active chat; local state here is just the input box and UI
-  toggles (toast, slash menu index, queue mode).
+  handover chip, prompt-history recall (ArrowUp/Down on an empty composer),
+  and the git branch select. All actions dispatch through pi.js on the
+  active chat; the composer text and pending images are themselves per-chat
+  state (store.draft/store.draftImages, see pi.js) rather than local refs,
+  so switching chats never leaks one chat's unsent draft into another —
+  local state here is just UI toggles (toast, slash menu index, queue mode,
+  history-navigation position).
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -27,9 +31,22 @@ import { startNewChat } from "../../stores/projects.js";
 import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
 
-const input = ref("");
+// Backed by the active chat's own state (see pi.js) rather than local refs,
+// so switching chats swaps the text/attachments under the composer instead
+// of carrying one chat's draft into another.
+const input = computed({
+  get: () => store.draft,
+  set: (v) => {
+    store.draft = v;
+  },
+});
+const pendingImages = computed({
+  get: () => store.draftImages,
+  set: (v) => {
+    store.draftImages = v;
+  },
+});
 const textareaEl = ref(null);
-const pendingImages = ref([]); // [{ mimeType, data, previewUrl }]
 const toast = ref(null);
 let toastTimer = null;
 
@@ -71,19 +88,30 @@ function randomPlaceholder() {
 
 const composerPlaceholder = ref(randomPlaceholder());
 
-// A fork hands back the prompt it branched from (see forkFrom in pi.js) so it
-// can be edited and re-sent down the new branch.
+// A fork hands back the prompt it branched from, or an extension asks to
+// prefill the input (set_editor_text) — either way pi.js stages it in the
+// one-shot composerDraft channel (see pi.js); write it into the real draft
+// and clear the channel.
 watch(
   () => store.composerDraft,
   (text) => {
     if (!text) return;
-    input.value = text;
+    store.draft = text;
     store.composerDraft = "";
     nextTick(() => {
       textareaEl.value?.focus();
       autosize();
     });
   }
+);
+
+// Switching chats (or a reload restoring a persisted draft) swaps the text
+// under the cursor without the user touching the textarea, so the autosize
+// that normally only runs on @input/nextTick needs its own trigger here —
+// otherwise the box keeps the previous chat's height.
+watch(
+  () => store.draft,
+  () => nextTick(autosize)
 );
 
 function showToast(message) {
@@ -240,6 +268,75 @@ function isExtensionCommand(text) {
   return !!m && store.commands.some((c) => c.name === m[1]);
 }
 
+// Prompt-history recall: ArrowUp/Down on an empty composer walks back
+// through this chat's own previously-sent prompts, newest first.
+// store.forkMessages ([{ entryId, text }], oldest first) already is exactly
+// this chat's prompt history, so no separate tracking is needed here beyond
+// the navigation cursor.
+const promptHistory = computed(() => {
+  const out = [];
+  for (const m of store.forkMessages) {
+    const text = (m.text || "").trim();
+    if (!text) continue; // skip empty/whitespace-only entries
+    if (out[out.length - 1] === text) continue; // de-dupe consecutive repeats
+    out.push(text);
+  }
+  out.reverse(); // newest first, so index 0 is the most recent prompt
+  return out;
+});
+
+const historyIndex = ref(-1); // -1 = not navigating; else index into promptHistory
+const historyPreText = ref(""); // what was typed before navigation started
+
+// A new forkMessages snapshot (chat switch, a send, a fork, ...) always
+// invalidates whatever position we were at.
+watch(
+  () => store.forkMessages,
+  () => {
+    historyIndex.value = -1;
+  }
+);
+
+function moveCaretToEnd() {
+  nextTick(() => {
+    const el = textareaEl.value;
+    if (el) {
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    }
+    autosize();
+  });
+}
+
+// Returns true if the key was consumed as history navigation.
+function handleHistoryKey(e) {
+  const history = promptHistory.value;
+  if (e.key === "ArrowUp" && (historyIndex.value !== -1 || !input.value.trim())) {
+    if (historyIndex.value === -1) {
+      if (!history.length) return false;
+      historyPreText.value = input.value;
+      historyIndex.value = 0;
+    } else if (historyIndex.value < history.length - 1) {
+      historyIndex.value++;
+    }
+    input.value = history[historyIndex.value];
+    moveCaretToEnd();
+    return true;
+  }
+  if (e.key === "ArrowDown" && historyIndex.value !== -1) {
+    historyIndex.value--;
+    input.value = historyIndex.value === -1 ? historyPreText.value : history[historyIndex.value];
+    moveCaretToEnd();
+    return true;
+  }
+  if (e.key === "Escape" && historyIndex.value !== -1) {
+    input.value = historyPreText.value;
+    historyIndex.value = -1;
+    return true;
+  }
+  return false;
+}
+
 function submit() {
   const text = input.value.trim();
   const handover = store.pendingHandover;
@@ -284,10 +381,27 @@ function onKeydown(e) {
       return;
     }
   }
+  // Ctrl/Cmd+ArrowUp/Down is the separate thinking-level shortcut
+  // (onThinkingShortcut, a window-level listener) — never treat it as
+  // history navigation.
+  if (!e.ctrlKey && !e.metaKey && ["ArrowUp", "ArrowDown", "Escape"].includes(e.key)) {
+    if (handleHistoryKey(e)) {
+      e.preventDefault();
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     submit();
   }
+}
+
+// Any real typing/editing (as opposed to a programmatic value swap from
+// history navigation or a chat switch, neither of which fire a native
+// `input` event) exits history navigation.
+function onInput() {
+  historyIndex.value = -1;
+  autosize();
 }
 
 function addImageFile(file) {
@@ -388,7 +502,7 @@ function autosize() {
           title="Enter to send, Shift+Enter for a new line"
           @keydown="onKeydown"
           @paste="onPaste"
-          @input="autosize"
+          @input="onInput"
         ></textarea>
         <div class="composer-actions">
           <button

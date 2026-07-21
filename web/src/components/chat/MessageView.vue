@@ -5,12 +5,14 @@
   the message), and render as one of: SubagentView.vue (sub-agent dispatch,
   detected via subagentDetails()), a collapsed unified diff (edit/write calls,
   detected by argument shape via diff.js), or a generic raw-args <details>
-  block. A hover toolbar offers copy-to-clipboard and, on user messages with a
-  fork point, edit-and-resend (forkFrom). Assistant messages starting with a
+  block (auto-opens while running, stays open once finished unless the user
+  manually collapsed it — see the openOverride/everOpened tracking below). A
+  hover toolbar offers copy-to-clipboard and, on user messages with a fork
+  point, edit-and-resend (forkFrom). Assistant messages starting with a
   handover marker get a "Continue in new chat" action.
 -->
 <script setup>
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import {
   continueFromHandover,
   forkFrom,
@@ -44,6 +46,39 @@ function argsSummary(args) {
 
 function toolResult(id) {
   return store.toolResults[id];
+}
+
+// Generic tool <details> blocks bind :open reactively to "is this tool
+// running" so a long call auto-expands while it works. But a reactive :open
+// binding means Vue force-sets the DOM's open state on every re-render,
+// including the running->finished transition — which would snap a block the
+// user is actively reading closed the instant its tool call completes (and,
+// symmetrically, force a manually-collapsed running block back open). Once
+// the user has toggled a given tool call, their choice should stick instead
+// — across the running->finished transition too — so we track per-call
+// overrides here. A block the user hasn't touched still needs to remember
+// that it was *ever* auto-opened (not just "is running right now"), since by
+// the time `running` flips false the reactive default would otherwise flip
+// straight back to closed; `everOpened` (a plain, non-reactive set — re-runs
+// already piggyback on the `running` read below) latches that.
+const openOverride = reactive({});
+const everOpened = new Set();
+
+function isOpen(block) {
+  if (toolResult(block.id)?.running) everOpened.add(block.id);
+  return openOverride[block.id] ?? everOpened.has(block.id);
+}
+
+function onToolToggle(block, event) {
+  const domOpen = event.target.open;
+  // @toggle also fires when Vue itself flips `open` via the reactive binding
+  // (e.g. auto-open on run start, or the auto-stays-open latch above). Only
+  // record an override when the DOM's new state disagrees with what isOpen()
+  // currently computes — i.e. this toggle came from the user, not from our
+  // own binding.
+  if (domOpen !== isOpen(block)) {
+    openOverride[block.id] = domOpen;
+  }
 }
 
 function isSubagent(block) {
@@ -227,7 +262,8 @@ function diffFor(block) {
         v-else-if="block.type === 'toolCall'"
         class="tool"
         :class="{ error: toolResult(block.id)?.isError }"
-        :open="toolResult(block.id)?.running"
+        :open="isOpen(block)"
+        @toggle="onToolToggle(block, $event)"
       >
         <summary title="Click to expand/collapse">
           <span class="tool-name" :title="block.name">{{ block.name }}</span>

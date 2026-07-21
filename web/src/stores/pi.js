@@ -13,7 +13,9 @@
 //
 // Key exports:
 //   store              — proxy over the active chat's reactive state (messages,
-//                         toolResults, sessionStats, streaming, model, uiRequests, …)
+//                         toolResults, sessionStats, streaming, model, uiRequests,
+//                         draft/draftImages — the per-chat composer buffer, the
+//                         text half persisted to localStorage — …)
 //   connIndex           — reactive registry of every open chat connection, keyed by
 //                         "s:<sessionPath>" / "new:<uuid>" / "p:<projectId>"
 //   THINKING_LEVELS      — ordered list of valid thinking-level strings
@@ -34,7 +36,7 @@
 //                         extension UI dialogs and toasts
 //   setOnSessionSwitched(fn) — wired once from main.js to refresh the sidebar's
 //                         chat list after a switch or a settled turn
-import { reactive, shallowRef } from "vue";
+import { reactive, shallowRef, watch } from "vue";
 
 function initialStore() {
   return {
@@ -56,9 +58,21 @@ function initialStore() {
     // get_fork_messages: [{ entryId, text }] in send order. Paired positionally
     // with the user messages in `messages` by MessageRail.vue.
     forkMessages: [],
+    // Composer text for this chat. Restored from localStorage
+    // ("pi-web:drafts") when the conn is created and persisted (debounced)
+    // as it's typed, so switching chats — or reloading — keeps each chat's
+    // unsent draft separate and intact. See rememberDraft()/moveDraft()
+    // below and the watch set up in createConn().
+    draft: "",
+    // Pending image attachments for this chat's composer:
+    // [{ mimeType, data, previewUrl }]. Memory-only, never persisted (base64
+    // would blow the localStorage quota).
+    draftImages: [],
     // Text to load into the composer (set when a fork hands back the prompt it
-    // branched from, mirroring what pi's TUI does on /fork). Composer.vue
-    // watches this and clears it once consumed.
+    // branched from, mirroring what pi's TUI does on /fork, or when an
+    // extension asks to prefill the input via set_editor_text). Composer.vue
+    // watches this, writes it into `draft`, and clears it once consumed —
+    // it's a one-shot injection channel, not the draft itself.
     composerDraft: "",
     // A generated handover attached to this fresh chat but not sent yet.
     // Composer.vue renders it as a chip and includes its summary with the
@@ -71,8 +85,9 @@ function initialStore() {
     // extension_ui_request sub-protocol, oldest first. The agent is blocked
     // until each is answered via respondExtensionUI(). [{ id, method, ... }]
     uiRequests: [],
-    // Fire-and-forget extension notifications, shown as transient toasts.
-    // [{ id, message, notifyType }]
+    // Transient toasts: fire-and-forget extension notifications, and non-success
+    // RPC responses that aren't a tracked request() (see handleResponse) — e.g. a
+    // rejected prompt or a set_model that failed server-side. [{ id, message, notifyType }]
     uiNotices: [],
     // { message, exitCode } from a synthetic pi_web_process_error frame (see
     // spawn_process in server/src/main.rs) — the pi/ssh child failed to start
@@ -158,6 +173,59 @@ function rememberSessionChatId(sessionPath, chatId) {
   } catch {}
 }
 
+// pi-web:drafts -> conn key -> unsent composer text (text only — never the
+// pending images; base64 would blow the quota). Same LRU-ish
+// re-insertion/cap pattern as sessionChatIds above, but keyed by conn key
+// (which is stable across reloads only once a chat has been re-keyed to its
+// session file — see rekeyConn/moveDraftKey below).
+const DRAFTS_KEY = "pi-web:drafts";
+
+function loadDrafts() {
+  try {
+    const v = JSON.parse(localStorage.getItem(DRAFTS_KEY) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+const drafts = loadDrafts();
+
+function persistDrafts() {
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+  } catch {}
+}
+
+// Debounced (see the watch set up in createConn) so typing doesn't hammer
+// localStorage. An empty draft is dropped rather than stored, so a chat's
+// entry disappears once it's sent/cleared instead of lingering forever.
+function rememberDraft(key, text) {
+  if (!text) {
+    if (key in drafts) {
+      delete drafts[key];
+      persistDrafts();
+    }
+    return;
+  }
+  if (drafts[key] === text) return;
+  delete drafts[key];
+  drafts[key] = text;
+  const keys = Object.keys(drafts);
+  for (let i = 0; i < keys.length - 50; i++) delete drafts[keys[i]];
+  persistDrafts();
+}
+
+// Called from rekeyConn: a conn's persisted draft (if any) needs to follow
+// it from its pre-session key ("new:<uuid>" / "p:<projectId>") to its
+// "s:<sessionPath>" key, or a reload would fail to find it.
+function moveDraftKey(oldKey, newKey) {
+  if (!(oldKey in drafts)) return;
+  const text = drafts[oldKey];
+  delete drafts[oldKey];
+  drafts[newKey] = text;
+  persistDrafts();
+}
+
 function rememberLastChat(conn) {
   try {
     localStorage.setItem(
@@ -233,9 +301,22 @@ function createConn(projectId, key, chatId, intendedSession, { freshChat = false
     closed: false,
     currentIndex: -1, // index into state.messages of the streaming assistant message
     statsPollTimer: null,
+    draftPersistTimer: null,
+    stopDraftWatch: null,
     lastActiveAt: Date.now(),
   };
+  if (drafts[key]) conn.state.draft = drafts[key];
   connIndex[key] = conn;
+  // Persist the draft (debounced) as it's typed. Keyed by conn.key rather
+  // than the closed-over `key` param so a later rekeyConn() still lands the
+  // write under the right slot.
+  conn.stopDraftWatch = watch(
+    () => conn.state.draft,
+    (text) => {
+      clearTimeout(conn.draftPersistTimer);
+      conn.draftPersistTimer = setTimeout(() => rememberDraft(conn.key, text), 300);
+    }
+  );
   connectConn(conn);
   return conn;
 }
@@ -255,6 +336,8 @@ function evictIdleConns() {
 function closeConn(conn) {
   conn.closed = true;
   stopStatsPolling(conn);
+  clearTimeout(conn.draftPersistTimer);
+  conn.stopDraftWatch?.();
   if (conn.ws) {
     conn.ws.onclose = null; // no auto-reconnect for an intentional close
     conn.ws.close();
@@ -371,6 +454,7 @@ function rekeyConn(conn, sessionFile) {
     if (wasActive) activeRef.value = conn;
   }
   delete connIndex[conn.key];
+  moveDraftKey(conn.key, newKey);
   conn.key = newKey;
   conn.intendedSession = sessionFile;
   connIndex[newKey] = conn;
@@ -491,6 +575,9 @@ export function send(cmd) {
 let reqId = 0;
 const reqPrefix = Math.random().toString(36).slice(2, 8);
 const pending = new Map();
+
+// Unique id suffix for toasted RPC failures (see handleResponse).
+let rpcErrCounter = 0;
 
 function requestOn(conn, cmd) {
   const id = `req-${reqPrefix}-${++reqId}`;
@@ -793,6 +880,19 @@ function handleResponse(conn, ev) {
   }
   if (!ev.success) {
     console.warn("pi rpc error:", ev.command, ev.error);
+    // Speculative read-only probes (get_fork_messages, get_commands, ...) are
+    // fired on every connect and would toast on every reconnect against an
+    // older pi that doesn't support one of them yet — warn only.
+    if (typeof ev.command === "string" && ev.command.startsWith("get_")) return;
+    const command = ev.command || "request";
+    const error = ev.error || "unknown error";
+    const message = `${command} failed: ${error}`;
+    if (s.uiNotices.some((n) => n.message === message)) return;
+    const notice = { id: `rpc-err-${++rpcErrCounter}`, message, notifyType: "error" };
+    s.uiNotices.push(notice);
+    setTimeout(() => {
+      s.uiNotices = s.uiNotices.filter((n) => n !== notice);
+    }, 6000);
     return;
   }
   if (ev.command === "get_state") {

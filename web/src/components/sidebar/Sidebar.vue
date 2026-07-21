@@ -20,6 +20,7 @@ import {
   toggleArchive,
 } from "../../stores/projects.js";
 import { openConnect } from "../../stores/auth.js";
+import { alertDialog, confirmDialog } from "../../stores/confirm.js";
 
 const showAddForm = ref(false);
 const newName = ref("");
@@ -74,19 +75,28 @@ function onPathKeydown(e) {
 const PAGE_SIZE = 5;
 const historyLimit = ref(PAGE_SIZE);
 const showArchived = ref(false);
+const historyFilter = ref("");
 watch(
   () => projectsStore.currentProjectId,
   () => {
     historyLimit.value = PAGE_SIZE;
     showArchived.value = false;
+    historyFilter.value = "";
   }
 );
 
-const filteredSessions = computed(() =>
-  projectsStore.sessions.filter((s) => isArchived(s.path) === showArchived.value)
-);
+// Filter applies before the historyLimit slice, so a match buried past the
+// visible page is still reachable without clicking "load more".
+const filteredSessions = computed(() => {
+  const q = historyFilter.value.trim().toLowerCase();
+  return projectsStore.sessions
+    .filter((s) => isArchived(s.path) === showArchived.value)
+    .filter((s) => !q || s.title.toLowerCase().includes(q));
+});
 const visibleSessions = computed(() => filteredSessions.value.slice(0, historyLimit.value));
 const hasMoreSessions = computed(() => filteredSessions.value.length > historyLimit.value);
+// Only worth showing the filter box once there's enough history to search.
+const showHistoryFilter = computed(() => projectsStore.sessions.length > PAGE_SIZE);
 
 function loadMoreSessions() {
   historyLimit.value += PAGE_SIZE;
@@ -114,11 +124,17 @@ async function submitAdd() {
 }
 
 async function onRemove(id, name) {
-  if (!confirm(`Remove project "${name}"? Its running chat will be stopped.`)) return;
+  const ok = await confirmDialog({
+    title: "Remove project",
+    message: `Remove project "${name}"? Its running chat will be stopped.`,
+    confirmLabel: "Remove",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await removeProject(id);
   } catch (e) {
-    alert(e.message || "failed to remove project");
+    await alertDialog({ title: "Remove failed", message: e.message || "failed to remove project" });
   }
 }
 
@@ -203,6 +219,14 @@ function relativeTime(ms) {
         </div>
 
         <div v-if="p.id === projectsStore.currentProjectId" class="chat-history">
+          <div v-if="showHistoryFilter" class="chat-filter-wrap">
+            <input
+              v-model="historyFilter"
+              class="chat-filter-input"
+              placeholder="filter chats…"
+              @keydown.escape="historyFilter = ''"
+            />
+          </div>
           <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading…</div>
           <template v-else>
             <div
@@ -231,7 +255,13 @@ function relativeTime(ms) {
             </div>
             <div v-if="hasMoreSessions" class="chat-row load-more" @click="loadMoreSessions">load more…</div>
             <div v-if="!filteredSessions.length" class="chat-row dim">
-              {{ showArchived ? "no archived chats" : "no past chats" }}
+              {{
+                historyFilter.trim()
+                  ? "no chats match"
+                  : showArchived
+                  ? "no archived chats"
+                  : "no past chats"
+              }}
             </div>
           </template>
         </div>

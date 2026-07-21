@@ -2,15 +2,19 @@
   Scrollable message column: renders user/assistant messages from store.messages
   (pi.js) via MessageView.vue, auto-scrolling to follow the stream unless the
   user has scrolled up more than ~120px. Also mounts MessageRail.vue, the
-  floating prompt-index gutter, passing it the scroll container.
+  floating prompt-index gutter, passing it the scroll container, and
+  FindBar.vue, the Ctrl/Cmd+F find-in-transcript bar, passing it the
+  `.messages` element to search.
 -->
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { store } from "../../stores/pi.js";
 import MessageView from "./MessageView.vue";
 import MessageRail from "./MessageRail.vue";
+import FindBar from "./FindBar.vue";
 
 const mainEl = ref(null);
+const messagesEl = ref(null);
 
 // Paired positionally with get_fork_messages (same rule as MessageRail.vue):
 // the nth user message's fork point is store.forkMessages[n]. Optimistic
@@ -43,7 +47,7 @@ watch(
 <template>
   <div class="message-area">
     <main ref="mainEl">
-      <div class="messages">
+      <div ref="messagesEl" class="messages">
         <MessageView
           v-for="(v, i) in visible"
           :id="`msg-${i}`"
@@ -54,5 +58,6 @@ watch(
       </div>
     </main>
     <MessageRail :scroller="mainEl" />
+    <FindBar :container="messagesEl" />
   </div>
 </template>
