@@ -7,6 +7,9 @@ import UsagePopover from "./UsagePopover.vue";
 import ColorProfilePopover from "./ColorProfilePopover.vue";
 import SshPopover from "./SshPopover.vue";
 import CoderMenu from "./CoderMenu.vue";
+import pixelBrainFire from "./assets/pixel-brain-fire.svg";
+
+const DUMB_ZONE_THRESHOLD = 150_000;
 
 const modelLabel = computed(() =>
   store.model ? store.model.id || store.model.name : "…"
@@ -57,13 +60,21 @@ const contextPercent = computed(() => {
   return percent != null ? `${Math.round(percent)}% ctx` : null;
 });
 
+// Context usage is distinct from cumulative session token totals: this is the
+// number of tokens currently competing for space in the model's context.
+const dumbZoneActive = computed(() => {
+  const tokens = store.sessionStats?.contextUsage?.tokens;
+  return tokens != null && tokens > DUMB_ZONE_THRESHOLD;
+});
+
 const titleText = computed(() => {
-  const name = store.sessionName || "untitled";
-  if (tokenSummary.value == null) return name;
-  const parts = [tokenSummary.value];
+  const parts = [];
+  if (store.sessionName) parts.push(store.sessionName);
+  if (tokenSummary.value != null) parts.push(tokenSummary.value);
+  if (dumbZoneActive.value) parts.push("dumb zone: context above 150k");
   if (contextPercent.value) parts.push(contextPercent.value);
   if (subagentTokens.value) parts.push(subagentTokens.value);
-  return `${name} · ${parts.join(" · ")}`;
+  return parts.join(" · ");
 });
 
 function renameSession() {
@@ -105,13 +116,20 @@ function scrollToRunningSubagent() {
     </div>
     <button class="header-title" :title="titleText" @click="renameSession">
       <span class="header-title-content">
-        <span>{{ store.sessionName || "untitled" }}</span>
+        <span v-if="store.sessionName">{{ store.sessionName }}</span>
         <template v-if="tokenSummary != null">
-          <span> · </span>
+          <span v-if="store.sessionName"> · </span>
           <Transition name="token-roll" mode="out-in">
             <span :key="tokenSummaryKey" class="token-summary-value">{{ tokenSummary }}</span>
           </Transition>
         </template>
+        <img
+          v-if="dumbZoneActive"
+          class="dumb-zone-brain"
+          :src="pixelBrainFire"
+          alt="Dumb zone: context is above 150k tokens"
+          title="Dumb zone: context is above 150k tokens"
+        />
         <span v-if="contextPercent"> · {{ contextPercent }}</span>
         <span v-if="subagentTokens"> · {{ subagentTokens }}</span>
       </span>

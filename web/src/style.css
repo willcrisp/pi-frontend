@@ -429,6 +429,24 @@ header .wordmark {
   align-items: center;
 }
 
+.dumb-zone-brain {
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  animation: dumb-zone-flicker 0.8s steps(2, end) infinite alternate;
+}
+
+@keyframes dumb-zone-flicker {
+  from {
+    transform: translateY(1px) rotate(-3deg);
+  }
+  to {
+    transform: translateY(-1px) rotate(3deg);
+  }
+}
+
 /* Replace the changing token value from below, making it roll upward rather
    than snap to the next reading. */
 .token-roll-enter-active,
@@ -2159,7 +2177,8 @@ button:hover {
 @media (prefers-reduced-motion: reduce) {
   .d20.rolling,
   .d20.crit,
-  .d20.fumble {
+  .d20.fumble,
+  .dumb-zone-brain {
     animation: none;
   }
 }
