@@ -15,7 +15,7 @@ import { openConnect } from "./auth.js";
 
 const showAddForm = ref(false);
 const newName = ref("");
-const newPath = ref("");
+const newPath = ref("/home/coder/");
 const addError = ref("");
 const adding = ref(false);
 
@@ -95,7 +95,7 @@ async function submitAdd() {
   try {
     const project = await addProject(name, path);
     newName.value = "";
-    newPath.value = "";
+    newPath.value = "/home/coder/";
     showAddForm.value = false;
     selectProject(project.id);
   } catch (e) {
