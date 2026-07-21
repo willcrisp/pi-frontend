@@ -16,6 +16,7 @@ import {
   projectsStore,
   removeProject,
   selectProject,
+  refreshCurrentSessions,
   startNewChat,
   toggleArchive,
 } from "../../stores/projects.js";
@@ -209,6 +210,12 @@ function relativeTime(ms) {
             :title="projectIndicator(p.id) === 'working' ? 'Agent working' : 'Unread response'"
           ></span>
           <span class="project-name" :title="p.path">{{ p.name }}</span>
+          <button
+            v-if="p.id === projectsStore.currentProjectId && !showArchived"
+            class="refresh-chats-btn"
+            title="Refresh chats"
+            @click.stop="refreshCurrentSessions"
+          >⟳</button>
           <button
             v-if="p.id === projectsStore.currentProjectId && !showArchived"
             class="new-chat-btn"

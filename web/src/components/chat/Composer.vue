@@ -337,7 +337,14 @@ function handleHistoryKey(e) {
   return false;
 }
 
+// True in the gap between sending a prompt and the agent actually starting
+// (see awaitingFirstToken in pi.js) — a second Enter/click here would fire a
+// second concurrent prompt at a process that may still be booting, so the
+// send button shows a spinner and submit() is a no-op until it clears.
+const sending = computed(() => store.awaitingFirstToken && !store.streaming);
+
 function submit() {
+  if (sending.value) return;
   const text = input.value.trim();
   const handover = store.pendingHandover;
   if (!text && !pendingImages.value.length && !handover) return;
@@ -538,16 +545,22 @@ function autosize() {
           </button>
           <button
             class="composer-icon-btn send"
-            :aria-label="store.streaming ? (queueMode === 'steer' ? 'Steer' : 'Queue follow-up') : 'Send'"
-            :title="store.streaming
+            :class="{ sending }"
+            :aria-label="sending ? 'Sending…' : store.streaming ? (queueMode === 'steer' ? 'Steer' : 'Queue follow-up') : 'Send'"
+            :title="sending
+              ? (store.coldStart ? 'Starting a new agent process…' : 'Sending…')
+              : store.streaming
               ? (queueMode === 'steer'
                 ? 'Steer the agent with this message'
                 : 'Queue this message for after the agent finishes')
               : 'Send'"
-            :disabled="!input.trim() && !pendingImages.length && !store.pendingHandover"
+            :disabled="sending || (!input.trim() && !pendingImages.length && !store.pendingHandover)"
             @click="submit"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg v-if="sending" class="send-spinner" width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="24 14" />
+            </svg>
+            <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path
                 d="M14.7 1.3 7.3 8.7M14.7 1.3 10 14.7 7.3 8.7 1.3 6 14.7 1.3Z"
                 stroke="currentColor"

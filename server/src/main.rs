@@ -63,6 +63,23 @@ use axum::http::{header, Uri};
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+/// Timestamped stderr logging (`eprintln!` gives no indication of *when*
+/// something happened, which makes diagnosing "why did this take ages"
+/// reports impossible after the fact). Millisecond-resolution wall clock,
+/// not monotonic `Instant`, since these lines are read by a human against
+/// real time.
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = now.as_secs();
+        let millis = now.subsec_millis();
+        let t = secs % 86400;
+        eprintln!("[{:02}:{:02}:{:02}.{:03}] {}", t / 3600, (t / 60) % 60, t % 60, millis, format!($($arg)*));
+    }};
+}
+
 /// The built frontend (`web/dist`), embedded into the binary at compile
 /// time so the server needs no files from the source tree at runtime.
 /// `--web-dir DIR` overrides this with a live directory for the dev loop.
@@ -318,7 +335,7 @@ async fn main() {
                 .map(|(k, p)| (k.clone(), p.clone()))
                 .collect();
             for (key, p) in doomed {
-                eprintln!("reaping idle pi process for chat {key}");
+                log!("reaping idle pi process for chat {key}");
                 let _ = p.kill_tx.try_send(());
             }
         }
@@ -545,7 +562,7 @@ fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ss
         let mut killed = false;
         tokio::select! {
             status = child.wait() => {
-                eprintln!("pi exited for chat {id_for_exit}: {status:?}");
+                log!("pi exited for chat {id_for_exit}: {status:?}");
                 // A clean exit (status 0) is a normal shutdown, not an error worth
                 // surfacing — e.g. pi quitting on its own. Anything else (nonzero
                 // exit, or the process never even started) gets reported to the
@@ -591,20 +608,28 @@ fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ss
 /// Returns the running process for one chat, spawning (or respawning, if
 /// it previously died or was reaped) one on demand. `None` only if
 /// `project_id` isn't a known project at all.
-async fn ensure_running(state: &Arc<AppState>, project_id: &str, chat_id: &str) -> Option<Arc<RunningProcess>> {
+/// Returns the chat's process plus whether this call had to spawn it fresh
+/// ("cold start") vs finding one already warm — `ws_handler` forwards that
+/// flag to the browser as a `pi_web_status` frame so the UI can tell "this is
+/// slow because a new agent process is booting" apart from "the connection
+/// merely hasn't responded yet" instead of leaving the user guessing.
+async fn ensure_running(state: &Arc<AppState>, project_id: &str, chat_id: &str) -> Option<(Arc<RunningProcess>, bool)> {
     let key = chat_key(project_id, chat_id);
     if let Some(p) = state.running.read().await.get(&key) {
-        return Some(p.clone());
+        return Some((p.clone(), false));
     }
     let entry = state.projects.read().await.get(project_id)?.clone();
     let ssh = state.ssh.read().await.clone();
     let mut running = state.running.write().await;
     if let Some(p) = running.get(&key) {
-        return Some(p.clone());
+        return Some((p.clone(), false));
     }
+    log!("[{key}] no running process — cold-starting pi (this is what makes the first open of a chat slow)");
+    let start = Instant::now();
     let proc = spawn_process(state.clone(), key.clone(), entry, ssh);
+    log!("[{key}] spawn_process returned after {:?} (process is spawned but may still be starting up before it responds on stdout)", start.elapsed());
     running.insert(key, proc.clone());
-    Some(proc)
+    Some((proc, true))
 }
 
 /// Kills and respawns one chat's pi process against the current SSH
@@ -675,11 +700,23 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, StatusCode> {
     let chat = q.chat.unwrap_or_else(|| DEFAULT_CHAT.to_string());
-    let proc = ensure_running(&state, &id, &chat).await.ok_or(StatusCode::NOT_FOUND)?;
-    Ok(ws.on_upgrade(move |socket| handle_socket(socket, proc)))
+    let start = Instant::now();
+    let (proc, cold_start) = ensure_running(&state, &id, &chat).await.ok_or(StatusCode::NOT_FOUND)?;
+    log!("ws connect for {id}/{chat}: ensure_running took {:?} (cold_start={cold_start})", start.elapsed());
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, proc, cold_start)))
 }
 
-async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>) {
+async fn handle_socket(mut socket: WebSocket, proc: Arc<RunningProcess>, cold_start: bool) {
+    // Synthetic frame (not part of pi's own RPC protocol, see the "protocol
+    // boundary" note in CLAUDE.md — this is the one exception, same spirit as
+    // pi_web_process_error below) telling the browser whether it's attaching
+    // to an already-warm process or one just spawned for this connection, so
+    // the UI can show "starting a new agent…" only when that's actually why
+    // things are slow.
+    let status = serde_json::json!({ "type": "pi_web_status", "coldStart": cold_start });
+    if socket.send(Message::Text(status.to_string().into())).await.is_err() {
+        return;
+    }
     proc.clients.fetch_add(1, Ordering::Relaxed);
     let mut from_pi = proc.from_pi.subscribe();
     loop {
@@ -1492,12 +1529,19 @@ async fn list_sessions(
     };
     let ssh = state.ssh.read().await.clone();
 
+    let start = Instant::now();
     let mut sessions = if ssh.host.is_some() {
         list_sessions_remote(&ssh, &session_dir).await
     } else {
         list_sessions_local(&session_dir).await
     };
     sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    log!(
+        "list_sessions for {id}: {} sessions in {:?} ({})",
+        sessions.len(),
+        start.elapsed(),
+        if ssh.host.is_some() { "ssh" } else { "local" }
+    );
     Ok(Json(sessions))
 }
 

@@ -42,6 +42,19 @@ function initialStore() {
   return {
     connected: false,
     streaming: false,
+    // True from the moment a prompt is sent until the first reply of that
+    // turn arrives (message_start/tool_execution_start/agent_settled/error) —
+    // covers the gap where a cold-started pi process is still booting and
+    // agent_start hasn't even fired yet, which is otherwise a dead silence
+    // the user has no way to distinguish from a hang. Drives the "thinking"
+    // indicator in MessageList.vue.
+    awaitingFirstToken: false,
+    // Set from the pi_web_status frame the server sends right after the WS
+    // opens (see handle_socket in main.rs): true if this connect had to spawn
+    // a fresh pi process rather than attach to an already-warm one. Cleared
+    // once the first reply arrives, same as awaitingFirstToken — used to show
+    // a more specific "starting a new agent process…" message for that case.
+    coldStart: false,
     model: null,
     thinkingLevel: null,
     availableModels: [],
@@ -604,6 +617,10 @@ export function exportSession() {
 
 export async function compactSession() {
   await request({ type: "compact" });
+  // The visible transcript is otherwise left showing the pre-compaction
+  // history until the next reload, which looks like compaction did nothing —
+  // refetch it so the compaction boundary/summary is visible immediately.
+  send({ type: "get_messages" });
   send({ type: "get_session_stats" });
 }
 
@@ -686,6 +703,11 @@ export function sendPrompt(text, images = [], streamingBehavior = null) {
   } else {
     const content = text ? [{ type: "text", text }, ...imageBlocks] : imageBlocks;
     store.messages.push({ role: "user", content });
+    // A queued steer/follow_up (the streamingBehavior branch above) is
+    // delivered into an already-running turn, so there's no new silent gap to
+    // cover — only a direct prompt on an idle chat can leave the user staring
+    // at nothing while a cold pi process boots.
+    store.awaitingFirstToken = true;
   }
   send(cmd);
 }
@@ -732,6 +754,7 @@ function handle(conn, ev) {
       break;
     case "agent_settled":
       s.streaming = false;
+      s.awaitingFirstToken = false;
       stopStatsPolling(conn);
       conn.currentIndex = -1;
       sendTo(conn, { type: "get_session_stats" });
@@ -755,6 +778,7 @@ function handle(conn, ev) {
     case "message_start":
       if (ev.message.role === "assistant") {
         conn.currentIndex = s.messages.push(ev.message) - 1;
+        s.awaitingFirstToken = false;
       }
       break;
     case "message_update":
@@ -770,6 +794,7 @@ function handle(conn, ev) {
       break;
 
     case "tool_execution_start":
+      s.awaitingFirstToken = false;
       s.toolResults[ev.toolCallId] = {
         name: ev.toolName,
         running: true,
@@ -815,6 +840,11 @@ function handle(conn, ev) {
 
     case "pi_web_process_error":
       s.processError = { message: ev.message, exitCode: ev.exitCode };
+      s.awaitingFirstToken = false;
+      break;
+
+    case "pi_web_status":
+      s.coldStart = !!ev.coldStart;
       break;
 
     case "tool_execution_end": {
@@ -880,6 +910,7 @@ function handleResponse(conn, ev) {
   }
   if (!ev.success) {
     console.warn("pi rpc error:", ev.command, ev.error);
+    if (ev.command === "prompt") s.awaitingFirstToken = false;
     // Speculative read-only probes (get_fork_messages, get_commands, ...) are
     // fired on every connect and would toast on every reconnect against an
     // older pi that doesn't support one of them yet — warn only.
@@ -901,6 +932,10 @@ function handleResponse(conn, ev) {
     s.streaming = ev.data.isStreaming;
     if (s.streaming) startStatsPolling(conn);
     else stopStatsPolling(conn);
+    // A reconnect mid-wait (WS dropped while awaitingFirstToken) can miss the
+    // agent_start/message_start that would normally clear it — resync from
+    // the process's own ground truth instead of trusting stale client state.
+    if (!s.streaming) s.awaitingFirstToken = false;
     s.sessionName = ev.data.sessionName || null;
     s.processError = null;
   } else if (ev.command === "get_available_models") {
