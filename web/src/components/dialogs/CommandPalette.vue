@@ -1,6 +1,9 @@
+<!--
+  Ctrl/Cmd+K command palette: fuzzy jump between projects and the current
+  project's (non-archived) chats, subsequence-matched and scored client-side.
+  Always mounted from App.vue; owns its own global hotkey listener.
+-->
 <script setup>
-// Ctrl/Cmd+K command palette: fuzzy jump between projects and the current
-// project's chats. Always mounted from App.vue; owns its global hotkey.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { isArchived, openSession, projectsStore, selectProject } from "../../stores/projects.js";
 

@@ -1,3 +1,16 @@
+// Reactive UI-preference stores (color profile, message/thinking font size,
+// content column width), each persisted to localStorage and applied to the
+// document root as CSS custom properties — pure client-side theming, no
+// server involvement. Consumed by ColorProfilePopover.vue.
+//
+// Key exports:
+//   COLOR_FIELDS / colorProfile   — field definitions and the reactive palette
+//     (key -> hex color); setColor(key, value) / resetColors()
+//   fontSize / setFontSize(px)     — message text size (px)
+//   thinkingSize / setThinkingSize(percent) / THINKING_SIZE_MIN / _MAX — thinking
+//     text size as a percent of the regular message size
+//   contentWidth / setContentWidth(px) / CONTENT_WIDTH_MIN / _MAX — max-width of
+//     the message list / composer column
 import { reactive, watch } from "vue";
 
 // Color profile: a user-editable color for each type of message/content block

@@ -3,6 +3,12 @@
 // covers the common subset (headings, bold/italic, inline/fenced code,
 // links, nested lists, tables, blockquotes, hr) rather than pulling in a
 // full parser.
+//
+// Key export:
+//   renderMarkdown(src) — markdown string -> HTML string, fed into `v-html` by
+//     MessageView.vue/SubagentView.vue. Fenced code blocks get a static copy
+//     button handled via event delegation (MessageView's onMarkdownClick),
+//     since v-html output can't carry a Vue listener directly.
 
 function escapeHtml(s) {
   return s

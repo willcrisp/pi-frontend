@@ -1,9 +1,11 @@
+<!--
+  Modal for pi's blocking extension UI dialogs (ctx.ui.select/confirm/input/
+  editor forwarded over RPC as extension_ui_request — see docs/rpc.md).
+  The agent is blocked until each request is answered, so this renders the
+  oldest pending request (store.uiRequests[0]) and works through the queue.
+  Follows the ConnectDialog pattern and reuses its connect-* styles.
+-->
 <script setup>
-// Modal for pi's blocking extension UI dialogs (ctx.ui.select/confirm/input/
-// editor forwarded over RPC as extension_ui_request — see docs/rpc.md).
-// The agent is blocked until each request is answered, so this renders the
-// oldest pending request and works through the queue. Follows the
-// ConnectDialog pattern and reuses its connect-* styles.
 import { computed, ref, watch } from "vue";
 import { respondExtensionUI, store } from "../../stores/pi.js";
 

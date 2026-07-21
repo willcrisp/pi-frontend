@@ -1,3 +1,9 @@
+<!--
+  Click-toggled popover (ChatHeader's "coder" trigger) listing the user's
+  Coder cloud workspaces (coder.js) with start/stop toggles; polls every 4s
+  while open so in-flight status transitions show up. Unrelated to where pi
+  itself runs — these are the user's own separate cloud machines.
+-->
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { coderStore, fetchWorkspaces, startWorkspace, stopWorkspace, isRunning, isBusy } from "../../stores/coder.js";

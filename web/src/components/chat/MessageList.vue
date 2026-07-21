@@ -1,3 +1,9 @@
+<!--
+  Scrollable message column: renders user/assistant messages from store.messages
+  (pi.js) via MessageView.vue, auto-scrolling to follow the stream unless the
+  user has scrolled up more than ~120px. Also mounts MessageRail.vue, the
+  floating prompt-index gutter, passing it the scroll container.
+-->
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { store } from "../../stores/pi.js";

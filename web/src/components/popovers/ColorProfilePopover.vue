@@ -1,3 +1,10 @@
+<!--
+  Click-toggled popover (ChatHeader's palette-icon button) for the theme.js
+  preferences: per-block-type message colors, message font size, thinking
+  text size, and content column width. Pure UI state, all persistence and
+  CSS-variable application happens in theme.js — this component only reads
+  the reactive values and calls the setters.
+-->
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
 import {

@@ -2,6 +2,14 @@
 // (session) history. Session switching itself goes over the project's own
 // WebSocket via pi's `new_session`/`switch_session` RPC commands (pi.js);
 // this module only deals with discovering what projects/sessions exist.
+//
+// Key exports:
+//   projectsStore              — {projects, currentProjectId, sessions, loadingSessions, archivedVersion}
+//   fetchProjects()/addProject()/removeProject() — /api/projects CRUD
+//   fetchSessions(id)/refreshCurrentSessions() — /api/projects/{id}/sessions, cached per project
+//   selectProject(id)/startNewChat()/openSession(path) — drive pi.js's connectToProject/newSession/switchSession
+//   isArchived(path)/toggleArchive(path) — client-only (localStorage) archive flag, no server involvement
+//   initProjects()              — boot: fetch projects, restore last-selected one
 import { reactive } from "vue";
 import { connectToProject, dropProject, newSession, resetChat, switchSession } from "./pi.js";
 

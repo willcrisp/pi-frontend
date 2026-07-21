@@ -1,6 +1,13 @@
 // REST client + reactive store for agent-definition management (markdown
 // files with YAML frontmatter under ~/.pi/agent/agents "user" scope and
 // <project>/.pi/agents "project" scope). Mirrors the conventions in ssh.js.
+//
+// Key exports:
+//   agentsStore                       — {open, agents, loading, saving, error, editing}
+//   openAgents()/closeAgents()         — open/close AgentsDialog.vue
+//   fetchAgents()/saveAgent(payload)/deleteAgent(agent) — /api/agents CRUD
+//   splitModelThinking(model)/joinModelThinking(base, level) — codec between pi's
+//     `provider/id:<thinking>` model string and the editor's separate model/level fields
 import { reactive } from "vue";
 import { THINKING_LEVELS } from "./pi.js";
 import { projectsStore } from "./projects.js";

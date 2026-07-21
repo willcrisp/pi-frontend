@@ -1,6 +1,13 @@
 // REST client + reactive store for the runtime-editable SSH target that
 // every project's pi process is spawned against (see /api/ssh in
 // server/src/main.rs). Mirrors the conventions in projects.js.
+//
+// Key exports:
+//   sshStore                    — {host, identity, port, loaded, testing, testResult, saving, clearing, error}
+//   fetchSshConfig()             — GET /api/ssh, populates the store
+//   testSshConfig({host, identity, port}) — POST /api/ssh/test, does not persist
+//   saveSshConfig({host, identity, port}) — PUT /api/ssh; server respawns every running chat's process
+//   clearSshConfig()             — DELETE /api/ssh, switches back to local execution
 import { reactive } from "vue";
 
 export const sshStore = reactive({

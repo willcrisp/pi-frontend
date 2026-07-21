@@ -3,6 +3,12 @@
 // server/src/main.rs). This is independent of the pi project bridge — these
 // are Coder's own cloud machines, unrelated to where pi runs. `coder` is
 // expected to be installed and logged in on the machine running the server.
+//
+// Key exports:
+//   coderStore                  — {available, error, workspaces, loading, loaded, pending}
+//   fetchWorkspaces()            — GET /api/coder/workspaces
+//   startWorkspace(id)/stopWorkspace(id) — POST /api/coder/start|stop; marks `pending` optimistically
+//   isRunning(ws)/isBusy(ws)     — status helpers consumed by CoderMenu.vue
 import { reactive } from "vue";
 
 export const coderStore = reactive({

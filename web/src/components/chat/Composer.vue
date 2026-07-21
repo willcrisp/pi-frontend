@@ -1,3 +1,12 @@
+<!--
+  The prompt textarea and everything around it: image paste/attach, slash-
+  command autocomplete (dynamic extension commands + BUILTIN_SLASH_COMMANDS
+  run immediately as RPC calls, others insert "/name "), model + reasoning-
+  level selects, steer/follow-up queue toggle while streaming, pending-
+  handover chip, and the git branch select. All actions dispatch through
+  pi.js on the active chat; local state here is just the input box and UI
+  toggles (toast, slash menu index, queue mode).
+-->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {

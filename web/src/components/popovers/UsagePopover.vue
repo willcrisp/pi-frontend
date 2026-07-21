@@ -1,3 +1,10 @@
+<!--
+  Hover-triggered popover with session-level token/cost stats
+  (store.sessionStats) plus a per-sub-agent usage breakdown, flattened from
+  store.toolResults via the shared subagentDetails() heuristic so it stays in
+  sync with SubagentView.vue/MessageView.vue on what counts as a sub-agent
+  call. Read-only — unlike SshPopover.vue this isn't click-toggled/a form.
+-->
 <script setup>
 import { computed } from "vue";
 import { store, subagentDetails } from "../../stores/pi.js";

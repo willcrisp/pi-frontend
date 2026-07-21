@@ -1,3 +1,9 @@
+<!--
+  Click-toggled popup on the header's connection dot for viewing/testing/
+  saving/clearing the SSH target (ssh.js), the runtime-editable relay host
+  every project's pi process is spawned against. Closes on outside-click or
+  Escape, like a form (contrast UsagePopover.vue's hover/read-only pattern).
+-->
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { store } from "../../stores/pi.js";

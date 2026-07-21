@@ -1,6 +1,12 @@
 // REST client + reactive store for the current project's git branch (see
 // /api/projects/{id}/git/branches and /git/checkout in server/src/main.rs).
 // Read-only listing plus plain `git checkout <branch>` — no fetch/pull/create.
+//
+// Key exports:
+//   gitStore                    — {projectId, available, current, branches, error, loading, loaded, switching}
+//   fetchBranches(projectId)     — GET .../git/branches; sets `available` false on error or a non-repo dir
+//   checkoutBranch(projectId, branch) — POST .../git/checkout
+//   resetGitStore()               — clear state when leaving a project
 import { reactive } from "vue";
 
 export const gitStore = reactive({

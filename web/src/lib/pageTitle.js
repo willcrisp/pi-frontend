@@ -1,3 +1,10 @@
+// Document title + favicon updater: reflects "<project> - <session>" and a
+// yellow (streaming) / green (idle) dot favicon so a background tab shows
+// agent status at a glance.
+//
+// Key export:
+//   initPageTitle() — wired once from main.js; watches projectsStore/store
+//     and updates document.title + the favicon <link> on any change.
 import { watch } from "vue";
 import { projectsStore } from "../stores/projects.js";
 import { store } from "../stores/pi.js";

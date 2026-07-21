@@ -1,10 +1,14 @@
+<!--
+  Rich inline view for a `subagent` tool call (single/parallel/chain
+  dispatch), replacing the generic <details class="tool"> rendering in
+  MessageView.vue. `details` on the tool result is a whole-state snapshot
+  (see pi.js's tool_execution_update handling) so this component just
+  re-renders from store.toolResults[toolCallId] reactively — no local
+  accumulation needed. Per-agent cards show task/activity log/final output;
+  before the first snapshot arrives, placeholderCards derive minimal cards
+  straight from the tool call's own arguments.
+-->
 <script setup>
-// Rich inline view for a `subagent` tool call (single/parallel/chain
-// dispatch), replacing the generic <details class="tool"> rendering in
-// MessageView.vue. `details` on the tool result is a whole-state snapshot
-// (see pi.js's tool_execution_update handling) so this component just
-// re-renders from store.toolResults[toolCallId] reactively — no local
-// accumulation needed.
 import { computed, onUnmounted, ref, watch } from "vue";
 import { store, subagentDetails } from "../../stores/pi.js";
 import { renderMarkdown } from "../../lib/markdown.js";

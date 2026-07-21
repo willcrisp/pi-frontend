@@ -1,3 +1,11 @@
+<!--
+  Left sidebar: project list (add/remove, with a directory-browse autocomplete
+  for the add-project path field, backed by /api/projects) and, for the
+  active project, its paginated chat history (/api/projects/{id}/sessions),
+  each row showing a status dot from chatIndicator()/projectIndicator()
+  (pi.js). Also handles session archiving (client-only, projects.js) and the
+  footer's "connect model" trigger (auth.js).
+-->
 <script setup>
 import { computed, ref, watch } from "vue";
 import { chatIndicator, projectIndicator, store } from "../../stores/pi.js";

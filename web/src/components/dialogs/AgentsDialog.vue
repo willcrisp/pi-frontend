@@ -1,3 +1,11 @@
+<!--
+  Modal for creating/editing/deleting sub-agent definitions (agents.js,
+  backed by /api/agents), opened from ChatHeader's "manage sub-agents"
+  button. List view groups user-scope vs project-scope agents; the editor is
+  a structured form (name/description/tools chips/model+reasoning/system
+  prompt) for parseable files, falling back to a raw-text editor for files
+  with a frontmatter parse error.
+-->
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { THINKING_LEVELS, store } from "../../stores/pi.js";

@@ -1,3 +1,10 @@
+<!--
+  Top chat bar: connection dot, wordmark, Coder menu, model label, clickable
+  session-name/usage title (opens the rename dialog), a running-sub-agent
+  count badge, usage popover, and the color-profile / sub-agent-manage
+  buttons. All derived data (token summaries, "dumb zone" warning, sub-agent
+  badge) is computed from `store` (pi.js) — no local state beyond computeds.
+-->
 <script setup>
 import { computed } from "vue";
 import { store, subagentDetails } from "../../stores/pi.js";

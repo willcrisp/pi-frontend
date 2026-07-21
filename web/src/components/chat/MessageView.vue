@@ -1,3 +1,14 @@
+<!--
+  Renders one message's content blocks (text/image/thinking/toolCall). Text
+  renders through markdown.js for assistant messages, plain for user ones.
+  Tool calls are looked up live from store.toolResults by id (not embedded in
+  the message), and render as one of: SubagentView.vue (sub-agent dispatch,
+  detected via subagentDetails()), a collapsed unified diff (edit/write calls,
+  detected by argument shape via diff.js), or a generic raw-args <details>
+  block. A hover toolbar offers copy-to-clipboard and, on user messages with a
+  fork point, edit-and-resend (forkFrom). Assistant messages starting with a
+  handover marker get a "Continue in new chat" action.
+-->
 <script setup>
 import { computed, ref } from "vue";
 import {

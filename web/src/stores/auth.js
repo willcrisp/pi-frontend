@@ -7,6 +7,12 @@
 // ModelRuntime.login() the TUI uses. This module speaks that helper's
 // newline-delimited JSON protocol and exposes a reactive `authStore` for
 // ConnectDialog.vue.
+//
+// Key exports:
+//   authStore                    — {open, connected, providers, prompt, notices, activeProvider, toast, error, busy}
+//   openConnect()/closeConnect()  — open the dialog (connects the /ws-auth socket) / tear it down
+//   startLogin(providerId, method) / logout(providerId) — drive one provider's login/logout flow
+//   respondPrompt(value)/cancelLogin() — answer or abort the current login step
 import { reactive } from "vue";
 
 export const authStore = reactive({

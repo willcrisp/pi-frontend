@@ -1,3 +1,10 @@
+<!--
+  Composer control: click-toggled popover listing the current project's git
+  branches (git.js), with a checkmark on the current one. Read-only display
+  + refresh only in this component — no checkout UI here (see gitStore's
+  checkoutBranch, unused by this file at present). Disabled/shows an error
+  when the project directory isn't a git repo.
+-->
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { projectsStore } from "../../stores/projects.js";

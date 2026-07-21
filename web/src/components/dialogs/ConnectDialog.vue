@@ -1,3 +1,10 @@
+<!--
+  Modal for connecting a model provider (pi's `/login` equivalent), backed by
+  auth.js's authStore/`/ws-auth` helper connection. Shows a filterable
+  provider list, then the active login flow: OAuth-url/device-code/info
+  notices plus whatever prompt step (secret/text/select) the helper is
+  currently waiting on.
+-->
 <script setup>
 import { ref, computed } from "vue";
 import {

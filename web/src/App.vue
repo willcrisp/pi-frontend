@@ -1,3 +1,11 @@
+<!--
+  Top-level layout: sidebar, active chat panel (header/messages/composer) or
+  an empty-state placeholder when no project is selected, plus every
+  globally-mounted overlay (toasts, command palette, extension UI dialog,
+  connect/agents/rename dialogs). Purely presentational — all state comes
+  from the imported stores; this component owns no logic of its own beyond
+  wiring `v-if`s to store flags.
+-->
 <script setup>
 import { projectsStore } from "./stores/projects.js";
 import { authStore } from "./stores/auth.js";

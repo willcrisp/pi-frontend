@@ -1,3 +1,8 @@
+<!--
+  Pure fidget toy: a low-poly d20 button next to the composer that tumbles in
+  place and lands on a random face, with crit/fumble flair on a 20/1. No app
+  state involved — everything is local to this component.
+-->
 <script setup>
 import { onBeforeUnmount, ref } from "vue";
 

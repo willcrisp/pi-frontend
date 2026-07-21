@@ -1,4 +1,6 @@
-// WebSocket client for the pi RPC protocol.
+// WebSocket client for the pi RPC protocol. This is the protocol/state core
+// of the whole frontend (per CLAUDE.md's "protocol boundary" rule: the
+// server never parses this JSON, only pi.js does).
 // The server bridges one `pi --mode rpc` process per *chat* (project ×
 // conversation) at `/ws/{projectId}?chat={chatId}`. Every chat the UI has
 // visited keeps its own live connection and reactive state object here, so
@@ -8,6 +10,30 @@
 // is torn down and no `switch_session` is ever sent to a busy process.
 // The sidebar reads per-chat working/unread status from the same registry
 // via chatIndicator()/projectIndicator().
+//
+// Key exports:
+//   store              — proxy over the active chat's reactive state (messages,
+//                         toolResults, sessionStats, streaming, model, uiRequests, …)
+//   connIndex           — reactive registry of every open chat connection, keyed by
+//                         "s:<sessionPath>" / "new:<uuid>" / "p:<projectId>"
+//   THINKING_LEVELS      — ordered list of valid thinking-level strings
+//   BUILTIN_SLASH_COMMANDS — composer slash-commands that run immediately as RPC
+//                         calls instead of being sent as prompt text
+//   subagentDetails(r)   — shared detection heuristic for a sub-agent dispatch
+//                         tool result, used by SubagentView/MessageView/UsagePopover
+//   connectToProject(id) / resetChat() — enter/leave a project's last-viewed chat
+//   newSession() / switchSession(path) — start a fresh chat / open a past one
+//   chatIndicator(path) / projectIndicator(id) — sidebar working/unread status
+//   send(cmd) / sendPrompt(text, images, streamingBehavior) — RPC calls on the
+//                         active chat
+//   abort() / setModel() / setThinkingLevel() / setSessionName() /
+//   compactSession() / exportSession() / copyLastAssistantText() — RPC actions
+//   forkFrom(entryId)    — branch the session at a past user message
+//   createHandover() / continueFromHandover() / handoverFromText() — handover flow
+//   respondExtensionUI(id, payload) / dismissUiNotice(id) — answer/close blocking
+//                         extension UI dialogs and toasts
+//   setOnSessionSwitched(fn) — wired once from main.js to refresh the sidebar's
+//                         chat list after a switch or a settled turn
 import { reactive, shallowRef } from "vue";
 
 function initialStore() {

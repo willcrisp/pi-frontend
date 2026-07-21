@@ -1,7 +1,10 @@
+<!--
+  Floating index of the prompts sent in this chat, shown faded in the gutter
+  left of the message column. Clicking an entry scrolls its message into view;
+  hovering reveals a fork button (forkFrom in pi.js) that branches the session
+  at that prompt. Entries are paired positionally with store.forkMessages.
+-->
 <script setup>
-// Floating index of the prompts sent in this chat, shown faded in the gutter
-// left of the message column. Clicking an entry scrolls its message into view;
-// hovering reveals a fork button that branches the session at that prompt.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { forkFrom, store } from "../../stores/pi.js";
 

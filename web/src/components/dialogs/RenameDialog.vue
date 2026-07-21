@@ -1,3 +1,9 @@
+<!--
+  Small modal for renaming the active chat's session (pi.js's
+  setSessionName), opened from ChatHeader's title button or the composer's
+  /name slash command. On success, refreshes the sidebar's session list
+  immediately rather than waiting for the next project/session switch.
+-->
 <script setup>
 import { nextTick, onMounted, ref } from "vue";
 import { setSessionName, store } from "../../stores/pi.js";

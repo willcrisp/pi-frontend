@@ -3,6 +3,13 @@
 // "this tool call is a file edit" from the call's arguments. Detection is by
 // argument shape rather than a fixed tool-name list so it keeps working across
 // pi versions and custom edit-like tools.
+//
+// Key exports:
+//   editDiffInfo(name, args) — detects an edit/write-shaped tool call, returns
+//     { path, hunks: [{oldText, newText}, ...] } or null
+//   lineDiff(oldText, newText) — LCS line diff -> [{type: "ctx"|"add"|"del", text}]
+//   collapseRows(rows, ctx) — collapses long unchanged runs to `ctx` lines of
+//     context per side, replacing the rest with {type: "skip", count}
 
 const PATH_KEYS = ["path", "file_path", "filePath", "file", "absolute_path"];
 const OLD_KEYS = ["oldText", "old_text", "old_str", "old_string", "oldString"];
