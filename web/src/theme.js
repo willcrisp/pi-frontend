@@ -122,6 +122,45 @@ function applyFontSize(px) {
   document.documentElement.style.setProperty("--msg-font-size", `${px}px`);
 }
 
+// Thinking text size as a percentage of the regular message size.
+const THINKING_SIZE_KEY = "pi-web:thinking-size";
+export const THINKING_SIZE_MIN = 60;
+export const THINKING_SIZE_MAX = 100;
+const THINKING_SIZE_DEFAULT = 85;
+
+function loadStoredThinkingSize() {
+  const raw = Number(localStorage.getItem(THINKING_SIZE_KEY));
+  return Number.isFinite(raw) && raw >= THINKING_SIZE_MIN && raw <= THINKING_SIZE_MAX
+    ? raw
+    : THINKING_SIZE_DEFAULT;
+}
+
+export const thinkingSize = reactive({ percent: loadStoredThinkingSize() });
+
+function applyThinkingSize(percent) {
+  document.documentElement.style.setProperty("--thinking-font-scale", `${percent / 100}`);
+}
+
+export function setThinkingSize(percent) {
+  thinkingSize.percent = Math.min(
+    THINKING_SIZE_MAX,
+    Math.max(THINKING_SIZE_MIN, Math.round(percent))
+  );
+}
+
+applyThinkingSize(thinkingSize.percent);
+watch(
+  () => thinkingSize.percent,
+  (percent) => {
+    applyThinkingSize(percent);
+    try {
+      localStorage.setItem(THINKING_SIZE_KEY, String(percent));
+    } catch {
+      // storage unavailable — in-memory only
+    }
+  }
+);
+
 export function setFontSize(px) {
   fontSize.px = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, px));
 }

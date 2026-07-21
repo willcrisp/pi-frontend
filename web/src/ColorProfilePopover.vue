@@ -7,6 +7,8 @@ import {
   resetColors,
   fontSize,
   setFontSize,
+  thinkingSize,
+  setThinkingSize,
   contentWidth,
   setContentWidth,
   CONTENT_WIDTH_MIN,
@@ -91,6 +93,27 @@ onUnmounted(() => {
             class="font-size-btn"
             title="Increase font size"
             @click="setFontSize(fontSize.px + 1)"
+          >+</button>
+        </div>
+      </div>
+
+      <div class="colors-divider"></div>
+
+      <div class="colors-row font-size-row">
+        <span class="colors-label">thinking size</span>
+        <div class="font-size-control">
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Decrease thinking text size"
+            @click="setThinkingSize(thinkingSize.percent - 5)"
+          >−</button>
+          <span class="font-size-value">{{ thinkingSize.percent }}%</span>
+          <button
+            type="button"
+            class="font-size-btn"
+            title="Increase thinking text size"
+            @click="setThinkingSize(thinkingSize.percent + 5)"
           >+</button>
         </div>
       </div>

@@ -1472,7 +1472,7 @@ main {
 
 .thinking {
   color: var(--msg-thinking);
-  font-size: 0.85em;
+  font-size: calc(var(--msg-font-size) * var(--thinking-font-scale));
   font-style: italic;
   opacity: 0.75;
 }
