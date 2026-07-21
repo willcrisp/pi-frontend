@@ -84,7 +84,7 @@ pi bridge at all:
   and bridges its stdio, same pattern as the per-project bridge but 1:1 and
   short-lived. It resolves pi's bundled `node` + package dir from the `pi`
   launcher location (`resolve_pi_node`).
-- `web/src/auth.js` + `ConnectDialog.vue` — reactive `authStore` + the
+- `web/src/stores/auth.js` + `ConnectDialog.vue` — reactive `authStore` + the
   connect modal (opened from the sidebar "connect model" button).
 
 Credentials land in pi's `auth.json` on the machine running the helper.
@@ -95,7 +95,7 @@ handler sends an error frame and closes; connect there is still done with
 
 ### The protocol boundary is in the browser, not the server
 
-The single most important thing to know: `server/src/main.rs` never deserializes the JSON it shuttles between `pi`'s stdio and the WebSocket. All protocol knowledge — every RPC command name, every event type, every payload shape — lives in `web/src/pi.js`. When adding support for a new pi RPC command or event, there is nothing to change server-side; do it entirely in `pi.js` (and the Vue components that consume the store).
+The single most important thing to know: `server/src/main.rs` never deserializes the JSON it shuttles between `pi`'s stdio and the WebSocket. All protocol knowledge — every RPC command name, every event type, every payload shape — lives in `web/src/stores/pi.js`. When adding support for a new pi RPC command or event, there is nothing to change server-side; do it entirely in `pi.js` (and the Vue components that consume the store).
 
 ### Data flow
 
@@ -114,7 +114,7 @@ one pi child process per chat (stdin/stdout, newline-delimited JSON)
      or over SSH — see "Sub-agent support" below)
         │  (WebSocket, one JSON object per text frame)
         ▼
-web/src/pi.js
+web/src/stores/pi.js
    - one live connection + reactive state object per visited chat
      (connIndex); the exported `store` is a proxy over the active chat's
      state, so switching chats/projects just re-points it — nothing is
@@ -130,7 +130,7 @@ web/src/pi.js
      mutating that chat's reactive state
         │
         ▼
-web/src/projects.js — REST client + reactive `projectsStore` for the
+web/src/stores/projects.js — REST client + reactive `projectsStore` for the
    project list and the current project's session (chat) list
         │
         ▼

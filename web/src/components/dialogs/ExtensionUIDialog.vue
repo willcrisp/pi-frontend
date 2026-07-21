@@ -5,7 +5,7 @@
 // oldest pending request and works through the queue. Follows the
 // ConnectDialog pattern and reuses its connect-* styles.
 import { computed, ref, watch } from "vue";
-import { respondExtensionUI, store } from "./pi.js";
+import { respondExtensionUI, store } from "../../stores/pi.js";
 
 const current = computed(() => store.uiRequests[0] || null);
 const value = ref("");

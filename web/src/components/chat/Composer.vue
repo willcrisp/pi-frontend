@@ -12,9 +12,9 @@ import {
   setModel,
   setThinkingLevel,
   store,
-} from "./pi.js";
-import { openRenameDialog } from "./renameDialog.js";
-import { startNewChat } from "./projects.js";
+} from "../../stores/pi.js";
+import { openRenameDialog } from "../../stores/renameDialog.js";
+import { startNewChat } from "../../stores/projects.js";
 import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
 

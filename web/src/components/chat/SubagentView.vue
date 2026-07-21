@@ -6,8 +6,8 @@
 // re-renders from store.toolResults[toolCallId] reactively — no local
 // accumulation needed.
 import { computed, onUnmounted, ref, watch } from "vue";
-import { store, subagentDetails } from "./pi.js";
-import { renderMarkdown } from "./markdown.js";
+import { store, subagentDetails } from "../../stores/pi.js";
+import { renderMarkdown } from "../../lib/markdown.js";
 
 const props = defineProps({
   toolCallId: { type: String, required: true },

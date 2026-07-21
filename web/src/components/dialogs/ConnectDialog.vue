@@ -7,7 +7,7 @@ import {
   logout,
   respondPrompt,
   cancelLogin,
-} from "./auth.js";
+} from "../../stores/auth.js";
 
 const filter = ref("");
 const promptValue = ref("");

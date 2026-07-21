@@ -1,6 +1,6 @@
 import { watch } from "vue";
-import { projectsStore } from "./projects.js";
-import { store } from "./pi.js";
+import { projectsStore } from "../stores/projects.js";
+import { store } from "../stores/pi.js";
 
 function createFavicon(isWorking) {
   const color = isWorking ? "#fbbf24" : "#22c55e"; // yellow if working, green if ready

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { projectsStore } from "./projects.js";
-import { gitStore, fetchBranches } from "./git.js";
+import { projectsStore } from "../../stores/projects.js";
+import { gitStore, fetchBranches } from "../../stores/git.js";
 
 const root = ref(null);
 const open = ref(false);

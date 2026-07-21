@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { chatIndicator, projectIndicator, store } from "./pi.js";
+import { chatIndicator, projectIndicator, store } from "../../stores/pi.js";
 import {
   addProject,
   isArchived,
@@ -10,8 +10,8 @@ import {
   selectProject,
   startNewChat,
   toggleArchive,
-} from "./projects.js";
-import { openConnect } from "./auth.js";
+} from "../../stores/projects.js";
+import { openConnect } from "../../stores/auth.js";
 
 const showAddForm = ref(false);
 const newName = ref("");

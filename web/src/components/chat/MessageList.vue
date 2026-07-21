@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { store } from "./pi.js";
+import { store } from "../../stores/pi.js";
 import MessageView from "./MessageView.vue";
 import MessageRail from "./MessageRail.vue";
 

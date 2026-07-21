@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { store, subagentDetails } from "./pi.js";
+import { store, subagentDetails } from "../../stores/pi.js";
 
 // Flattened from store.toolResults rather than tracked separately, so a
 // reconnect's get_messages backfill can't produce duplicate entries.

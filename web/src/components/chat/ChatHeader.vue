@@ -1,13 +1,13 @@
 <script setup>
 import { computed } from "vue";
-import { store, subagentDetails } from "./pi.js";
-import { openAgents } from "./agents.js";
-import { openRenameDialog } from "./renameDialog.js";
-import UsagePopover from "./UsagePopover.vue";
-import ColorProfilePopover from "./ColorProfilePopover.vue";
-import SshPopover from "./SshPopover.vue";
-import CoderMenu from "./CoderMenu.vue";
-import pixelBrainFire from "./assets/pixel-brain-fire.svg";
+import { store, subagentDetails } from "../../stores/pi.js";
+import { openAgents } from "../../stores/agents.js";
+import { openRenameDialog } from "../../stores/renameDialog.js";
+import UsagePopover from "../popovers/UsagePopover.vue";
+import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
+import SshPopover from "../popovers/SshPopover.vue";
+import CoderMenu from "../popovers/CoderMenu.vue";
+import pixelBrainFire from "../../assets/pixel-brain-fire.svg";
 
 const DUMB_ZONE_THRESHOLD = 150_000;
 

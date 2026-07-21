@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { THINKING_LEVELS, store } from "./pi.js";
-import { projectsStore } from "./projects.js";
+import { THINKING_LEVELS, store } from "../../stores/pi.js";
+import { projectsStore } from "../../stores/projects.js";
 import {
   agentsStore,
   closeAgents,
@@ -10,7 +10,7 @@ import {
   joinModelThinking,
   saveAgent,
   splitModelThinking,
-} from "./agents.js";
+} from "../../stores/agents.js";
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 

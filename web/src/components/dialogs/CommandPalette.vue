@@ -2,7 +2,7 @@
 // Ctrl/Cmd+K command palette: fuzzy jump between projects and the current
 // project's chats. Always mounted from App.vue; owns its global hotkey.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { isArchived, openSession, projectsStore, selectProject } from "./projects.js";
+import { isArchived, openSession, projectsStore, selectProject } from "../../stores/projects.js";
 
 const open = ref(false);
 const query = ref("");

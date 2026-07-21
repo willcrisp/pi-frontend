@@ -3,7 +3,7 @@
 // left of the message column. Clicking an entry scrolls its message into view;
 // hovering reveals a fork button that branches the session at that prompt.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { forkFrom, store } from "./pi.js";
+import { forkFrom, store } from "../../stores/pi.js";
 
 const props = defineProps({
   // The scrollable <main> the message elements live in, for scroll tracking.

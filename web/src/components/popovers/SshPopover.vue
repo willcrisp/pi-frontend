@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from "vue";
-import { store } from "./pi.js";
-import { sshStore, fetchSshConfig, testSshConfig, saveSshConfig, clearSshConfig } from "./ssh.js";
+import { store } from "../../stores/pi.js";
+import { sshStore, fetchSshConfig, testSshConfig, saveSshConfig, clearSshConfig } from "../../stores/ssh.js";
 
 const root = ref(null);
 const open = ref(false);

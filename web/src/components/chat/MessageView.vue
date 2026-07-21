@@ -6,9 +6,9 @@ import {
   handoverFromText,
   store,
   subagentDetails,
-} from "./pi.js";
-import { renderMarkdown } from "./markdown.js";
-import { collapseRows, editDiffInfo, lineDiff } from "./diff.js";
+} from "../../stores/pi.js";
+import { renderMarkdown } from "../../lib/markdown.js";
+import { collapseRows, editDiffInfo, lineDiff } from "../../lib/diff.js";
 import SubagentView from "./SubagentView.vue";
 
 const props = defineProps({

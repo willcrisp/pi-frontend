@@ -1,8 +1,8 @@
 <script setup>
 import { nextTick, onMounted, ref } from "vue";
-import { setSessionName, store } from "./pi.js";
-import { refreshCurrentSessions } from "./projects.js";
-import { closeRenameDialog } from "./renameDialog.js";
+import { setSessionName, store } from "../../stores/pi.js";
+import { refreshCurrentSessions } from "../../stores/projects.js";
+import { closeRenameDialog } from "../../stores/renameDialog.js";
 
 const value = ref(store.sessionName || "");
 const inputEl = ref(null);

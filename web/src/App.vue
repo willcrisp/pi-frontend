@@ -1,20 +1,20 @@
 <script setup>
-import { projectsStore } from "./projects.js";
-import { authStore } from "./auth.js";
-import { agentsStore } from "./agents.js";
-import { renameDialogStore } from "./renameDialog.js";
-import { dismissUiNotice, store } from "./pi.js";
-import ChatHeader from "./ChatHeader.vue";
-import Composer from "./Composer.vue";
-import MessageList from "./MessageList.vue";
-import Sidebar from "./Sidebar.vue";
-import ConnectDialog from "./ConnectDialog.vue";
-import AgentsDialog from "./AgentsDialog.vue";
-import RenameDialog from "./RenameDialog.vue";
-import SshPopover from "./SshPopover.vue";
-import ExtensionUIDialog from "./ExtensionUIDialog.vue";
-import CoderMenu from "./CoderMenu.vue";
-import CommandPalette from "./CommandPalette.vue";
+import { projectsStore } from "./stores/projects.js";
+import { authStore } from "./stores/auth.js";
+import { agentsStore } from "./stores/agents.js";
+import { renameDialogStore } from "./stores/renameDialog.js";
+import { dismissUiNotice, store } from "./stores/pi.js";
+import ChatHeader from "./components/chat/ChatHeader.vue";
+import Composer from "./components/chat/Composer.vue";
+import MessageList from "./components/chat/MessageList.vue";
+import Sidebar from "./components/sidebar/Sidebar.vue";
+import ConnectDialog from "./components/dialogs/ConnectDialog.vue";
+import AgentsDialog from "./components/dialogs/AgentsDialog.vue";
+import RenameDialog from "./components/dialogs/RenameDialog.vue";
+import SshPopover from "./components/popovers/SshPopover.vue";
+import ExtensionUIDialog from "./components/dialogs/ExtensionUIDialog.vue";
+import CoderMenu from "./components/popovers/CoderMenu.vue";
+import CommandPalette from "./components/dialogs/CommandPalette.vue";
 </script>
 
 <template>

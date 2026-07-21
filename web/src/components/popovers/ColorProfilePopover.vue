@@ -13,7 +13,7 @@ import {
   setContentWidth,
   CONTENT_WIDTH_MIN,
   CONTENT_WIDTH_MAX,
-} from "./theme.js";
+} from "../../stores/theme.js";
 
 const root = ref(null);
 const open = ref(false);

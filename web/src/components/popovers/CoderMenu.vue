@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { coderStore, fetchWorkspaces, startWorkspace, stopWorkspace, isRunning, isBusy } from "./coder.js";
+import { coderStore, fetchWorkspaces, startWorkspace, stopWorkspace, isRunning, isBusy } from "../../stores/coder.js";
 
 const root = ref(null);
 const open = ref(false);
