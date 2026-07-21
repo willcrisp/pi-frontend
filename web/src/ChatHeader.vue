@@ -38,17 +38,31 @@ const subagentTokens = computed(() => {
       if (u) total += (u.input || 0) + (u.output || 0);
     }
   }
-  return total > 0 ? fmtTokens(total) : null;
+  return input + output > 0 ? `sub ${fmtTokens(input)}/${fmtTokens(output)}` : null;
+});
+
+const contextPercent = computed(() => {
+  const percent = store.sessionStats?.contextUsage?.percent;
+  return percent != null ? `${Math.round(percent)}% ctx` : null;
+});
+
+// The dumb zone is based on this chat's cumulative input/output usage. Pi's
+// session totals exclude the separately reported sub-agent usage, which is
+// exactly what we want here.
+const dumbZoneActive = computed(() => {
+  const tokens = store.sessionStats?.tokens;
+  if (!tokens) return false;
+  return (tokens.input || 0) + (tokens.output || 0) > DUMB_ZONE_THRESHOLD;
 });
 
 const titleText = computed(() => {
-  const name = store.sessionName || "untitled";
-  if (totalTokens.value == null) return name;
-  const tokens =
-    subagentTokens.value != null
-      ? `${totalTokens.value} : ${subagentTokens.value}`
-      : totalTokens.value;
-  return `${name} · ${tokens}`;
+  const parts = [];
+  if (store.sessionName) parts.push(store.sessionName);
+  if (tokenSummary.value != null) parts.push(tokenSummary.value);
+  if (dumbZoneActive.value) parts.push("dumb zone: over 150k input/output tokens");
+  if (contextPercent.value) parts.push(contextPercent.value);
+  if (subagentTokens.value) parts.push(subagentTokens.value);
+  return parts.join(" · ");
 });
 
 function renameSession() {

@@ -185,11 +185,16 @@ function relativeTime(ms) {
             :title="projectIndicator(p.id) === 'working' ? 'Agent working' : 'Unread response'"
           ></span>
           <span class="project-name" :title="p.path">{{ p.name }}</span>
+          <button
+            v-if="p.id === projectsStore.currentProjectId && !showArchived"
+            class="new-chat-btn"
+            title="New chat"
+            @click.stop="startNewChat"
+          >+</button>
           <button class="icon-btn remove-btn" title="Remove project" @click.stop="onRemove(p.id, p.name)">×</button>
         </div>
 
         <div v-if="p.id === projectsStore.currentProjectId" class="chat-history">
-          <div v-if="!showArchived" class="chat-row new-chat" @click="startNewChat">+ new chat</div>
           <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading…</div>
           <template v-else>
             <div
