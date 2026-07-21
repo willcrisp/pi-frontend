@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   BUILTIN_SLASH_COMMANDS,
   THINKING_LEVELS,
@@ -194,6 +194,22 @@ function onModelChange(e) {
 function onThinkingChange(e) {
   setThinkingLevel(e.target.value);
 }
+
+function onThinkingShortcut(e) {
+  if (!(e.ctrlKey || e.metaKey) || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+  if (thinkingDisabled.value) return;
+
+  const current = THINKING_LEVELS.indexOf(store.thinkingLevel);
+  const index = current < 0 ? 0 : current;
+  const next = e.key === "ArrowUp" ? index + 1 : index - 1;
+  if (next < 0 || next >= THINKING_LEVELS.length) return;
+
+  e.preventDefault();
+  setThinkingLevel(THINKING_LEVELS[next]);
+}
+
+onMounted(() => window.addEventListener("keydown", onThinkingShortcut));
+onBeforeUnmount(() => window.removeEventListener("keydown", onThinkingShortcut));
 
 // While streaming, sends queue instead of prompting directly: "steer" delivers
 // after the current turn's tool calls, "followUp" once the agent finishes.
@@ -421,11 +437,6 @@ function autosize() {
           </option>
         </optgroup>
       </select>
-      <span
-        class="level-dot"
-        :title="thinkingDisabled ? 'Reasoning effort unavailable for this model' : `Reasoning effort: ${store.thinkingLevel}`"
-        :style="{ background: thinkingDisabled ? 'var(--dim)' : thinkingColor(store.thinkingLevel) }"
-      ></span>
       <select
         class="thinking-select"
         :value="store.thinkingLevel || ''"

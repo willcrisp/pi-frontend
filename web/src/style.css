@@ -190,9 +190,27 @@ body {
 }
 
 .project-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.new-chat-btn {
+  flex: none;
+  background: none;
+  border: 0;
+  color: #4ade80;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.new-chat-btn:hover {
+  color: #86efac;
 }
 
 .remove-btn {
@@ -2157,13 +2175,6 @@ button:hover {
 .controls select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.controls .level-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 ::-webkit-scrollbar {
