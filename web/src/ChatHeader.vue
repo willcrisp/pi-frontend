@@ -18,37 +18,45 @@ function fmtTokens(n) {
   return String(n);
 }
 
-// Input + output only, excluding cache tokens: cache reads are priced at a
-// fraction of fresh input, so counting them buries the cost signal.
-const totalTokens = computed(() => {
+// Cumulative input/output tokens for the session. Cache tokens are deliberately
+// omitted here; the usage popover shows them separately.
+const tokenSummary = computed(() => {
   const t = store.sessionStats?.tokens;
   if (!t) return null;
-  return fmtTokens((t.input || 0) + (t.output || 0));
+  return `${fmtTokens(t.input || 0)} in / ${fmtTokens(t.output || 0)} out`;
 });
 
 // Summed across every sub-agent dispatch in this chat, same flattening as
 // UsagePopover.vue (detection via the shared subagentDetails() helper).
 const subagentTokens = computed(() => {
-  let total = 0;
+  let input = 0;
+  let output = 0;
   for (const r of Object.values(store.toolResults)) {
     const details = subagentDetails(r);
     if (!details) continue;
     for (const sub of details.results) {
       const u = sub && typeof sub === "object" ? sub.usage : null;
-      if (u) total += (u.input || 0) + (u.output || 0);
+      if (u) {
+        input += u.input || 0;
+        output += u.output || 0;
+      }
     }
   }
-  return total > 0 ? fmtTokens(total) : null;
+  return input + output > 0 ? `${fmtTokens(input)} in / ${fmtTokens(output)} out` : null;
+});
+
+const contextPercent = computed(() => {
+  const percent = store.sessionStats?.contextUsage?.percent;
+  return percent != null ? `${Math.round(percent)}% ctx` : null;
 });
 
 const titleText = computed(() => {
   const name = store.sessionName || "untitled";
-  if (totalTokens.value == null) return name;
-  const tokens =
-    subagentTokens.value != null
-      ? `${totalTokens.value} : ${subagentTokens.value}`
-      : totalTokens.value;
-  return `${name} · ${tokens}`;
+  if (tokenSummary.value == null) return name;
+  const parts = [tokenSummary.value];
+  if (contextPercent.value) parts.push(contextPercent.value);
+  if (subagentTokens.value) parts.push(`sub: ${subagentTokens.value}`);
+  return `${name} · ${parts.join(" · ")}`;
 });
 
 function renameSession() {
