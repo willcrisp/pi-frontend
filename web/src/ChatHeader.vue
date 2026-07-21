@@ -127,8 +127,8 @@ function scrollToRunningSubagent() {
           v-if="dumbZoneActive"
           class="dumb-zone-brain"
           :src="pixelBrainFire"
-          alt="Dumb zone: context is above 150k tokens"
-          title="Dumb zone: context is above 150k tokens"
+          alt="Warning, entering the dumb zone"
+          title="warning, entering the dumb zone"
         />
         <span v-if="contextPercent"> · {{ contextPercent }}</span>
         <span v-if="subagentTokens"> · {{ subagentTokens }}</span>
