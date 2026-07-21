@@ -414,7 +414,7 @@ header .wordmark {
   padding: 0;
 }
 
-.header-title span {
+.header-title > span {
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
@@ -424,7 +424,29 @@ header .wordmark {
   border-radius: 4px;
 }
 
-.header-title:hover span {
+.header-title-content {
+  display: inline-flex !important;
+  align-items: center;
+}
+
+/* Replace the changing token value from below, making it roll upward rather
+   than snap to the next reading. */
+.token-roll-enter-active,
+.token-roll-leave-active {
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+
+.token-roll-enter-from {
+  opacity: 0;
+  transform: translateY(75%);
+}
+
+.token-roll-leave-to {
+  opacity: 0;
+  transform: translateY(-75%);
+}
+
+.header-title:hover > span {
   color: var(--fg);
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }

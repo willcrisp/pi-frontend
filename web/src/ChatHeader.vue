@@ -26,6 +26,13 @@ const tokenSummary = computed(() => {
   return `${fmtTokens(t.input || 0)} in / ${fmtTokens(t.output || 0)} out`;
 });
 
+// Use raw counts as the transition key so an update still animates when the
+// compact display (for example, 1.2k) has not rounded to a new value yet.
+const tokenSummaryKey = computed(() => {
+  const t = store.sessionStats?.tokens;
+  return t ? `${t.input || 0}:${t.output || 0}` : null;
+});
+
 // Summed across every sub-agent dispatch in this chat, same flattening as
 // UsagePopover.vue (detection via the shared subagentDetails() helper).
 const subagentTokens = computed(() => {
@@ -96,8 +103,18 @@ function scrollToRunningSubagent() {
       <CoderMenu />
       <span :title="modelLabel">{{ modelLabel }}</span>
     </div>
-    <button class="header-title" :title="'Rename session: ' + (store.sessionName || 'untitled')" @click="renameSession">
-      <span>{{ titleText }}</span>
+    <button class="header-title" :title="titleText" @click="renameSession">
+      <span class="header-title-content">
+        <span>{{ store.sessionName || "untitled" }}</span>
+        <template v-if="tokenSummary != null">
+          <span> · </span>
+          <Transition name="token-roll" mode="out-in">
+            <span :key="tokenSummaryKey" class="token-summary-value">{{ tokenSummary }}</span>
+          </Transition>
+        </template>
+        <span v-if="contextPercent"> · {{ contextPercent }}</span>
+        <span v-if="subagentTokens"> · {{ subagentTokens }}</span>
+      </span>
     </button>
     <div class="header-right">
       <button

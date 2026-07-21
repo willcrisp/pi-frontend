@@ -201,6 +201,7 @@ function createConn(projectId, key, chatId, intendedSession, { freshChat = false
     ws: null,
     closed: false,
     currentIndex: -1, // index into state.messages of the streaming assistant message
+    statsPollTimer: null,
     lastActiveAt: Date.now(),
   };
   connIndex[key] = conn;
@@ -222,6 +223,7 @@ function evictIdleConns() {
 
 function closeConn(conn) {
   conn.closed = true;
+  stopStatsPolling(conn);
   if (conn.ws) {
     conn.ws.onclose = null; // no auto-reconnect for an intentional close
     conn.ws.close();
@@ -238,6 +240,23 @@ export function dropProject(projectId) {
   }
   if (activeRef.value?.projectId === projectId) activeRef.value = null;
   if (currentProjectId === projectId) currentProjectId = null;
+}
+
+// Session stats are not pushed while pi is generating a response. Poll only
+// during a run so the header and usage popover can show progress without
+// adding a background request for idle chats.
+function startStatsPolling(conn) {
+  if (conn.statsPollTimer) return;
+  sendTo(conn, { type: "get_session_stats" });
+  conn.statsPollTimer = setInterval(() => {
+    if (conn.state.streaming) sendTo(conn, { type: "get_session_stats" });
+  }, 10_000);
+}
+
+function stopStatsPolling(conn) {
+  if (!conn.statsPollTimer) return;
+  clearInterval(conn.statsPollTimer);
+  conn.statsPollTimer = null;
 }
 
 function connectConn(conn) {
@@ -552,9 +571,11 @@ function handle(conn, ev) {
 
     case "agent_start":
       s.streaming = true;
+      startStatsPolling(conn);
       break;
     case "agent_settled":
       s.streaming = false;
+      stopStatsPolling(conn);
       conn.currentIndex = -1;
       sendTo(conn, { type: "get_session_stats" });
       // The turn that just settled added a user message to the branch, so the
@@ -708,6 +729,8 @@ function handleResponse(conn, ev) {
     s.model = ev.data.model || null;
     s.thinkingLevel = ev.data.thinkingLevel || null;
     s.streaming = ev.data.isStreaming;
+    if (s.streaming) startStatsPolling(conn);
+    else stopStatsPolling(conn);
     s.sessionName = ev.data.sessionName || null;
     s.processError = null;
   } else if (ev.command === "get_available_models") {
