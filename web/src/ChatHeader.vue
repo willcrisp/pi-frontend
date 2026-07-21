@@ -60,18 +60,20 @@ const contextPercent = computed(() => {
   return percent != null ? `${Math.round(percent)}% ctx` : null;
 });
 
-// Context usage is distinct from cumulative session token totals: this is the
-// number of tokens currently competing for space in the model's context.
+// The dumb zone is based on this chat's cumulative input/output usage. Pi's
+// session totals exclude the separately reported sub-agent usage, which is
+// exactly what we want here.
 const dumbZoneActive = computed(() => {
-  const tokens = store.sessionStats?.contextUsage?.tokens;
-  return tokens != null && tokens > DUMB_ZONE_THRESHOLD;
+  const tokens = store.sessionStats?.tokens;
+  if (!tokens) return false;
+  return (tokens.input || 0) + (tokens.output || 0) > DUMB_ZONE_THRESHOLD;
 });
 
 const titleText = computed(() => {
   const parts = [];
   if (store.sessionName) parts.push(store.sessionName);
   if (tokenSummary.value != null) parts.push(tokenSummary.value);
-  if (dumbZoneActive.value) parts.push("dumb zone: context above 150k");
+  if (dumbZoneActive.value) parts.push("dumb zone: over 150k input/output tokens");
   if (contextPercent.value) parts.push(contextPercent.value);
   if (subagentTokens.value) parts.push(subagentTokens.value);
   return parts.join(" · ");

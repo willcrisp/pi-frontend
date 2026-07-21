@@ -44,9 +44,8 @@ const subagentTotals = computed(() => {
   );
 });
 
-const grandTotalTokens = computed(() => {
-  const session = store.sessionStats?.tokens?.total || 0;
-  return session + subagentTotals.value.input + subagentTotals.value.output;
+const subagentTotalTokens = computed(() => {
+  return subagentTotals.value.input + subagentTotals.value.output;
 });
 
 const grandTotalCost = computed(() => {
@@ -132,7 +131,7 @@ function formatDuration(ms) {
       <template v-if="subagentRuns.length">
         <div class="usage-row usage-heading">
           <span>Sub-agents</span>
-          <strong>{{ formatTokens(grandTotalTokens) }} total</strong>
+          <strong>{{ formatTokens(subagentTotalTokens) }} total</strong>
         </div>
         <div v-for="run in subagentRuns" :key="run.id" class="usage-agent">
           <div class="usage-row">
