@@ -159,10 +159,12 @@ function diffFor(block) {
         alt=""
       />
 
-      <details v-else-if="block.type === 'thinking'" class="thinking">
-        <summary title="Click to expand/collapse">thinking</summary>
-        {{ block.thinking }}
-      </details>
+      <div
+        v-else-if="block.type === 'thinking'"
+        class="thinking markdown"
+        v-html="renderMarkdown(block.thinking)"
+        @click="onMarkdownClick"
+      ></div>
 
       <SubagentView
         v-else-if="block.type === 'toolCall' && isSubagent(block)"

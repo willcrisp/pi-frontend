@@ -1442,16 +1442,7 @@ main {
 .thinking {
   color: var(--msg-thinking);
   font-style: italic;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-}
-
-.thinking summary {
-  cursor: pointer;
-  font-style: normal;
-  font-family: var(--mono);
-  font-size: 12px;
-  user-select: none;
+  opacity: 0.75;
 }
 
 /* tool calls */
