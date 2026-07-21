@@ -36,10 +36,11 @@ Prerequisites: Rust (`cargo`), Node.js, and `pi` installed and importable
 `C:\Users\crispy\AppData\Local\pi-node\current`, already on `PATH`).
 
 ```sh
-# one-time: build the frontend
+# one-time: build the frontend (the server embeds web/dist into the binary
+# at compile time, so build it first)
 cd web && npm install && npm run build
 
-# run the server (from the repo root), pointing --cwd at the project
+# build/run the server (from the repo root), pointing --cwd at the project
 # you want pi to work on — NOT at pi's own install directory
 cd server && cargo run --release -- --cwd C:\path\to\your\project
 ```
@@ -48,6 +49,14 @@ Open http://127.0.0.1:3210. `--cwd` only seeds the first project on the very
 first run (so the old single-project workflow still works out of the box);
 after that, add/remove projects from the sidebar and the list persists across
 restarts.
+
+`cargo build --release` produces a single self-contained
+`server/target/release/pi-web-server(.exe)` — the frontend and the login
+helper script are embedded into the binary at compile time, so it can be
+copied anywhere and run without the source tree (it still needs `pi` itself
+installed and a writable `--data-dir`, `~/.pi-web` by default). `--web-dir`
+and `--login-helper` remain available to override the embedded copies, e.g.
+for the frontend dev loop.
 
 If `pi` isn't on `PATH`, pass its full path explicitly instead:
 
@@ -62,7 +71,8 @@ Server flags:
 | `--port N` | `3210` | HTTP/WS port (binds 127.0.0.1 only) |
 | `--cwd DIR` | `.` | Working directory for the seed project on first run, local or on the remote host (`--ssh` mode) |
 | `--pi-bin PATH` | `pi` | pi executable, local or remote |
-| `--web-dir DIR` | `web/dist` | Built frontend to serve |
+| `--web-dir DIR` | *(embedded)* | Serve the frontend from a live directory instead of the copy embedded in the binary (dev loop) |
+| `--login-helper PATH` | *(embedded)* | Use an on-disk login helper script instead of the copy embedded in the binary |
 | `--data-dir DIR` | `~/.pi-web` | Where `projects.json` is persisted |
 | `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally |
 | `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |

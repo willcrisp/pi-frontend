@@ -17,7 +17,7 @@ Always work of main branch and commit directly too it
 ## Commands
 
 
-Build the frontend (one-time or after frontend changes), then run the server:
+Build the frontend (one-time or after frontend changes) — `server/` embeds `web/dist` into the binary at compile time via `rust-embed`, so it must exist before building the server — then run the server:
 
 ```sh
 cd web && npm install && npm run build
@@ -54,8 +54,8 @@ There is no test suite or linter configured in either project.
 | `--port N` | `3210` | HTTP/WS port (binds `127.0.0.1` only) |
 | `--cwd DIR` | `.` | Working directory for the seed project on first run, local or on the remote host (`--ssh` mode) |
 | `--pi-bin PATH` | `pi` | pi executable, local or remote |
-| `--web-dir DIR` | `web/dist` | Built frontend to serve |
-| `--login-helper PATH` | `server/pi-login/login-helper.mjs` | Node script driving pi's provider connect flow (see "Provider connect") |
+| `--web-dir DIR` | *(embedded)* | Serve the frontend from a live directory instead of the `web/dist` copy embedded into the binary at compile time (dev loop) |
+| `--login-helper PATH` | *(embedded)* | Node script driving pi's provider connect flow (see "Provider connect"); overrides the copy embedded into the binary at compile time |
 | `--data-dir DIR` | `~/.pi-web` | Where `projects.json` is persisted |
 | `--ssh user@host` | | Relay mode: exec pi for every project over SSH on one remote machine instead of spawning it locally. Only seeds `<data-dir>/ssh.json` on the very first run — after that, edit the target from the popup on the header's connection dot (`/api/ssh`) instead of restarting with new flags |
 | `--ssh-identity PATH` | | Private key for `--ssh` (omit if the remote uses Tailscale SSH / an agent) |

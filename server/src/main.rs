@@ -59,8 +59,21 @@ use tokio::{
     process::Command,
     sync::{broadcast, mpsc, Mutex, RwLock},
 };
+use axum::http::{header, Uri};
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
+
+/// The built frontend (`web/dist`), embedded into the binary at compile
+/// time so the server needs no files from the source tree at runtime.
+/// `--web-dir DIR` overrides this with a live directory for the dev loop.
+#[derive(rust_embed::Embed)]
+#[folder = "../web/dist"]
+struct WebAssets;
+
+/// The bundled login helper script, embedded into the binary so it doesn't
+/// need to exist on disk relative to the source tree; `--login-helper PATH`
+/// overrides this with a real on-disk file.
+const LOGIN_HELPER_SRC: &str = include_str!("../pi-login/login-helper.mjs");
 
 /// Persisted project metadata (`<data-dir>/projects.json`).
 #[derive(Clone, Serialize, Deserialize)]
@@ -111,9 +124,9 @@ struct Config {
     cwd: PathBuf,
     pi_bin: String,
     coder_bin: String,
-    web_dir: PathBuf,
+    web_dir: Option<PathBuf>,
     data_dir: PathBuf,
-    login_helper: PathBuf,
+    login_helper: Option<PathBuf>,
     pi_args: Vec<String>,
     ssh_host: Option<String>,
     ssh_identity: Option<String>,
@@ -165,9 +178,9 @@ fn parse_args() -> Config {
         cwd: PathBuf::from("."),
         pi_bin: "pi".into(),
         coder_bin: "coder".into(),
-        web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist")),
+        web_dir: None,
         data_dir: default_data_dir(),
-        login_helper: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/pi-login/login-helper.mjs")),
+        login_helper: None,
         pi_args: Vec::new(),
         ssh_host: None,
         ssh_identity: None,
@@ -180,8 +193,8 @@ fn parse_args() -> Config {
             "--cwd" => cfg.cwd = args.next().expect("--cwd needs a value").into(),
             "--pi-bin" => cfg.pi_bin = args.next().expect("--pi-bin needs a value"),
             "--coder-bin" => cfg.coder_bin = args.next().expect("--coder-bin needs a value"),
-            "--web-dir" => cfg.web_dir = args.next().expect("--web-dir needs a value").into(),
-            "--login-helper" => cfg.login_helper = args.next().expect("--login-helper needs a value").into(),
+            "--web-dir" => cfg.web_dir = Some(args.next().expect("--web-dir needs a value").into()),
+            "--login-helper" => cfg.login_helper = Some(args.next().expect("--login-helper needs a value").into()),
             "--data-dir" => cfg.data_dir = args.next().expect("--data-dir needs a value").into(),
             "--ssh" => cfg.ssh_host = Some(args.next().expect("--ssh needs a value (user@host)")),
             "--ssh-identity" => cfg.ssh_identity = Some(args.next().expect("--ssh-identity needs a value")),
@@ -210,8 +223,20 @@ fn shell_quote(s: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    let cfg = parse_args();
+    let mut cfg = parse_args();
     let _ = tokio::fs::create_dir_all(&cfg.data_dir).await;
+
+    // No --login-helper override: write the embedded helper script out to
+    // the data dir (overwritten unconditionally so upgrades take effect)
+    // and use that path, so the server needs no on-disk helper from the
+    // source tree at runtime.
+    if cfg.login_helper.is_none() {
+        let path = cfg.data_dir.join("login-helper.mjs");
+        if let Err(e) = tokio::fs::write(&path, LOGIN_HELPER_SRC).await {
+            eprintln!("warning: failed to write embedded login helper to {}: {e}", path.display());
+        }
+        cfg.login_helper = Some(path);
+    }
 
     // First run ever (no persisted ssh.json yet): seed from --ssh/etc, same
     // one-shot-seed treatment as --cwd below.
@@ -301,7 +326,6 @@ async fn main() {
 
     let port = state.cfg.port;
     let web_dir = state.cfg.web_dir.clone();
-    let index = web_dir.join("index.html");
 
     let app = Router::new()
         .route("/api/projects", get(list_projects).post(add_project))
@@ -317,14 +341,46 @@ async fn main() {
         .route("/api/projects/{id}/git/branches", get(list_git_branches))
         .route("/api/projects/{id}/git/checkout", post(checkout_git_branch))
         .route("/ws/{id}", get(ws_handler))
-        .route("/ws-auth", get(ws_auth_handler))
-        .fallback_service(ServeDir::new(&web_dir).fallback(ServeFile::new(index)))
-        .with_state(state);
+        .route("/ws-auth", get(ws_auth_handler));
+
+    let app = match web_dir {
+        Some(dir) => {
+            let index = dir.join("index.html");
+            app.fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(index)))
+        }
+        None => app.fallback(serve_embedded_asset),
+    }
+    .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
     eprintln!("pi-web listening on http://{addr}");
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Fallback handler serving the frontend from the embedded `WebAssets`
+/// (`web/dist`, baked into the binary at compile time) when no `--web-dir`
+/// override is set. SPA fallback: any path that isn't a known asset (or is
+/// empty) serves `index.html`.
+async fn serve_embedded_asset(uri: Uri) -> impl IntoResponse {
+    let mut path = uri.path().trim_start_matches('/');
+    let mut asset = if path.is_empty() { None } else { WebAssets::get(path) };
+    if asset.is_none() {
+        path = "index.html";
+        asset = WebAssets::get(path);
+    }
+    match asset {
+        Some(file) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                file.data.into_owned(),
+            )
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 // ---- process lifecycle -----------------------------------------------
@@ -737,7 +793,7 @@ async fn handle_auth_socket(mut socket: WebSocket, state: Arc<AppState>) {
 
     let (node, pkg, node_modules) = resolve_pi_node(&state.cfg.pi_bin);
     let mut cmd = Command::new(&node);
-    cmd.arg(&state.cfg.login_helper);
+    cmd.arg(state.cfg.login_helper.as_ref().expect("login_helper resolved in main()"));
     if let Some(pkg) = &pkg {
         cmd.arg(pkg);
     }
