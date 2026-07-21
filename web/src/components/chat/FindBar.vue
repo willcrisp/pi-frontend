@@ -1,8 +1,9 @@
 <!--
-  Ctrl/Cmd+F find-in-transcript bar, floating over the message column (see
-  MessageList.vue, which mounts this and hands it the `.messages` element to
-  search). Owns its own global hotkey listener, same pattern as
-  CommandPalette.vue's Ctrl/Cmd+K.
+  Ctrl/Cmd+Shift+F find-in-transcript bar, floating over the message column
+  (see MessageList.vue, which mounts this and hands it the `.messages`
+  element to search). Owns its own global hotkey listener, same pattern as
+  CommandPalette.vue's Ctrl/Cmd+K. Plain Ctrl/Cmd+F is deliberately left to
+  the browser's native find — see onGlobalKey.
 
   Matches are highlighted via the CSS Custom Highlight API (`::highlight()`
   in style.css) rather than injected DOM wrapper nodes, because the message
@@ -177,10 +178,15 @@ function onInputKeydown(e) {
   }
 }
 
+// Ctrl/Cmd+*Shift*+F, deliberately not plain Ctrl/Cmd+F: that belongs to the
+// browser's own find, and swallowing it would take away a tool the user
+// already has (and one that searches the whole page, not just the
+// transcript). Shift+F also matches the "search the bigger thing" binding
+// editors use.
 function onGlobalKey(e) {
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && !e.altKey && e.key.toLowerCase() === "f") {
-    e.preventDefault(); // steal it from the browser's native find
+  if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+    e.preventDefault();
     if (open.value) {
       inputEl.value?.focus();
       inputEl.value?.select();

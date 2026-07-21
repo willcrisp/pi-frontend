@@ -42,6 +42,9 @@ cd web && npm install && npm run build
 
 # 2. build the server, which embeds web/dist
 cd ../server && cargo build --release
+
+#dev mode
+cargo run --release -- --web-dir ../web/dist
 ```
 
 The result is a single self-contained executable at
