@@ -1472,6 +1472,7 @@ main {
 
 .thinking {
   color: var(--msg-thinking);
+  font-size: 0.85em;
   font-style: italic;
   opacity: 0.75;
 }
