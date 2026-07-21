@@ -1,6 +1,12 @@
 <script setup>
 import { computed, ref } from "vue";
-import { forkFrom, store, subagentDetails } from "./pi.js";
+import {
+  continueFromHandover,
+  forkFrom,
+  handoverFromText,
+  store,
+  subagentDetails,
+} from "./pi.js";
 import { renderMarkdown } from "./markdown.js";
 import { collapseRows, editDiffInfo, lineDiff } from "./diff.js";
 import SubagentView from "./SubagentView.vue";
@@ -40,6 +46,10 @@ const messageText = computed(() =>
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("\n\n")
+);
+
+const handover = computed(() =>
+  props.message.role === "assistant" ? handoverFromText(messageText.value) : null
 );
 
 const copied = ref(false);
@@ -216,5 +226,19 @@ function diffFor(block) {
         <pre v-if="toolResult(block.id)?.text">{{ toolResult(block.id).text }}</pre>
       </details>
     </template>
+
+    <button
+      v-if="handover && !store.streaming"
+      type="button"
+      class="handover-continue"
+      title="Open a new chat with this handover attached"
+      @click="continueFromHandover(messageText)"
+    >
+      Continue in new chat
+      <span>{{ handover.label }}</span>
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </button>
   </div>
 </template>

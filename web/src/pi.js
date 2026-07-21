@@ -34,6 +34,10 @@ function initialStore() {
     // branched from, mirroring what pi's TUI does on /fork). Composer.vue
     // watches this and clears it once consumed.
     composerDraft: "",
+    // A generated handover attached to this fresh chat but not sent yet.
+    // Composer.vue renders it as a chip and includes its summary with the
+    // user's first prompt. { id, label, text } or null.
+    pendingHandover: null,
     // Pending steering/follow-up messages, mirrored from pi's queue_update
     // events. Shown as chips above the composer until pi delivers them.
     queue: { steering: [], followUp: [] },
@@ -173,6 +177,7 @@ export const BUILTIN_SLASH_COMMANDS = [
   { name: "export", description: "Export session as HTML" },
   { name: "copy", description: "Copy last agent message to clipboard" },
   { name: "compact", description: "Manually compact the session context" },
+  { name: "handover", description: "Summarize today's work and continue it in a new chat" },
 ];
 
 // Called when the sidebar's chat-history list may have gone stale — after a
@@ -375,7 +380,7 @@ export function resetChat() {
 // whatever the current chat's agent is doing keeps running untouched. If
 // we're already sitting on an unused new chat, reuse it instead of
 // spawning another process.
-export function newSession() {
+export function newSession({ handover = null } = {}) {
   if (!currentProjectId) return;
   const a = activeRef.value;
   if (
@@ -385,12 +390,15 @@ export function newSession() {
     !a.state.streaming &&
     a.state.messages.length === 0
   ) {
+    a.state.pendingHandover = handover;
     return;
   }
   const id = crypto.randomUUID
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  activate(createConn(currentProjectId, `new:${id}`, id, null, { freshChat: true }));
+  const conn = createConn(currentProjectId, `new:${id}`, id, null, { freshChat: true });
+  conn.state.pendingHandover = handover;
+  activate(conn);
   onSessionSwitched?.();
 }
 
@@ -484,6 +492,42 @@ export function exportSession() {
 export async function compactSession() {
   await request({ type: "compact" });
   send({ type: "get_session_stats" });
+}
+
+const HANDOVER_MARKER = /\[Handover ([a-z0-9]{6})\]/i;
+
+function randomHandoverId() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(6);
+  if (crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (n) => alphabet[n % alphabet.length]).join("");
+}
+
+export function handoverFromText(text) {
+  const match = HANDOVER_MARKER.exec(text || "");
+  if (!match || match.index > 40) return null;
+  const id = match[1].toLowerCase();
+  return { id, label: `[Handover ${id}]`, text };
+}
+
+export function createHandover() {
+  if (store.streaming) throw new Error("wait for the current response to finish");
+  const id = randomHandoverId();
+  sendPrompt(
+    `Create a critical handover summary of the work completed today in this session. ` +
+      `Capture what changed, important decisions and context, the current state and blockers, ` +
+      `and concrete next steps or plans. Be concise but preserve details another agent needs ` +
+      `to continue without this conversation. Begin the response exactly with "[Handover ${id}]".`
+  );
+  return id;
+}
+
+export function continueFromHandover(text) {
+  const handover = handoverFromText(text);
+  if (!handover) return false;
+  newSession({ handover });
+  return true;
 }
 
 export async function copyLastAssistantText() {

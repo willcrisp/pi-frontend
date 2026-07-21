@@ -6,6 +6,7 @@ import {
   abort,
   compactSession,
   copyLastAssistantText,
+  createHandover,
   exportSession,
   sendPrompt,
   setModel,
@@ -141,6 +142,9 @@ async function runBuiltinCommand(name) {
     } else if (name === "compact") {
       await compactSession();
       showToast("Session compacted");
+    } else if (name === "handover") {
+      const id = createHandover();
+      showToast(`Preparing [Handover ${id}]…`);
     }
   } catch (e) {
     showToast(`/${name} failed: ${e.message}`);
@@ -229,12 +233,23 @@ function isExtensionCommand(text) {
 
 function submit() {
   const text = input.value.trim();
-  if (!text && !pendingImages.value.length) return;
+  const handover = store.pendingHandover;
+  if (!text && !pendingImages.value.length && !handover) return;
   const queued = store.streaming && !isExtensionCommand(text);
-  sendPrompt(text, pendingImages.value, queued ? queueMode.value : null);
+  const prompt = handover
+    ? `${handover.text}\n\n---\n\n${
+        text ? `Additional instructions:\n${text}` : "Continue the work from this handover."
+      }`
+    : text;
+  sendPrompt(prompt, pendingImages.value, queued ? queueMode.value : null);
+  if (handover) store.pendingHandover = null;
   input.value = "";
   pendingImages.value = [];
   nextTick(autosize);
+}
+
+function removeHandover() {
+  store.pendingHandover = null;
 }
 
 function onKeydown(e) {
@@ -306,6 +321,16 @@ function autosize() {
 <template>
   <footer>
     <div v-if="toast" class="composer-toast">{{ toast }}</div>
+    <div v-if="store.pendingHandover" class="handover-chips">
+      <span
+        class="handover-chip"
+        title="This summary will be included with your first message"
+      >
+        {{ store.pendingHandover.label }}
+        <button type="button" title="Remove handover" @click="removeHandover">×</button>
+      </span>
+      <span class="handover-hint">add instructions, then send to begin</span>
+    </div>
     <div v-if="pendingImages.length" class="pending-images">
       <div v-for="(img, i) in pendingImages" :key="i" class="pending-image">
         <img :src="img.previewUrl" alt="" />
@@ -396,7 +421,7 @@ function autosize() {
                 ? 'Steer the agent with this message'
                 : 'Queue this message for after the agent finishes')
               : 'Send'"
-            :disabled="!input.trim() && !pendingImages.length"
+            :disabled="!input.trim() && !pendingImages.length && !store.pendingHandover"
             @click="submit"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
