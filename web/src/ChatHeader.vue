@@ -42,7 +42,7 @@ const subagentTokens = computed(() => {
       }
     }
   }
-  return input + output > 0 ? `${fmtTokens(input)} in / ${fmtTokens(output)} out` : null;
+  return input + output > 0 ? `sub ${fmtTokens(input)}/${fmtTokens(output)}` : null;
 });
 
 const contextPercent = computed(() => {
@@ -55,7 +55,7 @@ const titleText = computed(() => {
   if (tokenSummary.value == null) return name;
   const parts = [tokenSummary.value];
   if (contextPercent.value) parts.push(contextPercent.value);
-  if (subagentTokens.value) parts.push(`sub: ${subagentTokens.value}`);
+  if (subagentTokens.value) parts.push(subagentTokens.value);
   return `${name} · ${parts.join(" · ")}`;
 });
 
