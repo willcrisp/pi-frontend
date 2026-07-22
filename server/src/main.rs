@@ -171,17 +171,6 @@ struct AppState {
     /// concurrently and switching chats never disturbs a running one.
     running: RwLock<HashMap<String, Arc<RunningProcess>>>,
     ssh: RwLock<SshConfig>,
-    /// Per-chat rtk toggle, keyed by `chat_key(projectId, chatId)`. In-memory
-    /// only (no persistence) — a chat's setting survives that chat's own
-    /// idle-reap/respawn cycles (the server keeps running), but resets on a
-    /// full server restart. A key absent from the map means "never touched"
-    /// for that chat — no `RTK_DISABLED` env var is set either way, and
-    /// `/api/rtk`'s reported `enabled` falls back to whether the extension is
-    /// actually installed, so a manual `rtk init` a user already did isn't
-    /// clobbered by a server that's never had an opinion for that chat. A
-    /// present `true`/`false` is an explicit per-chat on/off — see
-    /// `spawn_child` and the `/api/rtk` handlers.
-    rtk: RwLock<HashMap<String, bool>>,
 }
 
 /// The current user's home directory (`$HOME`, or `%USERPROFILE%` on
@@ -303,7 +292,6 @@ async fn main() {
         projects: RwLock::new(projects),
         running: RwLock::new(HashMap::new()),
         ssh: RwLock::new(ssh_cfg),
-        rtk: RwLock::new(HashMap::new()),
     });
 
     if seed_needed {
@@ -366,7 +354,6 @@ async fn main() {
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
-        .route("/api/rtk", get(get_rtk_status).put(save_rtk_config))
         .route("/api/coder/workspaces", get(list_coder_workspaces))
         .route("/api/coder/start", post(start_coder_workspace))
         .route("/api/coder/stop", post(stop_coder_workspace))
@@ -482,15 +469,8 @@ async fn read_export_file(ssh: &SshConfig, path: &str) -> Option<Vec<u8>> {
 
 /// Spawns pi for one project's `cwd` — locally, or over SSH on `ssh.host`
 /// if set (in which case `cwd` is a path on the remote host, and every
-/// project shares that one remote host). `rtk_disabled` is this chat's
-/// stored `state.rtk` entry resolving to explicit `Some(&false)` (that chat's
-/// rtk toggle switched off) — see the `/api/rtk` handlers below; when it's
-/// `true` pi is spawned with `RTK_DISABLED=1` so the rtk pi extension (if
-/// installed) skips rewriting output for this process. A chat with no stored
-/// entry, or an explicit `true`, both spawn with no special env, on the
-/// theory that a missing opinion shouldn't touch a possibly-already-installed
-/// extension's behavior.
-fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) -> tokio::process::Child {
+/// project shares that one remote host).
+fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::Child {
     if let Some(ssh_host) = &ssh.host {
         // Relay mode: exec pi on a remote box over SSH instead of spawning it
         // locally. The whole remote command is built as one shell-quoted
@@ -504,12 +484,8 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) 
         // something pi itself printed. pi is only ever exec'd once that cd
         // has actually succeeded.
         let quoted_cwd = shell_quote(cwd.to_str().expect("project path must be valid UTF-8"));
-        // The env assignment has to precede `exec`'s command, not the whole
-        // `exec` word, to actually apply to the exec'd program
-        // (`RTK_DISABLED=1 exec pi ...`, not `exec RTK_DISABLED=1 pi ...`).
-        let rtk_prefix = if rtk_disabled { "RTK_DISABLED=1 " } else { "" };
         let mut remote_cmd = format!(
-            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; {RTK_PATH_EXPORT} {rtk_prefix}exec {} --mode rpc",
+            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; exec {} --mode rpc",
             shell_quote(&cfg.pi_bin)
         );
         for a in &cfg.pi_args {
@@ -551,17 +527,14 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) 
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if rtk_disabled {
-            cmd.env("RTK_DISABLED", "1");
-        }
         cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
     }
 }
 
 /// Spawns one chat's pi process and its bridge tasks. `key` is the
 /// `chat_key` this process is stored under in `running`.
-fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ssh: SshConfig, rtk_disabled: bool) -> Arc<RunningProcess> {
-    let mut child = spawn_child(&state.cfg, &ssh, &entry.path, rtk_disabled);
+fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ssh: SshConfig) -> Arc<RunningProcess> {
+    let mut child = spawn_child(&state.cfg, &ssh, &entry.path);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
@@ -711,14 +684,13 @@ async fn ensure_running(state: &Arc<AppState>, project_id: &str, chat_id: &str) 
     }
     let entry = state.projects.read().await.get(project_id)?.clone();
     let ssh = state.ssh.read().await.clone();
-    let rtk_disabled = state.rtk.read().await.get(&key) == Some(&false);
     let mut running = state.running.write().await;
     if let Some(p) = running.get(&key) {
         return Some((p.clone(), false));
     }
     log!("[{key}] no running process — cold-starting pi (this is what makes the first open of a chat slow)");
     let start = Instant::now();
-    let proc = spawn_process(state.clone(), key.clone(), entry, ssh, rtk_disabled);
+    let proc = spawn_process(state.clone(), key.clone(), entry, ssh);
     log!("[{key}] spawn_process returned after {:?} (process is spawned but may still be starting up before it responds on stdout)", start.elapsed());
     running.insert(key, proc.clone());
     Some((proc, true))
@@ -738,11 +710,10 @@ async fn respawn_key(state: &Arc<AppState>, key: &str) {
         return;
     };
     let ssh = state.ssh.read().await.clone();
-    let rtk_disabled = state.rtk.read().await.get(key) == Some(&false);
     let old = {
         let mut running = state.running.write().await;
         let old = running.remove(key);
-        let new_proc = spawn_process(state.clone(), key.to_string(), entry, ssh, rtk_disabled);
+        let new_proc = spawn_process(state.clone(), key.to_string(), entry, ssh);
         running.insert(key.to_string(), new_proc);
         old
     };
@@ -758,21 +729,6 @@ async fn respawn_all(state: &Arc<AppState>) {
     let keys: Vec<String> = state.running.read().await.keys().cloned().collect();
     for key in keys {
         respawn_key(state, &key).await;
-    }
-}
-
-/// Respawns one chat's pi process only if it isn't mid-run — used after
-/// toggling that chat's rtk setting (`save_rtk_config`), since restarting a
-/// working agent's pi process would abort its turn. A streaming chat picks
-/// up the new `RTK_DISABLED` state whenever it's next naturally
-/// respawned/reaped instead.
-async fn respawn_key_if_idle(state: &Arc<AppState>, key: &str) {
-    let streaming = match state.running.read().await.get(key) {
-        Some(p) => p.streaming.load(Ordering::Relaxed),
-        None => return,
-    };
-    if !streaming {
-        respawn_key(state, key).await;
     }
 }
 
@@ -1346,237 +1302,6 @@ async fn clear_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigV
     persist_ssh_config(&state).await;
     respawn_all(&state).await;
     Json(SshConfig::default().into())
-}
-
-// ---- rtk integration REST API -------------------------------------------
-//
-// rtk (https://github.com/rtk-ai/rtk) compresses dev-command output to save
-// agent tokens, via a pi extension: `rtk init --agent pi --global` writes
-// `~/.pi/agent/extensions/rtk.ts` on the machine that runs pi, which pi
-// auto-discovers at startup. The toggle itself is per-chat and in-memory
-// only (`AppState.rtk`, keyed by `chat_key`) — no persistence, so it resets
-// on a full server restart but survives that chat's own idle-reap/respawn
-// cycles. Turning it on for a chat ensures the extension is installed
-// host-wide and spawns that chat's pi with no special env; turning it off
-// spawns that chat's pi with `RTK_DISABLED=1` (which the extension checks
-// and skips rewriting for) but never uninstalls anything, and never affects
-// any other chat. Whether the `rtk` binary/extension are actually installed
-// remains genuinely host-wide — see `probe_rtk_binary`/`rtk_extension_installed`.
-
-/// Non-interactive SSH commands (`ssh host "cmd"`, which is exactly how
-/// `spawn_child` execs `pi` and how the probes/`rtk init` below run) don't
-/// source `~/.bashrc`/`~/.profile` the way an interactive login shell does,
-/// so a `rtk` installed via its own installer (`~/.local/bin`) or via
-/// `cargo install` (`~/.cargo/bin`) is invisible on PATH even though it
-/// resolves fine when a user is actually logged into the box — both to
-/// these probes and, just as importantly, to the `rtk` pi extension's own
-/// internal PATH check once `pi` is running. Spliced in ahead of every
-/// remote rtk-related command (and the `pi` exec itself) rather than relying
-/// on the remote shell's own startup files.
-const RTK_PATH_EXPORT: &str = r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH";"#;
-
-/// Result of a soft rtk probe: never a hard error to the caller, but keeps
-/// *why* a probe came back negative (ssh connection refused, auth failure,
-/// timeout, non-zero exit, ...) instead of collapsing every failure mode
-/// into an indistinguishable `false` — that distinction is what tells a user
-/// stuck on "rtk not installed" whether the actual problem is rtk itself or
-/// something upstream like the SSH target being unreachable.
-struct RtkProbe {
-    ok: bool,
-    detail: Option<String>,
-}
-
-/// Probes whether the `rtk` CLI is reachable on the pi host — locally, or
-/// over SSH via the shared `ssh_command` factory. `ok: false` covers "not
-/// installed", "not on PATH", an SSH connection/auth failure, or a timeout
-/// alike — `detail` carries whichever of those actually happened (the
-/// command's stderr, or a description of the timeout/spawn error) so it can
-/// be surfaced to the UI instead of guessed at. This is a soft check used
-/// for UI status and the enable-time availability guard, never a hard
-/// dependency of pi itself.
-async fn probe_rtk_binary(ssh: &SshConfig) -> (RtkProbe, Option<String>) {
-    let out = if ssh.host.is_some() {
-        let mut c = ssh_command(ssh, 8);
-        c.arg(format!("{RTK_PATH_EXPORT} rtk --version")).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        tokio::time::timeout(Duration::from_secs(10), c.output()).await
-    } else {
-        let mut c = Command::new("rtk");
-        c.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        tokio::time::timeout(Duration::from_secs(10), c.output()).await
-    };
-    match out {
-        Ok(Ok(out)) if out.status.success() => {
-            // Take the last non-empty line rather than the whole trimmed
-            // stdout: a noisy remote login shell (motd/profile scripts) can
-            // print unrelated lines to stdout ahead of rtk's own output.
-            let version = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .last()
-                .map(str::to_string);
-            (RtkProbe { ok: true, detail: None }, version)
-        }
-        Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            let detail = if stderr.is_empty() { format!("rtk --version exited with {}", out.status) } else { stderr };
-            (RtkProbe { ok: false, detail: Some(detail) }, None)
-        }
-        Ok(Err(e)) => (RtkProbe { ok: false, detail: Some(format!("failed to run rtk --version: {e}")) }, None),
-        Err(_) => (RtkProbe { ok: false, detail: Some("rtk --version timed out after 10s".to_string()) }, None),
-    }
-}
-
-/// Whether the rtk pi extension is installed globally — local:
-/// `~/.pi/agent/extensions/rtk.ts` exists on this host; remote: `test -f`
-/// against the same path on the SSH target. The remote path is deliberately
-/// unquoted (see `agent_file_exists`/the comment above it) so `~` expands on
-/// the remote shell rather than being treated as a literal character.
-///
-/// Over SSH, `test -f` itself exits 1 for "file missing" (not an error —
-/// `detail` stays `None`), but ssh's own connection/auth failures exit 255
-/// with a diagnostic on stderr; that case is what `detail` is for.
-async fn rtk_extension_installed(ssh: &SshConfig) -> RtkProbe {
-    if ssh.host.is_some() {
-        let mut c = ssh_command(ssh, 8);
-        c.arg("test -f ~/.pi/agent/extensions/rtk.ts").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-        match tokio::time::timeout(Duration::from_secs(10), c.output()).await {
-            Ok(Ok(out)) if out.status.success() => RtkProbe { ok: true, detail: None },
-            Ok(Ok(out)) if out.status.code() == Some(1) => RtkProbe { ok: false, detail: None },
-            Ok(Ok(out)) => {
-                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                let detail = if stderr.is_empty() { format!("ssh exited with {}", out.status) } else { stderr };
-                RtkProbe { ok: false, detail: Some(detail) }
-            }
-            Ok(Err(e)) => RtkProbe { ok: false, detail: Some(format!("failed to check for the rtk extension over ssh: {e}")) },
-            Err(_) => RtkProbe { ok: false, detail: Some("checking for the rtk extension over ssh timed out after 10s".to_string()) },
-        }
-    } else {
-        let Some(home) = home_dir() else { return RtkProbe { ok: false, detail: None } };
-        let exists = tokio::fs::try_exists(home.join(".pi/agent/extensions/rtk.ts")).await.unwrap_or(false);
-        RtkProbe { ok: exists, detail: None }
-    }
-}
-
-/// Runs `rtk init --agent pi --global` to install the extension — locally,
-/// or over SSH on the pi host. No particular cwd matters (it only ever
-/// touches `~/.pi/agent/extensions/rtk.ts`), so it's run from wherever the
-/// shell/spawn defaults to.
-async fn run_rtk_init(ssh: &SshConfig) -> Result<(), String> {
-    let out = if ssh.host.is_some() {
-        let mut c = ssh_command(ssh, 8);
-        c.arg(format!("{RTK_PATH_EXPORT} rtk init --agent pi --global")).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        tokio::time::timeout(Duration::from_secs(20), c.output()).await
-    } else {
-        let mut c = Command::new("rtk");
-        c.arg("init").arg("--agent").arg("pi").arg("--global");
-        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        tokio::time::timeout(Duration::from_secs(20), c.output()).await
-    };
-    match out {
-        Ok(Ok(out)) if out.status.success() => Ok(()),
-        Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            Err(if stderr.is_empty() { "rtk init failed".to_string() } else { stderr })
-        }
-        Ok(Err(e)) => Err(format!("failed to run rtk init: {e}")),
-        Err(_) => Err("rtk init timed out".to_string()),
-    }
-}
-
-#[derive(Serialize)]
-struct RtkStatusView {
-    enabled: bool,
-    available: bool,
-    version: Option<String>,
-    #[serde(rename = "extensionInstalled")]
-    extension_installed: bool,
-    /// Why `available`/`extensionInstalled` came back negative, when known
-    /// — an SSH connect/auth failure, a timeout, or a non-zero exit's
-    /// stderr — surfaced verbatim so a false "not installed" reading (e.g.
-    /// the pi host is actually just unreachable) doesn't look identical to
-    /// rtk genuinely being absent. `None` when both probes are clean.
-    #[serde(rename = "probeError", skip_serializing_if = "Option::is_none")]
-    probe_error: Option<String>,
-}
-
-/// `enabled` resolves the stored per-chat `Some`/`None` against the
-/// extension's on-disk presence — see `AppState.rtk`'s doc comment.
-/// `probe_error` prefers the binary probe's detail (it runs first and a dead
-/// SSH target fails both probes identically) and falls back to the
-/// extension probe's.
-fn rtk_status_view(stored: Option<bool>, binary: RtkProbe, version: Option<String>, extension: RtkProbe) -> RtkStatusView {
-    let probe_error = binary.detail.or(extension.detail);
-    RtkStatusView {
-        enabled: stored.unwrap_or(extension.ok),
-        available: binary.ok,
-        version,
-        extension_installed: extension.ok,
-        probe_error,
-    }
-}
-
-#[derive(Deserialize)]
-struct RtkQuery {
-    #[serde(rename = "projectId")]
-    project_id: String,
-    #[serde(rename = "chatId")]
-    chat_id: String,
-}
-
-async fn get_rtk_status(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<RtkQuery>) -> Json<RtkStatusView> {
-    let ssh = state.ssh.read().await.clone();
-    let key = chat_key(&q.project_id, &q.chat_id);
-    let stored = state.rtk.read().await.get(&key).copied();
-    let (binary, version) = probe_rtk_binary(&ssh).await;
-    let extension = rtk_extension_installed(&ssh).await;
-    Json(rtk_status_view(stored, binary, version, extension))
-}
-
-#[derive(Deserialize)]
-struct RtkSaveReq {
-    #[serde(rename = "projectId")]
-    project_id: String,
-    #[serde(rename = "chatId")]
-    chat_id: String,
-    enabled: bool,
-}
-
-/// Flips one chat's rtk toggle. Enabling installs the extension on demand,
-/// host-wide (failing the request if `rtk` itself isn't on the pi host, or
-/// if `rtk init` errors); disabling never uninstalls anything, it only
-/// changes what env that chat's pi is spawned with. Either direction
-/// respawns that one chat if it's idle, so the change takes effect without
-/// interrupting a working agent (see `respawn_key_if_idle`) — every other
-/// chat's process is left untouched.
-async fn save_rtk_config(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<RtkSaveReq>,
-) -> Result<Json<RtkStatusView>, (StatusCode, String)> {
-    let ssh = state.ssh.read().await.clone();
-    if req.enabled {
-        let (binary, _version) = probe_rtk_binary(&ssh).await;
-        if !binary.ok {
-            let reason = binary.detail.unwrap_or_else(|| "rtk was not found on the pi host".to_string());
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "rtk is not available on the pi host: {reason} — install it first (e.g. `brew install rtk` or the install script at github.com/rtk-ai/rtk), or check the SSH target if one is set"
-                ),
-            ));
-        }
-        let extension = rtk_extension_installed(&ssh).await;
-        if !extension.ok {
-            run_rtk_init(&ssh).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-        }
-    }
-    let key = chat_key(&req.project_id, &req.chat_id);
-    state.rtk.write().await.insert(key.clone(), req.enabled);
-    respawn_key_if_idle(&state, &key).await;
-
-    let (binary, version) = probe_rtk_binary(&ssh).await;
-    let extension = rtk_extension_installed(&ssh).await;
-    Ok(Json(rtk_status_view(Some(req.enabled), binary, version, extension)))
 }
 
 // ---- git branch REST API -------------------------------------------------
