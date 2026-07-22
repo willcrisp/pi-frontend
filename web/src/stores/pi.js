@@ -125,12 +125,6 @@ function initialStore() {
 export const connIndex = reactive({}); // key -> conn
 
 const activeRef = shallowRef(null); // conn whose state the `store` proxy shows
-
-// Reactive identity of the active chat (projectId/chatId), for consumers that
-// need to know *which* chat is active rather than just its state — e.g.
-// rtk.js's per-chat `/api/rtk` calls. `activeRef` itself isn't exported, so
-// this is kept in sync alongside it in `activate()`.
-export const activeChat = reactive({ projectId: null, chatId: null });
 const detachedState = reactive(initialStore()); // shown when no project is selected
 let currentProjectId = null;
 
@@ -455,8 +449,6 @@ function activate(conn) {
   conn.lastActiveAt = Date.now();
   conn.state.unread = false;
   activeRef.value = conn;
-  activeChat.projectId = conn.projectId;
-  activeChat.chatId = conn.chatId;
   rememberLastChat(conn);
 }
 
