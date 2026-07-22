@@ -216,3 +216,25 @@ frontend changes needed.
 Without any of that installed, the popover just shows session totals and
 "no sub-agents used this session" — it degrades gracefully, it just won't
 have anything sub-agent-shaped to display.
+
+## rtk integration
+
+[rtk](https://github.com/rtk-ai/rtk) compresses dev-command output to save
+agent tokens, via a pi extension it can install itself. The `rtk` pill next
+to the composer's model select is one global on/off toggle for it (not
+per-project):
+
+- **On** runs `rtk init --agent pi --global` on the pi host (writing
+  `~/.pi/agent/extensions/rtk.ts`, which pi auto-discovers at startup) if
+  the extension isn't already installed, then spawns pi with no special
+  env. This works in `--ssh` relay mode too — `rtk` and the extension live
+  on the remote host, not this one.
+- **Off** spawns pi with `RTK_DISABLED=1`, which the extension checks and
+  skips rewriting output for. It never uninstalls or deletes anything.
+- If you've never touched the toggle, pi-web doesn't set any env var
+  either way, and the pill's state falls back to whether the extension is
+  actually installed — so a manual `rtk init` you already did isn't
+  clobbered by a server that's never had an opinion.
+
+Turning the toggle on requires `rtk` itself to already be installed on the
+pi host; the pill's tooltip says so if it isn't found.
