@@ -221,22 +221,29 @@ have anything sub-agent-shaped to display.
 
 [rtk](https://github.com/rtk-ai/rtk) compresses dev-command output to save
 agent tokens, via a pi extension it can install itself. The `rtk` pill next
-to the composer's model select is one global on/off toggle for it (not
-per-project):
+to the composer's model select is a **per-chat** on/off toggle for it —
+turning it on or off only affects the chat you're currently viewing; every
+other chat's pi process (including other chats in the same project) keeps
+whatever setting it already had. The toggle is in-memory only: it survives
+that chat's own idle-reap/respawn cycles, but resets to "never touched" on a
+full server restart.
 
 - **On** runs `rtk init --agent pi --global` on the pi host (writing
   `~/.pi/agent/extensions/rtk.ts`, which pi auto-discovers at startup) if
-  the extension isn't already installed, then spawns pi with no special
-  env. This works in `--ssh` relay mode too — `rtk` and the extension live
-  on the remote host, not this one.
-- **Off** spawns pi with `RTK_DISABLED=1`, which the extension checks and
-  skips rewriting output for. It never uninstalls or deletes anything.
-- If you've never touched the toggle, pi-web doesn't set any env var
-  either way, and the pill's state falls back to whether the extension is
-  actually installed — so a manual `rtk init` you already did isn't
-  clobbered by a server that's never had an opinion.
+  the extension isn't already installed, then spawns that chat's pi with no
+  special env. This works in `--ssh` relay mode too — `rtk` and the
+  extension live on the remote host, not this one.
+- **Off** spawns that chat's pi with `RTK_DISABLED=1`, which the extension
+  checks and skips rewriting output for. It never uninstalls or deletes
+  anything, and never touches any other chat's process.
+- If you've never touched the toggle for a given chat, pi-web doesn't set
+  any env var either way, and the pill's state falls back to whether the
+  extension is actually installed — so a manual `rtk init` you already did
+  isn't clobbered by a server that's never had an opinion for that chat.
 
-Turning the toggle on requires `rtk` itself to already be installed on the
+Whether the `rtk` binary is installed, and whether the extension itself is
+installed, are still genuinely host-wide facts (not per-chat) — turning the
+toggle on for any chat requires `rtk` itself to already be installed on the
 pi host; the pill's tooltip says so if it isn't found.
 
 In `--ssh` relay mode, every rtk-related command (and the `pi` spawn itself)

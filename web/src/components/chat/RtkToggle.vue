@@ -1,17 +1,19 @@
 <!--
-  Composer control: a small pill button toggling the global rtk setting
-  (stores/rtk.js) — on ensures the pi extension is installed and spawns pi
-  with no special env, off spawns pi with RTK_DISABLED=1 (never uninstalls
-  anything). Global, not per-project, so it refetches whenever the SSH
-  target changes rather than on project switch.
+  Composer control: a small pill button toggling rtk output compression for
+  the current chat (stores/rtk.js) — on ensures the pi extension is installed
+  (host-wide) and spawns this chat's pi with no special env, off spawns it
+  with RTK_DISABLED=1 (never uninstalls anything). Per-chat, so it refetches
+  on chat switch as well as whenever the SSH target changes (the binary/
+  extension probe is still host-wide).
 -->
 <script setup>
-import { onMounted, watch } from "vue";
+import { watch } from "vue";
 import { rtkStore, fetchRtkStatus, setRtkEnabled } from "../../stores/rtk.js";
 import { sshStore } from "../../stores/ssh.js";
+import { activeChat } from "../../stores/pi.js";
 import { alertDialog } from "../../stores/confirm.js";
 
-onMounted(fetchRtkStatus);
+watch(() => [activeChat.projectId, activeChat.chatId], fetchRtkStatus, { immediate: true });
 
 watch(
   () => sshStore.host,
@@ -29,10 +31,12 @@ async function toggle() {
 
 function title() {
   if (rtkStore.loaded && !rtkStore.available) {
-    return rtkStore.probeError ? `rtk not available: ${rtkStore.probeError}` : "rtk not installed on the pi host";
+    return rtkStore.probeError
+      ? `rtk not available on the pi host: ${rtkStore.probeError}`
+      : "rtk not installed on the pi host";
   }
   const version = rtkStore.version ? ` ${rtkStore.version}` : "";
-  return `rtk${version} — output compression ${rtkStore.enabled ? "on" : "off"}`;
+  return `rtk${version} — output compression ${rtkStore.enabled ? "on" : "off"} for this chat`;
 }
 </script>
 
