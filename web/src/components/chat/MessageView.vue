@@ -18,6 +18,7 @@ import {
   continueFromHandover,
   forkFrom,
   handoverFromText,
+  isSerenaTool,
   store,
   subagentDetails,
 } from "../../stores/pi.js";
@@ -204,7 +205,7 @@ function diffFor(block) {
       <details
         v-else-if="block.type === 'toolCall' && diffFor(block)"
         class="tool tool-diff"
-        :class="{ error: toolResult(block.id)?.isError }"
+        :class="{ error: toolResult(block.id)?.isError, serena: isSerenaTool(block.name) }"
       >
         <summary title="Click to expand/collapse">
           <span class="tool-name" :title="block.name">{{ block.name }}</span>
@@ -233,7 +234,7 @@ function diffFor(block) {
       <details
         v-else-if="block.type === 'toolCall'"
         class="tool"
-        :class="{ error: toolResult(block.id)?.isError }"
+        :class="{ error: toolResult(block.id)?.isError, serena: isSerenaTool(block.name) }"
       >
         <summary title="Click to expand/collapse">
           <span class="tool-name" :title="block.name">{{ block.name }}</span>

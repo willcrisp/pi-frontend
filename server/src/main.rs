@@ -359,6 +359,7 @@ async fn main() {
         .route("/api/coder/stop", post(stop_coder_workspace))
         .route("/api/projects/{id}/git/branches", get(list_git_branches))
         .route("/api/projects/{id}/git/checkout", post(checkout_git_branch))
+        .route("/api/serena/status", get(get_serena_status))
         .route("/ws/{id}", get(ws_handler))
         .route("/ws-auth", get(ws_auth_handler));
 
@@ -1104,6 +1105,279 @@ async fn list_remote_dirs(ssh: &SshConfig, dir: &str) -> Result<Vec<String>, Str
         .filter_map(|l| l.strip_suffix('/'))
         .map(|s| s.to_string())
         .collect())
+}
+
+// ---- Serena monitoring ----------------------------------------------------
+//
+// Read-only, best-effort status for the `pi-serena` extension's per-process
+// Serena instances (see pi-serena/README.md): Serena has no persistent
+// daemon or wire-protocol visibility to the server (it runs over stdio, one
+// instance per pi process), so this probes its side-channel web dashboard
+// (`--context ide-assistant`'s default HTTP server, base port 24282,
+// probing upward if busy) across a small fixed port range, and separately
+// scans known project paths for `.serena/cache/<language>/` to report which
+// projects have been indexed (a filesystem fact independent of whether any
+// instance is currently running). Dual-mode like `run_git`/
+// `list_remote_dirs` above: local via `reqwest` + `tokio::fs`, or over one
+// `ssh` round trip via `ssh_command`. Every probe is short-timeout and
+// degrades to empty/`None` rather than erroring — Serena not being
+// installed or running is the common case, not a failure.
+
+const SERENA_PORTS: std::ops::RangeInclusive<u16> = 24282..=24291;
+
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SerenaInstance {
+    port: u16,
+    active_project: Option<String>,
+    tool_count: Option<usize>,
+}
+
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SerenaToolStat {
+    name: String,
+    num_times_called: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SerenaIndexedProject {
+    name: String,
+    languages: Vec<String>,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SerenaStatusResp {
+    connected: bool,
+    instances: Vec<SerenaInstance>,
+    token_estimator: Option<String>,
+    tool_stats: Vec<SerenaToolStat>,
+    indexed_projects: Vec<SerenaIndexedProject>,
+}
+
+fn serena_config_overview_project(v: &serde_json::Value) -> Option<String> {
+    v.get("active_project")
+        .or_else(|| v.get("project_name"))
+        .or_else(|| v.get("project"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+fn serena_tool_names_count(v: &serde_json::Value) -> Option<usize> {
+    if let Some(arr) = v.as_array() {
+        return Some(arr.len());
+    }
+    v.get("tool_names").and_then(|x| x.as_array()).map(|a| a.len())
+}
+
+fn serena_estimator_name(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    v.get("token_count_estimator_name")
+        .or_else(|| v.get("estimator"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+fn accumulate_serena_tool_stats(v: &serde_json::Value, totals: &mut HashMap<String, (u64, u64, u64)>) {
+    let Some(obj) = v.as_object() else { return };
+    for (name, stat) in obj {
+        let calls = stat.get("num_times_called").and_then(|x| x.as_u64()).unwrap_or(0);
+        let input = stat.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+        let output = stat.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+        let entry = totals.entry(name.clone()).or_insert((0, 0, 0));
+        entry.0 += calls;
+        entry.1 += input;
+        entry.2 += output;
+    }
+}
+
+async fn serena_json_body(res: Result<reqwest::Response, reqwest::Error>) -> Option<serde_json::Value> {
+    res.ok()?.json::<serde_json::Value>().await.ok()
+}
+
+/// Probes one local dashboard port: a live instance must answer
+/// `/heartbeat`; everything else is best-effort on top of that.
+async fn probe_serena_local_port(
+    client: &reqwest::Client,
+    port: u16,
+) -> Option<(SerenaInstance, serde_json::Value, Option<String>)> {
+    let base = format!("http://127.0.0.1:{port}");
+    client.get(format!("{base}/heartbeat")).send().await.ok()?;
+
+    let (config, names, stats, estimator) = tokio::join!(
+        client.get(format!("{base}/get_config_overview")).send(),
+        client.get(format!("{base}/get_tool_names")).send(),
+        client.get(format!("{base}/get_tool_stats")).send(),
+        client.get(format!("{base}/get_token_count_estimator_name")).send(),
+    );
+
+    let config_json = serena_json_body(config).await;
+    let names_json = serena_json_body(names).await;
+    let stats_json = serena_json_body(stats).await.unwrap_or(serde_json::Value::Null);
+    let estimator_str = serena_json_body(estimator).await.and_then(|v| serena_estimator_name(&v));
+
+    Some((
+        SerenaInstance {
+            port,
+            active_project: config_json.as_ref().and_then(serena_config_overview_project),
+            tool_count: names_json.as_ref().and_then(serena_tool_names_count),
+        },
+        stats_json,
+        estimator_str,
+    ))
+}
+
+async fn probe_serena_local_all() -> (Vec<SerenaInstance>, HashMap<String, (u64, u64, u64)>, Option<String>) {
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(1)).build() {
+        Ok(c) => c,
+        Err(_) => return (Vec::new(), HashMap::new(), None),
+    };
+
+    let mut set = tokio::task::JoinSet::new();
+    for port in SERENA_PORTS {
+        let client = client.clone();
+        set.spawn(async move { probe_serena_local_port(&client, port).await });
+    }
+
+    let mut instances = Vec::new();
+    let mut totals = HashMap::new();
+    let mut estimator = None;
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some((inst, stats, est))) = res {
+            accumulate_serena_tool_stats(&stats, &mut totals);
+            if estimator.is_none() {
+                estimator = est;
+            }
+            instances.push(inst);
+        }
+    }
+    instances.sort_by_key(|i| i.port);
+    (instances, totals, estimator)
+}
+
+/// Same probe as `probe_serena_local_all`, but over one `ssh` round trip: a
+/// small shell script probes every port in parallel background subshells
+/// (each gated on `/heartbeat` responding before spending more requests),
+/// emitting `===PORT N===` markers followed by four response lines that are
+/// parsed the same way the local JSON responses are.
+async fn probe_serena_remote(ssh: &SshConfig) -> (Vec<SerenaInstance>, HashMap<String, (u64, u64, u64)>, Option<String>) {
+    let ports: Vec<String> = SERENA_PORTS.map(|p| p.to_string()).collect();
+    let script = format!(
+        "for p in {}; do ( hb=$(curl -s --max-time 1 http://127.0.0.1:$p/heartbeat); \
+         if [ -n \"$hb\" ]; then echo \"===PORT $p===\"; \
+         curl -s --max-time 1 http://127.0.0.1:$p/get_config_overview; echo; \
+         curl -s --max-time 1 http://127.0.0.1:$p/get_tool_names; echo; \
+         curl -s --max-time 1 http://127.0.0.1:$p/get_tool_stats; echo; \
+         curl -s --max-time 1 http://127.0.0.1:$p/get_token_count_estimator_name; echo; \
+         fi ) & done; wait",
+        ports.join(" ")
+    );
+
+    let mut c = ssh_command(ssh, 4);
+    c.arg(script).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let out = match tokio::time::timeout(Duration::from_secs(10), c.output()).await {
+        Ok(Ok(out)) => out,
+        _ => return (Vec::new(), HashMap::new(), None),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    let mut instances = Vec::new();
+    let mut totals = HashMap::new();
+    let mut estimator = None;
+
+    for block in stdout.split("===PORT ").skip(1) {
+        let mut lines = block.lines();
+        let Some(header) = lines.next() else { continue };
+        let Some(port_str) = header.trim().strip_suffix("===") else { continue };
+        let Ok(port) = port_str.trim().parse::<u16>() else { continue };
+        let config_json: Option<serde_json::Value> = lines.next().and_then(|l| serde_json::from_str(l).ok());
+        let names_json: Option<serde_json::Value> = lines.next().and_then(|l| serde_json::from_str(l).ok());
+        let stats_json: serde_json::Value =
+            lines.next().and_then(|l| serde_json::from_str(l).ok()).unwrap_or(serde_json::Value::Null);
+        let est_json: Option<serde_json::Value> = lines.next().and_then(|l| serde_json::from_str(l).ok());
+
+        accumulate_serena_tool_stats(&stats_json, &mut totals);
+        if estimator.is_none() {
+            estimator = est_json.as_ref().and_then(serena_estimator_name);
+        }
+        instances.push(SerenaInstance {
+            port,
+            active_project: config_json.as_ref().and_then(serena_config_overview_project),
+            tool_count: names_json.as_ref().and_then(serena_tool_names_count),
+        });
+    }
+    instances.sort_by_key(|i| i.port);
+    (instances, totals, estimator)
+}
+
+/// Filesystem-only signal, independent of whether any instance is live:
+/// which known projects have a `.serena/cache/<language>/` directory, and
+/// which languages. Local via `tokio::fs`, remote via `list_remote_dirs`
+/// (same one-round-trip-per-project pattern other project-scoped remote
+/// listings use).
+async fn scan_serena_indexed_projects(state: &Arc<AppState>, ssh: &SshConfig) -> Vec<SerenaIndexedProject> {
+    let projects: Vec<(String, PathBuf)> = {
+        let guard = state.projects.read().await;
+        guard.values().map(|e| (e.name.clone(), e.path.clone())).collect()
+    };
+
+    let mut result = Vec::new();
+    for (name, path) in projects {
+        let languages = if ssh.host.is_some() {
+            let cache_dir = format!("{}/.serena/cache", path.to_string_lossy());
+            list_remote_dirs(ssh, &cache_dir).await.unwrap_or_default()
+        } else {
+            let cache_dir = path.join(".serena").join("cache");
+            let mut langs = Vec::new();
+            if let Ok(mut entries) = tokio::fs::read_dir(&cache_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                        if let Some(n) = entry.file_name().to_str() {
+                            langs.push(n.to_string());
+                        }
+                    }
+                }
+            }
+            langs
+        };
+        if !languages.is_empty() {
+            result.push(SerenaIndexedProject { name, languages });
+        }
+    }
+    result
+}
+
+async fn get_serena_status(State(state): State<Arc<AppState>>) -> Json<SerenaStatusResp> {
+    let ssh = state.ssh.read().await.clone();
+    let (instances, mut totals, estimator) =
+        if ssh.host.is_some() { probe_serena_remote(&ssh).await } else { probe_serena_local_all().await };
+    let indexed_projects = scan_serena_indexed_projects(&state, &ssh).await;
+
+    let mut tool_stats: Vec<SerenaToolStat> = totals
+        .drain()
+        .map(|(name, (num_times_called, input_tokens, output_tokens))| SerenaToolStat {
+            name,
+            num_times_called,
+            input_tokens,
+            output_tokens,
+        })
+        .collect();
+    tool_stats.sort_by(|a, b| b.num_times_called.cmp(&a.num_times_called));
+
+    Json(SerenaStatusResp {
+        connected: !instances.is_empty(),
+        instances,
+        token_estimator: estimator,
+        tool_stats,
+        indexed_projects,
+    })
 }
 
 async fn remove_project(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
