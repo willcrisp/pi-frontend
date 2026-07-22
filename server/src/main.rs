@@ -515,7 +515,7 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) 
         // (`RTK_DISABLED=1 exec pi ...`, not `exec RTK_DISABLED=1 pi ...`).
         let rtk_prefix = if rtk_disabled { "RTK_DISABLED=1 " } else { "" };
         let mut remote_cmd = format!(
-            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; {RTK_PATH_EXPORT} exec {rtk_prefix}{} --mode rpc",
+            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; {RTK_PATH_EXPORT} {rtk_prefix}exec {} --mode rpc",
             shell_quote(&cfg.pi_bin)
         );
         for a in &cfg.pi_args {
