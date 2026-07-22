@@ -350,6 +350,7 @@ async fn main() {
         .route("/api/projects/{id}/sessions", get(list_sessions))
         .route("/api/projects/{id}/search", get(search_sessions))
         .route("/api/agents", get(list_agents).put(save_agent).delete(delete_agent))
+        .route("/api/export", get(export_file))
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
@@ -398,6 +399,69 @@ async fn serve_embedded_asset(uri: Uri) -> impl IntoResponse {
                 .into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Query string for `GET /api/export` — `path` is the absolute location pi's
+/// `export_html` RPC wrote the HTML to, on whichever machine runs pi (local,
+/// or the remote host in `--ssh` mode).
+#[derive(Deserialize)]
+struct ExportQuery {
+    path: String,
+}
+
+/// Serves an exported-session HTML file for download. pi's `export_html`
+/// command writes the file on the machine that runs pi and returns only its
+/// path over RPC — the content never crosses the wire — so a browser can't
+/// open it directly. This reads that file (locally, or over SSH like the
+/// agent-file ops) and streams it back as a downloadable attachment, which is
+/// what lets the `/export` slash command hand the user a real download link.
+/// Restricted to `.html` files so it can't double as an arbitrary-file-read
+/// endpoint (the server binds to 127.0.0.1, but the guard is cheap).
+async fn export_file(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<ExportQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !q.path.to_ascii_lowercase().ends_with(".html") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let ssh = state.ssh.read().await.clone();
+    let bytes = read_export_file(&ssh, &q.path).await.ok_or(StatusCode::NOT_FOUND)?;
+    // Basename for the download filename; strip characters that would break
+    // out of the Content-Disposition quoted string.
+    let file_name = FsPath::new(&q.path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("session.html")
+        .replace(['"', '\r', '\n'], "");
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{file_name}\""),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+/// Reads the raw bytes of an exported HTML file — locally, or over SSH on the
+/// pi host, mirroring `read_agent_file`'s local/remote duality. `None` on any
+/// failure (missing, unreadable, ssh error, timeout).
+async fn read_export_file(ssh: &SshConfig, path: &str) -> Option<Vec<u8>> {
+    if ssh.host.is_some() {
+        let remote_cmd = format!("cat {}", shell_quote(path));
+        let mut c = ssh_command(ssh, 8);
+        c.arg(&remote_cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let out = tokio::time::timeout(std::time::Duration::from_secs(15), c.output()).await.ok()?.ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(out.stdout)
+    } else {
+        tokio::fs::read(path).await.ok()
     }
 }
 

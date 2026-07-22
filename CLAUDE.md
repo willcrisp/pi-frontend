@@ -115,6 +115,10 @@ one pi child process per chat (stdin/stdout, newline-delimited JSON)
      pi's message schema)
    - /api/agents (list/save/delete sub-agent definition .md files, local
      or over SSH — see "Sub-agent support" below)
+   - /api/export (serve the .html file pi's export_html RPC wrote — its
+     content never crosses the RPC wire, only the path does — read back
+     local or over SSH and streamed as a download; the /export slash
+     command turns that into a real download link)
         │  (WebSocket, one JSON object per text frame)
         ▼
 web/src/stores/pi.js

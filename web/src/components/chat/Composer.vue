@@ -114,12 +114,26 @@ watch(
   () => nextTick(autosize)
 );
 
-function showToast(message) {
-  toast.value = message;
+// `link`, when given ({ href, label, download }), renders a clickable
+// download anchor next to the message (see the composer-toast template).
+function showToast(message, { link = null, duration = 3000 } = {}) {
+  toast.value = { message, link };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toast.value = null;
-  }, 3000);
+  }, duration);
+}
+
+// Programmatically click a same-origin download link. Used by /export so the
+// exported HTML lands in the user's downloads without a navigation.
+function triggerDownload(href, fileName) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = fileName;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 // Slash-command autocomplete: all commands are "/name" typed at the very start
@@ -172,7 +186,18 @@ async function runBuiltinCommand(name) {
       openRenameDialog();
     } else if (name === "export") {
       const { path } = await exportSession();
-      showToast(`Exported to ${path}`);
+      // pi writes the HTML on the machine running it (local, or the remote
+      // host in --ssh mode) and only hands back its path — the server's
+      // /api/export endpoint reads that file back and serves it as a
+      // download. Kick off the download immediately, and leave a clickable
+      // link in the toast in case the browser blocks the auto-download.
+      const fileName = path.split(/[\\/]/).pop() || "session.html";
+      const href = `/api/export?path=${encodeURIComponent(path)}`;
+      triggerDownload(href, fileName);
+      showToast("Exported session", {
+        link: { href, label: "Download HTML", download: fileName },
+        duration: 8000,
+      });
     } else if (name === "copy") {
       const text = await copyLastAssistantText();
       showToast(text ? "Copied last reply to clipboard" : "No assistant reply to copy");
@@ -473,7 +498,17 @@ function autosize() {
 
 <template>
   <footer>
-    <div v-if="toast" class="composer-toast">{{ toast }}</div>
+    <div v-if="toast" class="composer-toast">
+      <span>{{ toast.message }}</span>
+      <a
+        v-if="toast.link"
+        :href="toast.link.href"
+        :download="toast.link.download"
+        rel="noopener"
+        class="composer-toast-link"
+        >{{ toast.link.label }}</a
+      >
+    </div>
     <div v-if="store.pendingHandover" class="handover-chips">
       <span
         class="handover-chip"
