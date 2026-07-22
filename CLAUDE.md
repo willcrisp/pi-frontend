@@ -119,7 +119,7 @@ one pi child process per chat (stdin/stdout, newline-delimited JSON)
      content never crosses the RPC wire, only the path does — read back
      local or over SSH and streamed as a download; the /export slash
      command turns that into a real download link)
-   - /api/rtk (get/set the global rtk on/off toggle, local or over SSH —
+   - /api/rtk (get/set the per-chat rtk on/off toggle, local or over SSH —
      see "Server internals" below)
         │  (WebSocket, one JSON object per text frame)
         ▼
@@ -169,7 +169,7 @@ web/src/App.vue (top-level layout + every globally-mounted overlay)
 - An idle sweeper reaps processes with zero WS clients and no agent run in flight after a grace period (`IDLE_REAP_SECS`), since per-chat processes would otherwise accumulate without bound; `RunningProcess.streaming` is peeked from pi's own `agent_start`/`agent_settled` events, so a working agent whose tab was closed still runs to completion before becoming reapable.
 - When an SSH target is set (`AppState.ssh: RwLock<SshConfig>`, runtime-editable via `/api/ssh` — see below — and persisted to `<data-dir>/ssh.json`), `spawn_child` execs pi over `ssh` instead of spawning it locally (one remote host shared by every project); local-filesystem operations (path validation on add, session-dir listing) are skipped/degrade to empty rather than erroring, since paths are on the remote host. Changing the target via `PUT`/`DELETE /api/ssh` respawns every running chat's pi process against it (`respawn_all`) — the watcher task that removes a dead process from `running` guards the removal with `Arc::ptr_eq` so a respawn's new process (inserted under the same key before the old one is killed) can't be evicted by the old process's own cleanup.
 - Windows spawns `pi` via `cmd /C` since it installs as a `.cmd` shim.
-- The global rtk toggle (`AppState.rtk: RwLock<RtkConfig>`, `/api/rtk` GET/PUT, persisted to `<data-dir>/rtk.json`) is the third sanctioned server-side feature (see "Agent definition editing" below) — `rtk.ts` and its enabled/disabled state are process/on-disk facts pi's RPC protocol doesn't expose. `enabled: Some(false)` makes `spawn_child` add `RTK_DISABLED=1` to the spawned pi's env (local `.env()`, or `RTK_DISABLED=1 exec ...` in the SSH remote command string — the assignment has to precede `exec`'s command to apply to it); `Some(true)`/`None` spawn with no special env. Enabling runs `rtk init --agent pi --global` on demand (local or remote, mirroring `run_git`'s dual-mode shape) if the extension isn't already installed, and fails with a clear message if the `rtk` binary itself isn't found. Either direction respawns only idle chats (`respawn_idle`, `respawn_all`'s sibling that skips any chat whose `streaming` flag is set) so a working agent is never interrupted by a toggle flip.
+- The per-chat rtk toggle (`AppState.rtk: RwLock<HashMap<String, bool>>`, keyed by `chat_key(projectId, chatId)`, `/api/rtk` GET/PUT) is the third sanctioned server-side feature (see "Agent definition editing" below) — `rtk.ts` and its enabled/disabled state are process/on-disk facts pi's RPC protocol doesn't expose. It's in-memory only (no persistence): a chat's entry survives that chat's own idle-reap/respawn cycles since the server keeps running, but resets on a full server restart. A key's absence means "never touched" for that chat. A stored `false` for a chat's key makes `spawn_child` add `RTK_DISABLED=1` to that chat's spawned pi env (local `.env()`, or `RTK_DISABLED=1 exec ...` in the SSH remote command string — the assignment has to precede `exec`'s command to apply to it); a stored `true`, or no entry, spawn with no special env. Enabling for a chat runs `rtk init --agent pi --global` on demand (local or remote, mirroring `run_git`'s dual-mode shape, and still host-wide since the extension install itself isn't per-chat) if the extension isn't already installed, and fails with a clear message if the `rtk` binary itself isn't found. Either direction respawns only that one chat, and only if it's idle (`respawn_key_if_idle`, checked against `streaming`) so a working agent is never interrupted by a toggle flip — every other chat's process is untouched.
 
 ### Sub-agent support (pi-mono's `subagent` extension)
 
@@ -203,8 +203,8 @@ halves:
   following the `run_git`/`list_remote_dirs` pattern), because the agent
   files live wherever pi runs.
 
-The global rtk toggle (see "Server internals" above) is the third: it's a
-single on/off switch over the [rtk](https://github.com/rtk-ai/rtk) pi
+The per-chat rtk toggle (see "Server internals" above) is the third: it's a
+per-chat on/off switch over the [rtk](https://github.com/rtk-ai/rtk) pi
 extension, which itself has no RPC presence — pi only auto-discovers
 whatever extensions are on disk at startup.
 
@@ -214,10 +214,10 @@ Layout: `stores/` (reactive state + REST/WS clients), `lib/` (pure helpers, no s
 
 `stores/`:
 
-- `pi.js` — WebSocket client, one connection + reactive state per visited chat (`connIndex`), with the exported `store` a proxy over the active chat's state. All RPC event handling funnels through `handle(conn, ev)`, for background chats too — their transcripts stay live, so switching to one is instant. The session-path→server-chatId mapping and each project's last-viewed chat persist in localStorage, so a reload re-attaches to the same (possibly still-running) processes.
+- `pi.js` — WebSocket client, one connection + reactive state per visited chat (`connIndex`), with the exported `store` a proxy over the active chat's state, and the exported `activeChat` (`{ projectId, chatId }`, kept in sync by `activate()`) as the active chat's identity for consumers that need to know *which* chat is active rather than just its state (e.g. `rtk.js`). All RPC event handling funnels through `handle(conn, ev)`, for background chats too — their transcripts stay live, so switching to one is instant. The session-path→server-chatId mapping and each project's last-viewed chat persist in localStorage, so a reload re-attaches to the same (possibly still-running) processes.
 - `projects.js` — REST client + reactive `projectsStore` (project list, current project's session/chat list). Opening a chat goes through `pi.js`'s per-chat connections; a `switch_session` RPC is only ever sent to a non-streaming process (see `syncOnOpen`).
 - `ssh.js` — REST client + reactive `sshStore` for the runtime-editable SSH target (`/api/ssh`, `/api/ssh/test`), same conventions as `projects.js`.
-- `rtk.js` — `rtkStore` (ssh.js conventions) for the global rtk on/off toggle via `/api/rtk`.
+- `rtk.js` — `rtkStore` (ssh.js conventions) for the per-chat rtk on/off toggle via `/api/rtk`, scoped to `pi.js`'s `activeChat` (both `fetchRtkStatus()` and `setRtkEnabled()` read `activeChat.projectId`/`activeChat.chatId`; `fetchRtkStatus()` guards against stale responses the same way `projects.js`'s `fetchSessions` does).
 - `auth.js` — `authStore` + the `/ws-auth` WebSocket client for provider connect (see "Provider connect" above).
 - `agents.js` — `agentsStore` (ssh.js conventions) for sub-agent definition CRUD via `/api/agents`, plus the `splitModelThinking`/`joinModelThinking` model-string codec (see "Sub-agent support" above).
 - `git.js` — `gitStore` for the current project's git branches (`/api/projects/{id}/git/*`): read-only listing + plain checkout.
