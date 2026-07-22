@@ -886,6 +886,35 @@ header .wordmark {
   opacity: 0.7;
 }
 
+.rtk-toggle {
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rtk-toggle:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.rtk-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rtk-toggle.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-raised));
+}
+
 .branch-popover-panel {
   display: none;
   position: absolute;

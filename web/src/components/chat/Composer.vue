@@ -30,6 +30,7 @@ import { openRenameDialog } from "../../stores/renameDialog.js";
 import { startNewChat } from "../../stores/projects.js";
 import D20Die from "./D20Die.vue";
 import GitBranchSelect from "./GitBranchSelect.vue";
+import RtkToggle from "./RtkToggle.vue";
 
 // Backed by the active chat's own state (see pi.js) rather than local refs,
 // so switching chats swaps the text/attachments under the composer instead
@@ -633,6 +634,7 @@ function autosize() {
     </div>
     <div class="controls">
       <GitBranchSelect />
+      <RtkToggle />
       <select
         class="model-select"
         :value="modelKey"

@@ -163,6 +163,18 @@ struct SshConfig {
     port: Option<u16>,
 }
 
+/// Runtime-editable global rtk toggle (`<data-dir>/rtk.json`), applied to
+/// every spawned pi process. `enabled: None` means "never touched" — no
+/// `RTK_DISABLED` env var is set either way, and `/api/rtk`'s reported
+/// `enabled` falls back to whether the extension is actually installed, so a
+/// manual `rtk init` a user already did isn't clobbered by a server that's
+/// never had an opinion. `Some(true)`/`Some(false)` are explicit
+/// on/off — see `spawn_child` and the `/api/rtk` handlers.
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct RtkConfig {
+    enabled: Option<bool>,
+}
+
 struct AppState {
     cfg: Config,
     projects: RwLock<HashMap<String, Arc<ProjectEntry>>>,
@@ -171,6 +183,7 @@ struct AppState {
     /// concurrently and switching chats never disturbs a running one.
     running: RwLock<HashMap<String, Arc<RunningProcess>>>,
     ssh: RwLock<SshConfig>,
+    rtk: RwLock<RtkConfig>,
 }
 
 /// The current user's home directory (`$HOME`, or `%USERPROFILE%` on
@@ -261,6 +274,11 @@ async fn main() {
     let ssh_seed_needed = tokio::fs::metadata(&ssh_file).await.is_err();
     let ssh_cfg = load_ssh_config(&cfg).await;
 
+    // No CLI flag seeds this one — an absent rtk.json just means "never
+    // touched" (RtkConfig::default(), enabled: None), which is already the
+    // right first-run behavior.
+    let rtk_cfg = load_rtk_config(&cfg).await;
+
     // First run ever (no persisted project list yet): seed one project from
     // --cwd so `cargo run -- --cwd path/to/project` still works out of the
     // box, matching the old single-project behavior.
@@ -292,6 +310,7 @@ async fn main() {
         projects: RwLock::new(projects),
         running: RwLock::new(HashMap::new()),
         ssh: RwLock::new(ssh_cfg),
+        rtk: RwLock::new(rtk_cfg),
     });
 
     if seed_needed {
@@ -354,6 +373,7 @@ async fn main() {
         .route("/api/browse-dirs", get(browse_dirs))
         .route("/api/ssh", get(get_ssh_config).put(save_ssh_config).delete(clear_ssh_config))
         .route("/api/ssh/test", post(test_ssh_config))
+        .route("/api/rtk", get(get_rtk_status).put(save_rtk_config))
         .route("/api/coder/workspaces", get(list_coder_workspaces))
         .route("/api/coder/start", post(start_coder_workspace))
         .route("/api/coder/stop", post(stop_coder_workspace))
@@ -469,8 +489,14 @@ async fn read_export_file(ssh: &SshConfig, path: &str) -> Option<Vec<u8>> {
 
 /// Spawns pi for one project's `cwd` — locally, or over SSH on `ssh.host`
 /// if set (in which case `cwd` is a path on the remote host, and every
-/// project shares that one remote host).
-fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::Child {
+/// project shares that one remote host). `rtk_disabled` is
+/// `state.rtk`'s stored config resolving to explicit `Some(false)` (the
+/// global rtk toggle switched off) — see the `/api/rtk` handlers below; when
+/// it's `true` pi is spawned with `RTK_DISABLED=1` so the rtk pi extension
+/// (if installed) skips rewriting output for this process. `None`/`Some(true)`
+/// both spawn with no special env, on the theory that a missing opinion
+/// shouldn't touch a possibly-already-installed extension's behavior.
+fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) -> tokio::process::Child {
     if let Some(ssh_host) = &ssh.host {
         // Relay mode: exec pi on a remote box over SSH instead of spawning it
         // locally. The whole remote command is built as one shell-quoted
@@ -484,8 +510,12 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
         // something pi itself printed. pi is only ever exec'd once that cd
         // has actually succeeded.
         let quoted_cwd = shell_quote(cwd.to_str().expect("project path must be valid UTF-8"));
+        // The env assignment has to precede `exec`'s command, not the whole
+        // `exec` word, to actually apply to the exec'd program
+        // (`RTK_DISABLED=1 exec pi ...`, not `exec RTK_DISABLED=1 pi ...`).
+        let rtk_prefix = if rtk_disabled { "RTK_DISABLED=1 " } else { "" };
         let mut remote_cmd = format!(
-            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; exec {} --mode rpc",
+            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; exec {rtk_prefix}{} --mode rpc",
             shell_quote(&cfg.pi_bin)
         );
         for a in &cfg.pi_args {
@@ -527,14 +557,17 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath) -> tokio::process::C
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if rtk_disabled {
+            cmd.env("RTK_DISABLED", "1");
+        }
         cmd.spawn().expect("failed to spawn pi — is it on PATH? (override with --pi-bin)")
     }
 }
 
 /// Spawns one chat's pi process and its bridge tasks. `key` is the
 /// `chat_key` this process is stored under in `running`.
-fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ssh: SshConfig) -> Arc<RunningProcess> {
-    let mut child = spawn_child(&state.cfg, &ssh, &entry.path);
+fn spawn_process(state: Arc<AppState>, key: String, entry: Arc<ProjectEntry>, ssh: SshConfig, rtk_disabled: bool) -> Arc<RunningProcess> {
+    let mut child = spawn_child(&state.cfg, &ssh, &entry.path, rtk_disabled);
     let mut stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
@@ -684,13 +717,14 @@ async fn ensure_running(state: &Arc<AppState>, project_id: &str, chat_id: &str) 
     }
     let entry = state.projects.read().await.get(project_id)?.clone();
     let ssh = state.ssh.read().await.clone();
+    let rtk_disabled = state.rtk.read().await.enabled == Some(false);
     let mut running = state.running.write().await;
     if let Some(p) = running.get(&key) {
         return Some((p.clone(), false));
     }
     log!("[{key}] no running process — cold-starting pi (this is what makes the first open of a chat slow)");
     let start = Instant::now();
-    let proc = spawn_process(state.clone(), key.clone(), entry, ssh);
+    let proc = spawn_process(state.clone(), key.clone(), entry, ssh, rtk_disabled);
     log!("[{key}] spawn_process returned after {:?} (process is spawned but may still be starting up before it responds on stdout)", start.elapsed());
     running.insert(key, proc.clone());
     Some((proc, true))
@@ -710,10 +744,11 @@ async fn respawn_key(state: &Arc<AppState>, key: &str) {
         return;
     };
     let ssh = state.ssh.read().await.clone();
+    let rtk_disabled = state.rtk.read().await.enabled == Some(false);
     let old = {
         let mut running = state.running.write().await;
         let old = running.remove(key);
-        let new_proc = spawn_process(state.clone(), key.to_string(), entry, ssh);
+        let new_proc = spawn_process(state.clone(), key.to_string(), entry, ssh, rtk_disabled);
         running.insert(key.to_string(), new_proc);
         old
     };
@@ -727,6 +762,25 @@ async fn respawn_key(state: &Arc<AppState>, key: &str) {
 /// reconnect onto the fresh process.
 async fn respawn_all(state: &Arc<AppState>) {
     let keys: Vec<String> = state.running.read().await.keys().cloned().collect();
+    for key in keys {
+        respawn_key(state, &key).await;
+    }
+}
+
+/// Like `respawn_all`, but skips chats whose agent is mid-run — used after
+/// toggling the global rtk setting (`save_rtk_config`), since restarting a
+/// working agent's pi process would abort its turn. A streaming chat picks
+/// up the new `RTK_DISABLED` state whenever it's next naturally
+/// respawned/reaped instead.
+async fn respawn_idle(state: &Arc<AppState>) {
+    let keys: Vec<String> = state
+        .running
+        .read()
+        .await
+        .iter()
+        .filter(|(_, p)| !p.streaming.load(Ordering::Relaxed))
+        .map(|(k, _)| k.clone())
+        .collect();
     for key in keys {
         respawn_key(state, &key).await;
     }
@@ -1302,6 +1356,169 @@ async fn clear_ssh_config(State(state): State<Arc<AppState>>) -> Json<SshConfigV
     persist_ssh_config(&state).await;
     respawn_all(&state).await;
     Json(SshConfig::default().into())
+}
+
+// ---- rtk integration REST API -------------------------------------------
+//
+// rtk (https://github.com/rtk-ai/rtk) compresses dev-command output to save
+// agent tokens, via a pi extension: `rtk init --agent pi --global` writes
+// `~/.pi/agent/extensions/rtk.ts` on the machine that runs pi, which pi
+// auto-discovers at startup. This is one global toggle, same shape as the
+// SSH target above — turning it on ensures the extension is installed and
+// spawns pi with no special env; turning it off spawns pi with
+// `RTK_DISABLED=1` (which the extension checks and skips rewriting for) but
+// never uninstalls anything. See `RtkConfig`'s doc comment for the `None`
+// ("never touched") case.
+
+async fn persist_rtk_config(state: &Arc<AppState>) {
+    let cfg = state.rtk.read().await.clone();
+    let file = state.cfg.data_dir.join("rtk.json");
+    match serde_json::to_vec_pretty(&cfg) {
+        Ok(json) => {
+            if let Err(e) = tokio::fs::write(&file, json).await {
+                eprintln!("failed to persist rtk config: {e}");
+            }
+        }
+        Err(e) => eprintln!("failed to serialize rtk config: {e}"),
+    }
+}
+
+async fn load_rtk_config(cfg: &Config) -> RtkConfig {
+    let file = cfg.data_dir.join("rtk.json");
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => RtkConfig::default(),
+    }
+}
+
+/// Probes whether the `rtk` CLI is reachable on the pi host — locally, or
+/// over SSH via the shared `ssh_command` factory — and, if so, its version
+/// string (`rtk --version`'s trimmed stdout). `false`/`None` on any failure
+/// (not installed, not on PATH, ssh error, timeout); this is a soft check
+/// used for UI status and the enable-time availability guard, never a hard
+/// dependency of pi itself.
+async fn probe_rtk_binary(ssh: &SshConfig) -> (bool, Option<String>) {
+    let out = if ssh.host.is_some() {
+        let mut c = ssh_command(ssh, 8);
+        c.arg("rtk --version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        tokio::time::timeout(Duration::from_secs(10), c.output()).await
+    } else {
+        let mut c = Command::new("rtk");
+        c.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        tokio::time::timeout(Duration::from_secs(10), c.output()).await
+    };
+    match out {
+        Ok(Ok(out)) if out.status.success() => {
+            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (true, if version.is_empty() { None } else { Some(version) })
+        }
+        _ => (false, None),
+    }
+}
+
+/// Whether the rtk pi extension is installed globally — local:
+/// `~/.pi/agent/extensions/rtk.ts` exists on this host; remote: `test -f`
+/// against the same path on the SSH target. The remote path is deliberately
+/// unquoted (see `agent_file_exists`/the comment above it) so `~` expands on
+/// the remote shell rather than being treated as a literal character.
+async fn rtk_extension_installed(ssh: &SshConfig) -> bool {
+    if ssh.host.is_some() {
+        let mut c = ssh_command(ssh, 8);
+        c.arg("test -f ~/.pi/agent/extensions/rtk.ts").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        matches!(
+            tokio::time::timeout(Duration::from_secs(10), c.status()).await,
+            Ok(Ok(status)) if status.success()
+        )
+    } else {
+        let Some(home) = home_dir() else { return false };
+        tokio::fs::try_exists(home.join(".pi/agent/extensions/rtk.ts")).await.unwrap_or(false)
+    }
+}
+
+/// Runs `rtk init --agent pi --global` to install the extension — locally,
+/// or over SSH on the pi host. No particular cwd matters (it only ever
+/// touches `~/.pi/agent/extensions/rtk.ts`), so it's run from wherever the
+/// shell/spawn defaults to.
+async fn run_rtk_init(ssh: &SshConfig) -> Result<(), String> {
+    let out = if ssh.host.is_some() {
+        let mut c = ssh_command(ssh, 8);
+        c.arg("rtk init --agent pi --global").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        tokio::time::timeout(Duration::from_secs(20), c.output()).await
+    } else {
+        let mut c = Command::new("rtk");
+        c.arg("init").arg("--agent").arg("pi").arg("--global");
+        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        tokio::time::timeout(Duration::from_secs(20), c.output()).await
+    };
+    match out {
+        Ok(Ok(out)) if out.status.success() => Ok(()),
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if stderr.is_empty() { "rtk init failed".to_string() } else { stderr })
+        }
+        Ok(Err(e)) => Err(format!("failed to run rtk init: {e}")),
+        Err(_) => Err("rtk init timed out".to_string()),
+    }
+}
+
+#[derive(Serialize)]
+struct RtkStatusView {
+    enabled: bool,
+    available: bool,
+    version: Option<String>,
+    #[serde(rename = "extensionInstalled")]
+    extension_installed: bool,
+}
+
+/// `enabled` resolves the stored `Some`/`None` against the extension's
+/// on-disk presence — see `RtkConfig`'s doc comment.
+fn rtk_status_view(stored: Option<bool>, available: bool, version: Option<String>, extension_installed: bool) -> RtkStatusView {
+    RtkStatusView { enabled: stored.unwrap_or(extension_installed), available, version, extension_installed }
+}
+
+async fn get_rtk_status(State(state): State<Arc<AppState>>) -> Json<RtkStatusView> {
+    let ssh = state.ssh.read().await.clone();
+    let stored = state.rtk.read().await.enabled;
+    let (available, version) = probe_rtk_binary(&ssh).await;
+    let extension_installed = rtk_extension_installed(&ssh).await;
+    Json(rtk_status_view(stored, available, version, extension_installed))
+}
+
+#[derive(Deserialize)]
+struct RtkSaveReq {
+    enabled: bool,
+}
+
+/// Flips the global rtk toggle. Enabling installs the extension on demand
+/// (failing the request if `rtk` itself isn't on the pi host, or if `rtk
+/// init` errors); disabling never uninstalls anything, it only changes what
+/// env pi is spawned with. Either direction respawns idle chats so the
+/// change takes effect without interrupting a working agent (see
+/// `respawn_idle`).
+async fn save_rtk_config(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RtkSaveReq>,
+) -> Result<Json<RtkStatusView>, (StatusCode, String)> {
+    let ssh = state.ssh.read().await.clone();
+    if req.enabled {
+        let (available, _version) = probe_rtk_binary(&ssh).await;
+        if !available {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "rtk is not installed on the pi host — install it first (e.g. `brew install rtk` or the install script at github.com/rtk-ai/rtk)".to_string(),
+            ));
+        }
+        if !rtk_extension_installed(&ssh).await {
+            run_rtk_init(&ssh).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        }
+    }
+    state.rtk.write().await.enabled = Some(req.enabled);
+    persist_rtk_config(&state).await;
+    respawn_idle(&state).await;
+
+    let (available, version) = probe_rtk_binary(&ssh).await;
+    let extension_installed = rtk_extension_installed(&ssh).await;
+    Ok(Json(rtk_status_view(Some(req.enabled), available, version, extension_installed)))
 }
 
 // ---- git branch REST API -------------------------------------------------
