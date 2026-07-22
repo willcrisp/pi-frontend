@@ -2039,6 +2039,20 @@ footer {
   color: var(--dim);
   font-size: 12.5px;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.composer-toast-link {
+  color: var(--accent, #7aa2f7);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.composer-toast-link:hover {
+  text-decoration: underline;
 }
 
 .pending-images {
