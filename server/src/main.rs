@@ -515,7 +515,7 @@ fn spawn_child(cfg: &Config, ssh: &SshConfig, cwd: &FsPath, rtk_disabled: bool) 
         // (`RTK_DISABLED=1 exec pi ...`, not `exec RTK_DISABLED=1 pi ...`).
         let rtk_prefix = if rtk_disabled { "RTK_DISABLED=1 " } else { "" };
         let mut remote_cmd = format!(
-            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; exec {rtk_prefix}{} --mode rpc",
+            "cd {quoted_cwd} || {{ echo \"pi-web: project directory not found: {quoted_cwd}\" >&2; exit 1; }}; {RTK_PATH_EXPORT} exec {rtk_prefix}{} --mode rpc",
             shell_quote(&cfg.pi_bin)
         );
         for a in &cfg.pi_args {
@@ -1391,6 +1391,18 @@ async fn load_rtk_config(cfg: &Config) -> RtkConfig {
     }
 }
 
+/// Non-interactive SSH commands (`ssh host "cmd"`, which is exactly how
+/// `spawn_child` execs `pi` and how the probes/`rtk init` below run) don't
+/// source `~/.bashrc`/`~/.profile` the way an interactive login shell does,
+/// so a `rtk` installed via its own installer (`~/.local/bin`) or via
+/// `cargo install` (`~/.cargo/bin`) is invisible on PATH even though it
+/// resolves fine when a user is actually logged into the box — both to
+/// these probes and, just as importantly, to the `rtk` pi extension's own
+/// internal PATH check once `pi` is running. Spliced in ahead of every
+/// remote rtk-related command (and the `pi` exec itself) rather than relying
+/// on the remote shell's own startup files.
+const RTK_PATH_EXPORT: &str = r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH";"#;
+
 /// Result of a soft rtk probe: never a hard error to the caller, but keeps
 /// *why* a probe came back negative (ssh connection refused, auth failure,
 /// timeout, non-zero exit, ...) instead of collapsing every failure mode
@@ -1413,7 +1425,7 @@ struct RtkProbe {
 async fn probe_rtk_binary(ssh: &SshConfig) -> (RtkProbe, Option<String>) {
     let out = if ssh.host.is_some() {
         let mut c = ssh_command(ssh, 8);
-        c.arg("rtk --version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.arg(format!("{RTK_PATH_EXPORT} rtk --version")).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         tokio::time::timeout(Duration::from_secs(10), c.output()).await
     } else {
         let mut c = Command::new("rtk");
@@ -1481,7 +1493,7 @@ async fn rtk_extension_installed(ssh: &SshConfig) -> RtkProbe {
 async fn run_rtk_init(ssh: &SshConfig) -> Result<(), String> {
     let out = if ssh.host.is_some() {
         let mut c = ssh_command(ssh, 8);
-        c.arg("rtk init --agent pi --global").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.arg(format!("{RTK_PATH_EXPORT} rtk init --agent pi --global")).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         tokio::time::timeout(Duration::from_secs(20), c.output()).await
     } else {
         let mut c = Command::new("rtk");

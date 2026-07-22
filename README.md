@@ -238,3 +238,11 @@ per-project):
 
 Turning the toggle on requires `rtk` itself to already be installed on the
 pi host; the pill's tooltip says so if it isn't found.
+
+In `--ssh` relay mode, every rtk-related command (and the `pi` spawn itself)
+runs with `PATH` explicitly widened to include `~/.local/bin` and
+`~/.cargo/bin` on the remote host, since non-interactive SSH commands don't
+source `~/.bashrc`/`~/.profile` the way an interactive login does — without
+that, `rtk` installed via its own installer or `cargo install` would resolve
+fine when you're logged into the box but be invisible to pi-web (and to the
+extension's own PATH check inside `pi` itself).
