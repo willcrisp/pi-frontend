@@ -1391,28 +1391,55 @@ async fn load_rtk_config(cfg: &Config) -> RtkConfig {
     }
 }
 
+/// Result of a soft rtk probe: never a hard error to the caller, but keeps
+/// *why* a probe came back negative (ssh connection refused, auth failure,
+/// timeout, non-zero exit, ...) instead of collapsing every failure mode
+/// into an indistinguishable `false` — that distinction is what tells a user
+/// stuck on "rtk not installed" whether the actual problem is rtk itself or
+/// something upstream like the SSH target being unreachable.
+struct RtkProbe {
+    ok: bool,
+    detail: Option<String>,
+}
+
 /// Probes whether the `rtk` CLI is reachable on the pi host — locally, or
-/// over SSH via the shared `ssh_command` factory — and, if so, its version
-/// string (`rtk --version`'s trimmed stdout). `false`/`None` on any failure
-/// (not installed, not on PATH, ssh error, timeout); this is a soft check
-/// used for UI status and the enable-time availability guard, never a hard
+/// over SSH via the shared `ssh_command` factory. `ok: false` covers "not
+/// installed", "not on PATH", an SSH connection/auth failure, or a timeout
+/// alike — `detail` carries whichever of those actually happened (the
+/// command's stderr, or a description of the timeout/spawn error) so it can
+/// be surfaced to the UI instead of guessed at. This is a soft check used
+/// for UI status and the enable-time availability guard, never a hard
 /// dependency of pi itself.
-async fn probe_rtk_binary(ssh: &SshConfig) -> (bool, Option<String>) {
+async fn probe_rtk_binary(ssh: &SshConfig) -> (RtkProbe, Option<String>) {
     let out = if ssh.host.is_some() {
         let mut c = ssh_command(ssh, 8);
-        c.arg("rtk --version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        c.arg("rtk --version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         tokio::time::timeout(Duration::from_secs(10), c.output()).await
     } else {
         let mut c = Command::new("rtk");
-        c.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        c.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         tokio::time::timeout(Duration::from_secs(10), c.output()).await
     };
     match out {
         Ok(Ok(out)) if out.status.success() => {
-            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            (true, if version.is_empty() { None } else { Some(version) })
+            // Take the last non-empty line rather than the whole trimmed
+            // stdout: a noisy remote login shell (motd/profile scripts) can
+            // print unrelated lines to stdout ahead of rtk's own output.
+            let version = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .last()
+                .map(str::to_string);
+            (RtkProbe { ok: true, detail: None }, version)
         }
-        _ => (false, None),
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let detail = if stderr.is_empty() { format!("rtk --version exited with {}", out.status) } else { stderr };
+            (RtkProbe { ok: false, detail: Some(detail) }, None)
+        }
+        Ok(Err(e)) => (RtkProbe { ok: false, detail: Some(format!("failed to run rtk --version: {e}")) }, None),
+        Err(_) => (RtkProbe { ok: false, detail: Some("rtk --version timed out after 10s".to_string()) }, None),
     }
 }
 
@@ -1421,17 +1448,29 @@ async fn probe_rtk_binary(ssh: &SshConfig) -> (bool, Option<String>) {
 /// against the same path on the SSH target. The remote path is deliberately
 /// unquoted (see `agent_file_exists`/the comment above it) so `~` expands on
 /// the remote shell rather than being treated as a literal character.
-async fn rtk_extension_installed(ssh: &SshConfig) -> bool {
+///
+/// Over SSH, `test -f` itself exits 1 for "file missing" (not an error —
+/// `detail` stays `None`), but ssh's own connection/auth failures exit 255
+/// with a diagnostic on stderr; that case is what `detail` is for.
+async fn rtk_extension_installed(ssh: &SshConfig) -> RtkProbe {
     if ssh.host.is_some() {
         let mut c = ssh_command(ssh, 8);
-        c.arg("test -f ~/.pi/agent/extensions/rtk.ts").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        matches!(
-            tokio::time::timeout(Duration::from_secs(10), c.status()).await,
-            Ok(Ok(status)) if status.success()
-        )
+        c.arg("test -f ~/.pi/agent/extensions/rtk.ts").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        match tokio::time::timeout(Duration::from_secs(10), c.output()).await {
+            Ok(Ok(out)) if out.status.success() => RtkProbe { ok: true, detail: None },
+            Ok(Ok(out)) if out.status.code() == Some(1) => RtkProbe { ok: false, detail: None },
+            Ok(Ok(out)) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let detail = if stderr.is_empty() { format!("ssh exited with {}", out.status) } else { stderr };
+                RtkProbe { ok: false, detail: Some(detail) }
+            }
+            Ok(Err(e)) => RtkProbe { ok: false, detail: Some(format!("failed to check for the rtk extension over ssh: {e}")) },
+            Err(_) => RtkProbe { ok: false, detail: Some("checking for the rtk extension over ssh timed out after 10s".to_string()) },
+        }
     } else {
-        let Some(home) = home_dir() else { return false };
-        tokio::fs::try_exists(home.join(".pi/agent/extensions/rtk.ts")).await.unwrap_or(false)
+        let Some(home) = home_dir() else { return RtkProbe { ok: false, detail: None } };
+        let exists = tokio::fs::try_exists(home.join(".pi/agent/extensions/rtk.ts")).await.unwrap_or(false);
+        RtkProbe { ok: exists, detail: None }
     }
 }
 
@@ -1468,20 +1507,36 @@ struct RtkStatusView {
     version: Option<String>,
     #[serde(rename = "extensionInstalled")]
     extension_installed: bool,
+    /// Why `available`/`extensionInstalled` came back negative, when known
+    /// — an SSH connect/auth failure, a timeout, or a non-zero exit's
+    /// stderr — surfaced verbatim so a false "not installed" reading (e.g.
+    /// the pi host is actually just unreachable) doesn't look identical to
+    /// rtk genuinely being absent. `None` when both probes are clean.
+    #[serde(rename = "probeError", skip_serializing_if = "Option::is_none")]
+    probe_error: Option<String>,
 }
 
 /// `enabled` resolves the stored `Some`/`None` against the extension's
-/// on-disk presence — see `RtkConfig`'s doc comment.
-fn rtk_status_view(stored: Option<bool>, available: bool, version: Option<String>, extension_installed: bool) -> RtkStatusView {
-    RtkStatusView { enabled: stored.unwrap_or(extension_installed), available, version, extension_installed }
+/// on-disk presence — see `RtkConfig`'s doc comment. `probe_error` prefers
+/// the binary probe's detail (it runs first and a dead SSH target fails
+/// both probes identically) and falls back to the extension probe's.
+fn rtk_status_view(stored: Option<bool>, binary: RtkProbe, version: Option<String>, extension: RtkProbe) -> RtkStatusView {
+    let probe_error = binary.detail.or(extension.detail);
+    RtkStatusView {
+        enabled: stored.unwrap_or(extension.ok),
+        available: binary.ok,
+        version,
+        extension_installed: extension.ok,
+        probe_error,
+    }
 }
 
 async fn get_rtk_status(State(state): State<Arc<AppState>>) -> Json<RtkStatusView> {
     let ssh = state.ssh.read().await.clone();
     let stored = state.rtk.read().await.enabled;
-    let (available, version) = probe_rtk_binary(&ssh).await;
-    let extension_installed = rtk_extension_installed(&ssh).await;
-    Json(rtk_status_view(stored, available, version, extension_installed))
+    let (binary, version) = probe_rtk_binary(&ssh).await;
+    let extension = rtk_extension_installed(&ssh).await;
+    Json(rtk_status_view(stored, binary, version, extension))
 }
 
 #[derive(Deserialize)]
@@ -1501,14 +1556,18 @@ async fn save_rtk_config(
 ) -> Result<Json<RtkStatusView>, (StatusCode, String)> {
     let ssh = state.ssh.read().await.clone();
     if req.enabled {
-        let (available, _version) = probe_rtk_binary(&ssh).await;
-        if !available {
+        let (binary, _version) = probe_rtk_binary(&ssh).await;
+        if !binary.ok {
+            let reason = binary.detail.unwrap_or_else(|| "rtk was not found on the pi host".to_string());
             return Err((
                 StatusCode::BAD_REQUEST,
-                "rtk is not installed on the pi host — install it first (e.g. `brew install rtk` or the install script at github.com/rtk-ai/rtk)".to_string(),
+                format!(
+                    "rtk is not available on the pi host: {reason} — install it first (e.g. `brew install rtk` or the install script at github.com/rtk-ai/rtk), or check the SSH target if one is set"
+                ),
             ));
         }
-        if !rtk_extension_installed(&ssh).await {
+        let extension = rtk_extension_installed(&ssh).await;
+        if !extension.ok {
             run_rtk_init(&ssh).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         }
     }
@@ -1516,9 +1575,9 @@ async fn save_rtk_config(
     persist_rtk_config(&state).await;
     respawn_idle(&state).await;
 
-    let (available, version) = probe_rtk_binary(&ssh).await;
-    let extension_installed = rtk_extension_installed(&ssh).await;
-    Ok(Json(rtk_status_view(Some(req.enabled), available, version, extension_installed)))
+    let (binary, version) = probe_rtk_binary(&ssh).await;
+    let extension = rtk_extension_installed(&ssh).await;
+    Ok(Json(rtk_status_view(Some(req.enabled), binary, version, extension)))
 }
 
 // ---- git branch REST API -------------------------------------------------

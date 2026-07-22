@@ -28,7 +28,9 @@ async function toggle() {
 }
 
 function title() {
-  if (rtkStore.loaded && !rtkStore.available) return "rtk not installed on the pi host";
+  if (rtkStore.loaded && !rtkStore.available) {
+    return rtkStore.probeError ? `rtk not available: ${rtkStore.probeError}` : "rtk not installed on the pi host";
+  }
   const version = rtkStore.version ? ` ${rtkStore.version}` : "";
   return `rtk${version} — output compression ${rtkStore.enabled ? "on" : "off"}`;
 }

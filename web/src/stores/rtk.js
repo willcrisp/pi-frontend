@@ -4,7 +4,7 @@
 // global on/off switch, same conventions as ssh.js.
 //
 // Key exports:
-//   rtkStore              — {enabled, available, version, extensionInstalled, loaded, saving, error}
+//   rtkStore              — {enabled, available, version, extensionInstalled, probeError, loaded, saving, error}
 //   fetchRtkStatus()       — GET /api/rtk, populates the store
 //   setRtkEnabled(enabled) — PUT /api/rtk; applies the returned status on success,
 //                            stores the error string and rethrows on failure
@@ -15,6 +15,11 @@ export const rtkStore = reactive({
   available: false,
   version: null,
   extensionInstalled: false,
+  // Why `available`/`extensionInstalled` came back negative (an SSH
+  // connect/auth failure, a timeout, a non-zero exit's stderr) — set by the
+  // server when known, so "not installed" and "pi host unreachable" don't
+  // look identical. Null when both probes are clean.
+  probeError: null,
   loaded: false,
   saving: false,
   error: "",
@@ -25,6 +30,7 @@ function applyStatus(status) {
   rtkStore.available = !!status.available;
   rtkStore.version = status.version ?? null;
   rtkStore.extensionInstalled = !!status.extensionInstalled;
+  rtkStore.probeError = status.probeError ?? null;
 }
 
 export async function fetchRtkStatus() {
