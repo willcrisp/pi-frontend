@@ -85,3 +85,9 @@ See pi's extension docs and Serena's own repo for the authoritative APIs:
 
 - https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md
 - https://github.com/oraios/serena
+
+## Using it
+
+Once installed, see `COOKBOOK.md` in this directory for indexing projects,
+checking the connection, prompting patterns that get the most out of
+Serena's tools, and troubleshooting.
