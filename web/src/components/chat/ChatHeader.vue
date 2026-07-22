@@ -13,6 +13,7 @@ import { openRenameDialog } from "../../stores/renameDialog.js";
 import UsagePopover from "../popovers/UsagePopover.vue";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import SshPopover from "../popovers/SshPopover.vue";
+import SerenaPopover from "../popovers/SerenaPopover.vue";
 import CoderMenu from "../popovers/CoderMenu.vue";
 import pixelBrainFire from "../../assets/pixel-brain-fire.svg";
 
@@ -119,6 +120,7 @@ function scrollToRunningSubagent() {
   <header>
     <div class="header-left">
       <SshPopover />
+      <SerenaPopover />
       <span class="wordmark" title="pi coding agent">pi</span>
       <CoderMenu />
       <span :title="modelLabel">{{ modelLabel }}</span>

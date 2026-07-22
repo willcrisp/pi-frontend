@@ -56,6 +56,12 @@ export const COLOR_FIELDS = [
     cssVar: "--msg-subagent",
     default: "#bb9af7",
   },
+  {
+    key: "toolSerena",
+    label: "Serena tool call",
+    cssVar: "--msg-tool-serena",
+    default: "#bb9af7",
+  },
 ];
 
 const STORAGE_KEY = "pi-web:color-profile";

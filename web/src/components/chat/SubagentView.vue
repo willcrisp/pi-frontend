@@ -10,7 +10,7 @@
 -->
 <script setup>
 import { computed, onUnmounted, ref, watch } from "vue";
-import { store, subagentDetails } from "../../stores/pi.js";
+import { isSerenaTool, store, subagentDetails } from "../../stores/pi.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 
 const props = defineProps({
@@ -221,7 +221,7 @@ const placeholderCards = computed(() => {
               <template v-for="(item, ii) in activityItems(res)" :key="ii">
                 <div v-if="item.kind === 'text'" class="subagent-line markdown" v-html="renderMarkdown(item.text)"></div>
                 <p v-else-if="item.kind === 'tool'" class="subagent-line subagent-toolcall">
-                  <span class="subagent-toolcall-name">{{ item.name }}</span>
+                  <span class="subagent-toolcall-name" :class="{ serena: isSerenaTool(item.name) }">{{ item.name }}</span>
                   <span v-if="item.args" class="subagent-toolcall-args">{{ item.args }}</span>
                 </p>
                 <p v-else class="subagent-line subagent-toolresult">{{ item.text }}</p>

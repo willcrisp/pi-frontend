@@ -17,6 +17,7 @@
   --msg-tool: var(--accent);
   --msg-tool-error: var(--error);
   --msg-subagent: #bb9af7;
+  --msg-tool-serena: #bb9af7;
 }
 
 * {
@@ -1643,6 +1644,10 @@ main {
   color: var(--msg-tool-error);
 }
 
+.tool.serena summary .tool-name {
+  color: var(--msg-tool-serena);
+}
+
 .tool pre {
   padding: 8px 10px;
   border-top: 1px solid var(--border);
@@ -1823,6 +1828,10 @@ main {
 .subagent-toolcall-name {
   color: var(--msg-tool);
   flex-shrink: 0;
+}
+
+.subagent-toolcall-name.serena {
+  color: var(--msg-tool-serena);
 }
 
 .subagent-toolcall-args {

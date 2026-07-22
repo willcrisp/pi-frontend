@@ -265,6 +265,15 @@ export function subagentDetails(r) {
   return Array.isArray(r?.details?.results) ? r.details : null;
 }
 
+// Detects a Serena semantic-code tool call by name (registered by the
+// pi-serena extension as `mcp__serena__<tool>`). Tolerant to variations in
+// separator length so it still matches if the extension's naming shifts
+// slightly. Single source of truth for MessageView.vue/SubagentView.vue's
+// Serena tool-call coloring.
+export function isSerenaTool(name) {
+  return typeof name === "string" && /^mcp_+serena_+/i.test(name);
+}
+
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // Subset of pi's BUILTIN_SLASH_COMMANDS (core/slash-commands.js) that both (a) have
