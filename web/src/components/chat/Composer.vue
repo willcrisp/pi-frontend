@@ -249,8 +249,31 @@ function onThinkingShortcut(e) {
   setThinkingLevel(THINKING_LEVELS[next]);
 }
 
-onMounted(() => window.addEventListener("keydown", onThinkingShortcut));
-onBeforeUnmount(() => window.removeEventListener("keydown", onThinkingShortcut));
+// Ctrl/Cmd+ArrowLeft/Right cycles through models, restricted to the ones
+// sharing the current model's provider (e.g. Sonnet <-> Opus <-> Haiku
+// within Anthropic) so it never jumps to a different provider's lineup.
+function onModelShortcut(e) {
+  if (!(e.ctrlKey || e.metaKey) || !["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  if (!store.model) return;
+
+  const siblings = store.availableModels.filter((m) => m.provider === store.model.provider);
+  const index = siblings.findIndex((m) => m.id === store.model.id);
+  if (index < 0) return;
+  const next = e.key === "ArrowRight" ? index + 1 : index - 1;
+  if (next < 0 || next >= siblings.length) return;
+
+  e.preventDefault();
+  setModel(siblings[next]);
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onThinkingShortcut);
+  window.addEventListener("keydown", onModelShortcut);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onThinkingShortcut);
+  window.removeEventListener("keydown", onModelShortcut);
+});
 
 // While streaming, sends queue instead of prompting directly: "steer" delivers
 // after the current turn's tool calls, "followUp" once the agent finishes.
