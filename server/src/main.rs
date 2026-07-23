@@ -1109,13 +1109,14 @@ async fn list_remote_dirs(ssh: &SshConfig, dir: &str) -> Result<Vec<String>, Str
 
 // ---- Serena monitoring ----------------------------------------------------
 //
-// Read-only, best-effort status for the `pi-serena` extension's per-process
-// Serena instances (see pi-serena/README.md): Serena has no persistent
-// daemon or wire-protocol visibility to the server (it runs over stdio, one
-// instance per pi process), so this probes its side-channel web dashboard
-// (`--context ide-assistant`'s default HTTP server, base port 24282,
-// probing upward if busy) across a small fixed port range, and separately
-// scans known project paths for `.serena/cache/<language>/` to report which
+// Read-only, best-effort status for the `pi-serena` extension's Serena
+// instances (see pi-serena/README.md): each project now runs one persistent
+// Serena instance, started independently of pi (via `serena-daemon.sh` or
+// the `serena@.service` systemd template) rather than spawned per pi
+// process, but the server still has no wire-protocol visibility into it —
+// so this probes its side-channel web dashboard (base port 24282, probing
+// upward if busy) across a small fixed port range, and separately scans
+// known project paths for `.serena/cache/<language>/` to report which
 // projects have been indexed (a filesystem fact independent of whether any
 // instance is currently running). Dual-mode like `run_git`/
 // `list_remote_dirs` above: local via `reqwest` + `tokio::fs`, or over one

@@ -1,0 +1,46 @@
+# Template systemd --user unit for a persistent per-project Serena MCP
+# server, so it survives reboots/logouts without a human leaving a terminal
+# open running serena-daemon.sh by hand. One instance per project; %i/%I are
+# systemd's template-unit substitutions for the instance name given after
+# the "@" (see systemd.unit(5), "Specifiers").
+#
+# The instance name is the project's absolute path, escaped so it's safe to
+# use as a unit name. Don't hand-escape it — use systemd-escape:
+#
+#   systemd-escape --template=serena@.service --path /home/user/my-project
+#   -> serena@home-user-my\x2dproject.service   (escaping details vary)
+#
+# That gives you the full unit name to pass to systemctl/journalctl below.
+# systemd expands %I back to the original, unescaped path (%i would give you
+# the still-escaped form), which is what ExecStart needs.
+#
+# Setup:
+#   mkdir -p ~/.config/systemd/user
+#   cp serena@.service ~/.config/systemd/user/
+#   # edit the ExecStart path below to point at your checkout of this repo
+#   systemctl --user daemon-reload
+#
+# Enable + start for a given project (repeat per project):
+#   unit=$(systemd-escape --template=serena@.service --path /home/user/my-project)
+#   systemctl --user enable --now "$unit"
+#
+# Check status / logs:
+#   systemctl --user status "$unit"
+#   journalctl --user -u "$unit" -f
+#
+# Stop:
+#   systemctl --user disable --now "$unit"
+
+[Unit]
+Description=Serena MCP server for %I
+After=network.target
+
+[Service]
+Type=simple
+# Edit this path to wherever you checked out pi-frontend.
+ExecStart=%h/pi-frontend/pi-serena/serena-daemon.sh %I --foreground
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

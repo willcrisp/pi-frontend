@@ -4,7 +4,8 @@
   projects, and per-tool call/token stats aggregated across every live
   dashboard instance. Modeled on SshPopover.vue (outside-click/Escape
   close, fetch-on-open via watch(open)) with CoderMenu.vue's light polling
-  while open, since Serena instances come and go with pi processes.
+  while open, since a project's persistent Serena instance can be started,
+  stopped, or restarted independently of this popover being open.
 -->
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
