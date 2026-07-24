@@ -6,10 +6,11 @@ import { computed } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import CoderMenu from "../popovers/CoderMenu.vue";
+import SshPopover from "../popovers/SshPopover.vue";
 import UsagePopover from "../popovers/UsagePopover.vue";
 
 const connectionStatusClass = computed(() => (store.connected ? "active" : "offline"));
-const modelLabel = computed(() => store.selectedModel || "OpenCode V2");
+const modelLabel = computed(() => (store.selectedModel ? store.selectedModel.modelID : "OpenCode V2"));
 const sessionTitle = computed(() => store.activeSessionId ? `Session ${store.activeSessionId.slice(0, 8)}` : "OpenCode Harness");
 </script>
 
@@ -30,6 +31,7 @@ const sessionTitle = computed(() => store.activeSessionId ? `Session ${store.act
     </div>
 
     <div class="header-right">
+      <SshPopover />
       <UsagePopover class="header-usage" />
       <ColorProfilePopover />
     </div>

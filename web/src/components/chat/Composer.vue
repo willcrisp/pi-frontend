@@ -40,8 +40,15 @@ function autosize() {
   el.style.height = `${el.scrollHeight}px`;
 }
 
+const selectedModelKey = computed(() =>
+  store.selectedModel ? `${store.selectedModel.providerID}:${store.selectedModel.modelID}` : ""
+);
+
 function onModelChange(e) {
-  setModel(e.target.value);
+  const value = e.target.value;
+  if (!value) return;
+  const sep = value.indexOf(":");
+  setModel({ providerID: value.slice(0, sep), modelID: value.slice(sep + 1) });
 }
 
 function onAgentChange(e) {
@@ -100,12 +107,16 @@ function onAgentChange(e) {
       <select
         v-if="store.availableModels.length"
         class="model-select"
-        :value="store.selectedModel"
+        :value="selectedModelKey"
         title="Model"
         @change="onModelChange"
       >
-        <option v-for="m in store.availableModels" :key="typeof m === 'object' ? m.id : m" :value="typeof m === 'object' ? m.id : m">
-          {{ typeof m === "object" ? m.name || m.id : m }}
+        <option
+          v-for="m in store.availableModels"
+          :key="`${m.providerID}:${m.modelID}`"
+          :value="`${m.providerID}:${m.modelID}`"
+        >
+          {{ m.label }}
         </option>
       </select>
 
@@ -116,8 +127,8 @@ function onAgentChange(e) {
         title="Agent"
         @change="onAgentChange"
       >
-        <option v-for="a in store.availableAgents" :key="typeof a === 'object' ? a.id : a" :value="typeof a === 'object' ? a.id : a">
-          {{ typeof a === "object" ? a.name || a.id : a }}
+        <option v-for="a in store.availableAgents" :key="a.name" :value="a.name" :title="a.description">
+          {{ a.name }}
         </option>
       </select>
     </div>

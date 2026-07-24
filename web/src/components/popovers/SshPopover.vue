@@ -4,11 +4,13 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
-import { sshStore, testTargetUrl, setTargetUrl } from "../../stores/ssh.js";
+import { connectionStore, testConnection, setConnection, setCredentials } from "../../stores/ssh.js";
 
 const root = ref(null);
 const open = ref(false);
-const targetUrlInput = ref(sshStore.targetUrl);
+const portInput = ref(connectionStore.port);
+const username = ref(connectionStore.username);
+const password = ref(connectionStore.password);
 
 function onDocClick(e) {
   if (open.value && root.value && !root.value.contains(e.target)) {
@@ -31,11 +33,13 @@ onUnmounted(() => {
 });
 
 async function onTest() {
-  await testTargetUrl(targetUrlInput.value);
+  setCredentials(username.value, password.value);
+  await testConnection(portInput.value, username.value, password.value);
 }
 
 function onSave() {
-  setTargetUrl(targetUrlInput.value);
+  setConnection(portInput.value);
+  setCredentials(username.value, password.value);
   open.value = false;
   window.location.reload();
 }
@@ -54,32 +58,50 @@ function onSave() {
 
     <div class="ssh-popover-panel" :class="{ open }">
       <div class="ssh-status usage-dim">
-        OpenCode Target: {{ sshStore.targetUrl }}
+        OpenCode: 127.0.0.1:{{ connectionStore.port }} ({{ connectionStore.mode }})
       </div>
 
       <input
-        v-model="targetUrlInput"
+        v-model.number="portInput"
+        type="number"
+        min="1"
+        max="65535"
+        placeholder="4096"
+        autocomplete="off"
+        spellcheck="false"
+      />
+
+      <input
+        v-model="username"
         type="text"
-        placeholder="http://127.0.0.1:4096"
+        placeholder="opencode"
+        autocomplete="off"
+        spellcheck="false"
+      />
+
+      <input
+        v-model="password"
+        type="password"
+        placeholder="password"
         autocomplete="off"
         spellcheck="false"
       />
 
       <div class="ssh-actions">
-        <button type="button" :disabled="!targetUrlInput.trim() || sshStore.testing" @click="onTest">
-          {{ sshStore.testing ? "Testing…" : "Test Connection" }}
+        <button type="button" :disabled="!portInput || connectionStore.testing" @click="onTest">
+          {{ connectionStore.testing ? "Testing…" : "Test Connection" }}
         </button>
-        <button type="button" :disabled="!targetUrlInput.trim()" @click="onSave">
+        <button type="button" :disabled="!portInput" @click="onSave">
           Save &amp; Connect
         </button>
       </div>
 
-      <div v-if="sshStore.testResult" class="ssh-test-result" :class="sshStore.testResult.ok ? 'ok' : 'fail'">
-        {{ sshStore.testResult.message }}
+      <div v-if="connectionStore.testResult" class="ssh-test-result" :class="connectionStore.testResult.ok ? 'ok' : 'fail'">
+        {{ connectionStore.testResult.message }}
       </div>
 
       <div class="usage-dim ssh-help">
-        For SSH remote workspaces, forward port 4096 (`ssh -L 4096:localhost:4096 user@host`) or enter direct endpoint.
+        For SSH remote workspaces, forward the remote server to a local port first (`ssh -L 5000:localhost:4096 user@host`), then enter that port here.
       </div>
     </div>
   </div>

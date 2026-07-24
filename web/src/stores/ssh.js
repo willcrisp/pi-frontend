@@ -1,39 +1,79 @@
-// OpenCode V2 SSH & Target Server Store
+// OpenCode V2 Connection Store
 import { reactive } from "vue";
 
-const TARGET_KEY = "opencode-web:serverTarget";
+const PORT_KEY = "opencode-web:port";
+const MODE_KEY = "opencode-web:mode";
+const USERNAME_KEY = "opencode-web:username";
+const PASSWORD_KEY = "opencode-web:password";
 
-export const sshStore = reactive({
-  targetUrl: localStorage.getItem(TARGET_KEY) || "http://127.0.0.1:4096",
-  host: null,
+export const connectionStore = reactive({
+  port: Number(localStorage.getItem(PORT_KEY)) || 4096,
+  mode: localStorage.getItem(MODE_KEY) || "local", // "local" | "remote"
+  status: "unknown", // "unknown" | "connecting" | "connected" | "failed"
   testing: false,
-  testResult: null,
+  testResult: null, // { ok, message } | null
   error: "",
+  username: localStorage.getItem(USERNAME_KEY) || "opencode",
+  password: localStorage.getItem(PASSWORD_KEY) || "",
 });
 
-export async function testTargetUrl(url) {
-  sshStore.testing = true;
-  sshStore.testResult = null;
-  sshStore.error = "";
+export function apiBase() {
+  // Proxy routing prefix `/api/<port>` (stripped by the Vite dev proxy) + the opencode2
+  // server's own `/api` route prefix. Forwarded path becomes `/api/...` on the server.
+  return `/api/${connectionStore.port}/api`;
+}
+
+// UTF-8-safe base64 basic-auth header; empty when no password (server has no auth).
+function buildAuthHeaders(username, password) {
+  if (!password) return {};
+  const token = btoa(unescape(encodeURIComponent(`${username || "opencode"}:${password}`)));
+  return { Authorization: `Basic ${token}` };
+}
+
+export function authHeaders() {
+  return buildAuthHeaders(connectionStore.username, connectionStore.password);
+}
+
+export function setCredentials(username, password) {
+  connectionStore.username = username || "opencode";
+  connectionStore.password = password || "";
+  localStorage.setItem(USERNAME_KEY, connectionStore.username);
+  localStorage.setItem(PASSWORD_KEY, connectionStore.password);
+}
+
+export async function testConnection(port, username, password) {
+  connectionStore.testing = true;
+  connectionStore.testResult = null;
+  const u = username !== undefined ? username : connectionStore.username;
+  const p = password !== undefined ? password : connectionStore.password;
   try {
-    const res = await fetch(`${url.replace(/\/$/, "")}/api/health`);
+    const res = await fetch(`/api/${port}/api/health`, { headers: buildAuthHeaders(u, p) });
     if (res.ok) {
-      sshStore.testResult = { ok: true, message: "Connected to OpenCode V2 server!" };
+      connectionStore.testResult = { ok: true, message: "Connected to OpenCode V2!" };
       return true;
-    } else {
-      sshStore.testResult = { ok: false, message: `Server returned status ${res.status}` };
+    }
+    if (res.status === 401) {
+      connectionStore.testResult = { ok: false, message: "Authentication failed — check username/password" };
       return false;
     }
+    connectionStore.testResult = { ok: false, message: `Server returned ${res.status}` };
+    return false;
   } catch (err) {
-    sshStore.testResult = { ok: false, message: err.message || "Failed to reach target server" };
+    connectionStore.testResult = { ok: false, message: err.message || "Failed to reach server" };
     return false;
   } finally {
-    sshStore.testing = false;
+    connectionStore.testing = false;
   }
 }
 
-export function setTargetUrl(url) {
-  const cleanUrl = url.trim().replace(/\/$/, "");
-  sshStore.targetUrl = cleanUrl;
-  localStorage.setItem(TARGET_KEY, cleanUrl);
+export function setConnection(port, mode) {
+  connectionStore.port = Number(port) || 4096;
+  if (mode) connectionStore.mode = mode;
+  localStorage.setItem(PORT_KEY, String(connectionStore.port));
+  localStorage.setItem(MODE_KEY, connectionStore.mode);
 }
+
+// --- Back-compat aliases for SshPopover.vue (Phase B rewires it and drops these) ---
+export const sshStore = connectionStore; // alias (targetUrl no longer used)
+export const testTargetUrl = (url) => testConnection(url); // legacy shim
+export const setTargetUrl = (url) => setConnection(url);

@@ -1,6 +1,14 @@
 // OpenCode V2 Projects & Sessions Store
 import { reactive } from "vue";
-import { connectToSession, opencodeStore } from "./opencode.js";
+import { connectToSession, opencodeStore, selectedModelRef } from "./opencode.js";
+import { apiBase, authHeaders } from "./ssh.js";
+
+// Unwrap the opencode2 `{ data: [...] }` list envelope.
+function unwrap(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  return [];
+}
 
 const LAST_SESSION_KEY = "opencode-web:lastSessionId";
 
@@ -11,32 +19,19 @@ export const projectsStore = reactive({
   loadingSessions: false,
 });
 
-export async function fetchProjects() {
-  try {
-    const res = await fetch("/api/project");
-    if (!res.ok) return;
-    const data = await res.json();
-    projectsStore.projects = Array.isArray(data) ? data : [data];
-    if (projectsStore.projects.length > 0 && !projectsStore.currentProjectId) {
-      projectsStore.currentProjectId = projectsStore.projects[0].id || projectsStore.projects[0].path || "default";
-    }
-  } catch (err) {
-    console.warn("Failed to fetch OpenCode projects:", err);
-  }
-}
-
 export async function fetchSessions() {
   projectsStore.loadingSessions = true;
   try {
-    const res = await fetch("/api/session");
+    const res = await fetch(`${apiBase()}/session`, { headers: authHeaders() });
     if (res.ok) {
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : data.sessions || [];
-      projectsStore.sessions = list.map((s) => ({
-        id: s.id || s.sessionID,
-        title: s.title || s.name || `Session ${s.id || s.sessionID}`,
-        updatedAt: s.updatedAt || s.createdAt || Date.now(),
-      }));
+      const list = unwrap(await res.json());
+      projectsStore.sessions = list
+        .map((s) => ({
+          id: s.id,
+          title: s.title || "Untitled",
+          updatedAt: (s.time && (s.time.updated || s.time.created)) || 0,
+        }))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
     }
   } catch (err) {
     console.error("Failed to fetch OpenCode sessions:", err);
@@ -47,15 +42,21 @@ export async function fetchSessions() {
 
 export async function startNewChat() {
   try {
-    const res = await fetch("/api/session", {
+    // opencode2 create body takes no title (rename endpoint sets it); seed with current selection.
+    const body = {};
+    if (opencodeStore.selectedAgent) body.agent = opencodeStore.selectedAgent;
+    const modelRef = selectedModelRef();
+    if (modelRef) body.model = modelRef;
+
+    const res = await fetch(`${apiBase()}/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "New Session" }),
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
     });
 
     if (res.ok) {
-      const newSessionObj = await res.json();
-      const newId = newSessionObj.id || newSessionObj.sessionID;
+      const payload = await res.json();
+      const newId = payload && payload.data ? payload.data.id : payload && payload.id;
       await fetchSessions();
       if (newId) {
         openSession(newId);
@@ -68,7 +69,7 @@ export async function startNewChat() {
 
 export async function removeSession(sessionID) {
   try {
-    await fetch(`/api/session/${sessionID}`, { method: "DELETE" });
+    await fetch(`${apiBase()}/session/${sessionID}`, { method: "DELETE", headers: authHeaders() });
     projectsStore.sessions = projectsStore.sessions.filter((s) => s.id !== sessionID);
     if (opencodeStore.activeSessionId === sessionID) {
       if (projectsStore.sessions.length > 0) {
@@ -89,7 +90,6 @@ export function openSession(sessionID) {
 }
 
 export async function initProjects() {
-  await fetchProjects();
   await fetchSessions();
 
   const lastId = localStorage.getItem(LAST_SESSION_KEY);
