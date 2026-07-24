@@ -30,7 +30,10 @@ export async function fetchSessions() {
           id: s.id,
           title: s.title || "Untitled",
           updatedAt: (s.time && (s.time.updated || s.time.created)) || 0,
-          directory: s.directory || "",
+          // Session.location.directory is the project root (see docs/opencode-api.md) —
+          // this endpoint's SessionV2Info nests it under `location`, unlike the legacy
+          // (non-V2) Session type, which has a flat top-level `directory`.
+          directory: (s.location && s.location.directory) || "",
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
     }
