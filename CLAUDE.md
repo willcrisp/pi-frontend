@@ -18,6 +18,13 @@ npm run build   # Production build to web/dist/
 
 Vite proxies `/api` requests to `http://127.0.0.1:4096` by default (the standard OpenCode V2 server port).
 
+See `docs/opencode-api.md` before touching any request/response shape in
+`opencode.js`/`projects.js`. The live target server's own `/doc` (OpenAPI,
+served by `opencode serve` itself) is the only source of truth for field
+shapes — never a packaged SDK or hosted docs page, both of which can drift
+from the server you're actually pointed at. The doc has the endpoint index
+of what's already wired up and a known gotcha to re-verify against `/doc`.
+
 ## Architecture
 
 - `opencode.js`: Reactive store for OpenCode V2 API surface (`/api/session`, `/api/prompt`, `/api/event`, `/api/model`, `/api/agent`).

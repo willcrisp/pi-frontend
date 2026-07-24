@@ -197,6 +197,13 @@ body {
   white-space: nowrap;
 }
 
+.project-collapse-icon {
+  flex: none;
+  width: 10px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
 .new-chat-btn {
   flex: none;
   background: none;
