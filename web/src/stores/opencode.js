@@ -12,8 +12,9 @@ export const opencodeStore = reactive({
   messages: [],
   forkMessages: [],
   isStreaming: false,
-  availableModels: [], // [{ providerID, modelID, label, contextLimit }]
+  availableModels: [], // [{ providerID, modelID, label, contextLimit, variants }]
   selectedModel: null, // { providerID, modelID }
+  thinkingLevel: "", // selected model variant name ("" = provider default)
   availableAgents: [],
   selectedAgent: "build",
   draft: "",
@@ -25,6 +26,7 @@ export const opencodeStore = reactive({
   },
   toolResults: {},
   commands: [],
+  skills: [],
 });
 
 // Helper function for subagent details compatibility
@@ -50,8 +52,20 @@ export async function initOpenCode() {
     opencodeStore.error = `Failed to reach opencode server at ${apiBase()}/health`;
   }
 
-  await Promise.all([loadModels(), loadAgents(), loadCommands()]);
+  await Promise.all([loadModels(), loadAgents(), loadCommands(), loadSkills()]);
   setupEventStream();
+}
+
+// Variant lists arrive as arrays of names (or {id/name} objects) on live
+// servers; tolerate a keyed-object shape too. Returns an array of name strings.
+function normalizeVariants(variants) {
+  if (Array.isArray(variants)) {
+    return variants
+      .map((v) => (typeof v === "string" ? v : (v && (v.id || v.name)) || ""))
+      .filter(Boolean);
+  }
+  if (variants && typeof variants === "object") return Object.keys(variants);
+  return [];
 }
 
 // Fetch the flat model catalog (GET /api/model -> { data: Model.Info[] }) for the picker.
@@ -60,11 +74,19 @@ export async function loadModels() {
     const res = await fetch(`${apiBase()}/model`, { headers: authHeaders() });
     if (res.ok) {
       const models = unwrap(await res.json());
-      opencodeStore.availableModels = models.map((m) => ({
+      // Hide the built-in "opencode" provider — only show the user's own
+      // connected providers.
+      opencodeStore.availableModels = models
+        .filter((m) => m.providerID !== "opencode")
+        .map((m) => ({
         providerID: m.providerID,
         modelID: m.id,
         label: m.name || `${m.providerID}/${m.id}`,
         contextLimit: m.limit && m.limit.context,
+        // Variant names (reasoning-effort presets) if this server's Model.Info
+        // carries them. Live servers return an array (of names or {id/name}
+        // objects); tolerate a keyed object too.
+        variants: normalizeVariants(m.variants),
       }));
 
       if (!opencodeStore.selectedModel && opencodeStore.availableModels.length > 0) {
@@ -85,10 +107,12 @@ export async function loadAgents() {
       const agents = unwrap(await res.json());
       opencodeStore.availableAgents = agents.filter((a) => a.mode !== "subagent" && !a.hidden);
 
-      const names = opencodeStore.availableAgents.map((a) => a.name);
-      if (!names.includes(opencodeStore.selectedAgent)) {
+      // Agents are addressed by `id` ("build"); `name` is the display label ("Build").
+      // Sending the name yields `Agent not found: "Build"` on the server.
+      const ids = opencodeStore.availableAgents.map((a) => a.id || a.name);
+      if (!ids.includes(opencodeStore.selectedAgent)) {
         const primary = opencodeStore.availableAgents.find((a) => a.mode === "primary");
-        opencodeStore.selectedAgent = (primary && primary.name) || names[0] || "build";
+        opencodeStore.selectedAgent = (primary && (primary.id || primary.name)) || ids[0] || "build";
       }
     }
   } catch (err) {
@@ -105,6 +129,55 @@ export async function loadCommands() {
     }
   } catch (err) {
     console.warn("Could not load opencode commands:", err);
+  }
+}
+
+// Fetch available skills (GET /api/skill -> { data: [...] }); optional —
+// older servers without the route just leave the list empty.
+export async function loadSkills() {
+  try {
+    const res = await fetch(`${apiBase()}/skill`, { headers: authHeaders() });
+    if (res.ok) {
+      opencodeStore.skills = unwrap(await res.json());
+    }
+  } catch (err) {
+    console.warn("Could not load opencode skills:", err);
+  }
+}
+
+// Run a server slash command (POST /api/session/:id/command { command, arguments }).
+// If the server doesn't accept that route/shape, fall back to sending the raw
+// "/name args" text as a plain prompt so the input is never swallowed.
+export async function runCommand(name, args) {
+  const sessionID = opencodeStore.activeSessionId;
+  const rawText = `/${name}${args ? ` ${args}` : ""}`;
+  if (!sessionID) return;
+
+  // Optimistic echo, same as sendPrompt; session.idle reconciles with server truth.
+  const userMsgId = `user-${Date.now()}`;
+  opencodeStore.messages.push({
+    id: userMsgId,
+    role: "user",
+    parts: [{ type: "text", text: rawText }],
+    text: rawText,
+  });
+  opencodeStore.isStreaming = true;
+
+  try {
+    const res = await fetch(`${apiBase()}/session/${sessionID}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ command: name, arguments: args || "" }),
+    });
+    if (res.ok) return;
+    // Route missing or shape rejected — drop the echo (sendPrompt re-adds it)
+    // and send the raw text instead.
+    opencodeStore.messages = opencodeStore.messages.filter((m) => m.id !== userMsgId);
+    await sendPrompt(rawText);
+  } catch (err) {
+    opencodeStore.isStreaming = false;
+    opencodeStore.error = err.message;
+    console.error("Error running slash command:", err);
   }
 }
 
@@ -273,6 +346,23 @@ function handleServerEvent(event) {
       break;
     }
 
+    // Live oc2 servers emit a session.execution.* lifecycle around each prompt
+    // rather than only session.idle/session.error.
+    case "session.execution.completed": {
+      if (!props.sessionID || props.sessionID === opencodeStore.activeSessionId) {
+        opencodeStore.isStreaming = false;
+        refreshActiveMessages();
+      }
+      break;
+    }
+
+    case "session.execution.failed": {
+      const err = props.error;
+      opencodeStore.error = (err && err.message) || (err && err.type) || "Execution failed";
+      opencodeStore.isStreaming = false;
+      break;
+    }
+
     case "session.error": {
       const err = props.error;
       opencodeStore.error = (err && (err.data && err.data.message)) || (err && err.name) || "Session error";
@@ -422,20 +512,37 @@ export async function abortSession() {
 }
 
 // Select the model. Stored as { providerID, modelID }; switched on the active session via
-// POST /api/session/:id/model { model: { id, providerID } } (Model.Ref).
+// POST /api/session/:id/model { model: { id, providerID, variant? } } (Model.Ref).
 export async function setModel(model) {
   opencodeStore.selectedModel = model;
+  // Reset the variant if the new model doesn't offer the current one.
+  const info = opencodeStore.availableModels.find(
+    (m) => model && m.providerID === model.providerID && m.modelID === model.modelID
+  );
+  if (info && !info.variants.includes(opencodeStore.thinkingLevel)) {
+    opencodeStore.thinkingLevel = "";
+  }
+  await pushSessionModel();
+}
+
+// Select the reasoning-effort variant for the current model ("" = provider default).
+export async function setThinkingLevel(level) {
+  opencodeStore.thinkingLevel = level || "";
+  await pushSessionModel();
+}
+
+async function pushSessionModel() {
   const sessionID = opencodeStore.activeSessionId;
-  if (sessionID && model && model.modelID && model.providerID) {
-    try {
-      await fetch(`${apiBase()}/session/${sessionID}/model`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ model: { id: model.modelID, providerID: model.providerID } }),
-      });
-    } catch (e) {
-      console.warn("Failed to switch session model:", e);
-    }
+  const modelRef = selectedModelRef();
+  if (!sessionID || !modelRef) return;
+  try {
+    await fetch(`${apiBase()}/session/${sessionID}/model`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ model: modelRef }),
+    });
+  } catch (e) {
+    console.warn("Failed to switch session model:", e);
   }
 }
 
@@ -456,8 +563,11 @@ export async function setAgent(agentName) {
   }
 }
 
-// Build a Model.Ref from the current selection (for session creation).
+// Build a Model.Ref from the current selection (for session creation / model switch).
 export function selectedModelRef() {
   const m = opencodeStore.selectedModel;
-  return m && m.modelID && m.providerID ? { id: m.modelID, providerID: m.providerID } : undefined;
+  if (!m || !m.modelID || !m.providerID) return undefined;
+  const ref = { id: m.modelID, providerID: m.providerID };
+  if (opencodeStore.thinkingLevel) ref.variant = opencodeStore.thinkingLevel;
+  return ref;
 }

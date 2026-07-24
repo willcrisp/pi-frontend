@@ -58,6 +58,22 @@ that's wrong for the server you're pointed at, `curl .../doc | jq
 '.components.schemas.SessionV2Info'` (or whatever the live schema calls it)
 will show the real shape — trust that over this paragraph.
 
+Two more, confirmed against a live server via HAR capture (2026-07-24):
+
+- **Agents are addressed by `id`, not `name`.** `GET /api/agent` returns
+  `{ id: "build", name: "Build", ... }`; every place an agent is sent
+  (`POST /session` body, `POST /session/:id/agent`) must use the lowercase
+  `id`. Sending the display name fails with `Agent not found: "Build"` —
+  and see the next point for why that failure used to be invisible.
+- **The SSE stream uses a `session.execution.*` lifecycle**, not just the
+  classic `message.*`/`session.idle` vocabulary. Observed events:
+  `server.connected`, `session.input.admitted`, `session.execution.started`,
+  `session.execution.failed` (payload `{ sessionID, error: { type, message } }`),
+  `session.model.selected`, `pty.created`/`pty.exited`/`pty.deleted`.
+  Envelope is `{ id, type, data, created?, durable?, location? }`.
+  `opencode.js#handleServerEvent` must handle execution completion/failure
+  or the UI spins on "thinking" forever with no error shown.
+
 ## What this frontend currently reads from each response
 
 Recorded here as "what the code assumes today," not as a schema — confirm
@@ -70,8 +86,12 @@ against `/doc` before changing any of it:
   `directory` for the sidebar (`Sidebar.vue`), one collapsible section per
   project root, most recently active first.
 - **`GET /api/model`** (`opencode.js#loadModels`) — per model: `id`,
-  `providerID`, `name`, `limit.context`. Mapped to `{ providerID, modelID:
-  id, label: name || providerID/id, contextLimit: limit.context }`.
+  `providerID`, `name`, `limit.context`, and optionally `variants`
+  (reasoning-effort presets; the composer's reasoning `<select>` shows its
+  keys, and the chosen key is sent as `variant` inside the Model.Ref —
+  **UNVERIFIED against a live `/doc`**, both field name and ref shape).
+  Mapped to `{ providerID, modelID: id, label: name || providerID/id,
+  contextLimit: limit.context, variants }`.
   `Composer.vue`'s `modelsByProvider` groups the model `<select>`'s options
   by `providerID` into `<optgroup>`s.
 - **`GET /api/agent`**, **`GET /api/command`** — consumed close to as-is;
@@ -82,7 +102,7 @@ against `/doc` before changing any of it:
 | Method | Path | Used by |
 |---|---|---|
 | GET | `/api/session` | `projects.js#fetchSessions` |
-| POST | `/api/session` | `projects.js#startNewChat` |
+| POST | `/api/session` | `projects.js#startNewChat` — body may include `agent`, `model` (Model.Ref), and for "new project" a root directory: tries `{ directory }`, falls back to `{ location: { directory } }` on a non-2xx (**UNVERIFIED** — check the create body's real field against `/doc`) |
 | DELETE | `/api/session/{sessionID}` | `projects.js#removeSession` |
 | GET | `/api/session/{sessionID}/message` | `opencode.js#refreshActiveMessages` |
 | POST | `/api/session/{sessionID}/prompt` | `opencode.js#sendPrompt` |
@@ -92,6 +112,8 @@ against `/doc` before changing any of it:
 | GET | `/api/model` | `opencode.js#loadModels` |
 | GET | `/api/agent` | `opencode.js#loadAgents` |
 | GET | `/api/command` | `opencode.js#loadCommands` |
+| GET | `/api/skill` | `opencode.js#loadSkills` (optional; empty list if the route is missing) |
+| POST | `/api/session/{sessionID}/command` | `opencode.js#runCommand` — `{ command, arguments }`; on non-2xx falls back to sending the raw `/name args` as a plain prompt (**UNVERIFIED** — check route + body against `/doc`) |
 | GET | `/api/event` (SSE) | `opencode.js#setupEventStream` |
 | GET | `/health` | `opencode.js#initOpenCode` |
 
@@ -110,3 +132,159 @@ directory's basename instead. If nicer names are wanted later, check `/doc`
 for the real shape of that endpoint on your target server, fetch it once,
 and use it as a `directory -> name` lookup keyed off the same directory
 string sessions already carry.
+
+
+---
+seo:
+  description: Experimental HttpApi surface for selected instance routes.
+sidebar:
+  label: Overview
+title: opencode HttpApi
+---
+Experimental HttpApi surface for selected instance routes.
+
+<ApiOverview source="api" />
+
+## health
+
+<ApiTagOperations source="api" tag="health" />
+
+## server
+
+<ApiTagOperations source="api" tag="server" />
+
+## location
+
+<ApiTagOperations source="api" tag="location" />
+
+## agent
+
+<ApiTagOperations source="api" tag="agent" />
+
+## plugin
+
+Experimental plugin routes.
+
+<ApiTagOperations source="api" tag="plugin" />
+
+## session
+
+Experimental message routes.
+
+<ApiTagOperations source="api" tag="session" />
+
+## model
+
+Experimental model routes.
+
+<ApiTagOperations source="api" tag="model" />
+
+## generate
+
+Experimental one-shot generation routes.
+
+<ApiTagOperations source="api" tag="generate" />
+
+## provider
+
+Experimental provider routes.
+
+<ApiTagOperations source="api" tag="provider" />
+
+## integration
+
+Integration discovery and authentication routes.
+
+<ApiTagOperations source="api" tag="integration" />
+
+## mcp
+
+MCP server and resource routes.
+
+<ApiTagOperations source="api" tag="mcp" />
+
+## credential
+
+<ApiTagOperations source="api" tag="credential" />
+
+## project
+
+Location-scoped project routes.
+
+<ApiTagOperations source="api" tag="project" />
+
+## form
+
+Session form routes.
+
+<ApiTagOperations source="api" tag="form" />
+
+## permission
+
+Experimental permission routes.
+
+<ApiTagOperations source="api" tag="permission" />
+
+## filesystem
+
+Experimental location-scoped filesystem routes.
+
+<ApiTagOperations source="api" tag="filesystem" />
+
+## command
+
+Experimental command routes.
+
+<ApiTagOperations source="api" tag="command" />
+
+## skill
+
+Experimental skill routes.
+
+<ApiTagOperations source="api" tag="skill" />
+
+## event
+
+Experimental event stream routes.
+
+<ApiTagOperations source="api" tag="event" />
+
+## pty
+
+Experimental location-scoped PTY routes.
+
+<ApiTagOperations source="api" tag="pty" />
+
+## shell
+
+Experimental location-scoped shell command routes.
+
+<ApiTagOperations source="api" tag="shell" />
+
+## question
+
+Experimental session question routes.
+
+<ApiTagOperations source="api" tag="question" />
+
+## reference
+
+Location-scoped project references.
+
+<ApiTagOperations source="api" tag="reference" />
+
+## projectCopy
+
+Project copy management routes.
+
+<ApiTagOperations source="api" tag="projectcopy" />
+
+## vcs
+
+Location-scoped version control routes.
+
+<ApiTagOperations source="api" tag="vcs" />
+
+## debug
+
+<ApiTagOperations source="api" tag="debug" />

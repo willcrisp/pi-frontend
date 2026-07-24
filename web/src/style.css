@@ -320,6 +320,14 @@ body {
   border-radius: 50%;
 }
 
+.status-dot.active {
+  background: #22c55e;
+}
+
+.status-dot.offline {
+  background: #6b7280;
+}
+
 .status-dot.working {
   background: #fbbf24;
   animation: status-dot-pulse 1.2s ease-in-out infinite;
@@ -360,8 +368,26 @@ body {
   font-size: 10px;
 }
 
-.chat-row:hover .archive-btn {
+.chat-row:hover .archive-btn,
+.project-row:hover .archive-btn {
   opacity: 1;
+}
+
+/* "show N more…" / "show less" expander under a project's recent chats */
+.chat-row.show-more {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  font-style: italic;
+}
+
+.chat-row.show-more:hover {
+  color: var(--fg);
 }
 
 .sidebar-empty {
@@ -2375,6 +2401,86 @@ button:hover {
   cursor: not-allowed;
 }
 
+/* UI-only model filter (funnel button + checkbox popover) */
+.model-filter {
+  position: relative;
+  display: inline-flex;
+}
+
+.model-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--dim);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.model-filter-btn:hover {
+  border-color: #2c3540;
+  color: var(--fg);
+}
+
+.model-filter-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.model-filter-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+
+/* In the header the popover drops down and right-aligns instead of opening
+   upward like it did in the composer footer. */
+.header-model-filter .model-filter-menu {
+  bottom: auto;
+  top: calc(100% + 6px);
+  left: auto;
+  right: 0;
+}
+
+.model-filter-hint {
+  color: var(--dim);
+  font-size: 10px;
+  padding: 2px 6px 6px;
+}
+
+.model-filter-provider {
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 6px 2px;
+}
+
+.model-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.model-filter-item:hover {
+  background: rgb(255 255 255 / 0.05);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -3460,4 +3566,86 @@ button:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   padding-left: 34px; /* roughly align under the label, past the kind badge */
+}
+
+/* --- Git branch badge (ChatHeader) --- */
+.git-branch {
+  position: relative;
+  display: inline-flex;
+}
+
+.git-branch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dim, #888);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 180px;
+}
+
+.git-branch-btn span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-branch-btn:hover {
+  color: var(--fg, #ddd);
+  border-color: var(--fg, #666);
+}
+
+.git-branch-btn.switching {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.git-branch-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 180px;
+  max-width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--panel, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.git-branch-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg, #ddd);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-branch-item:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+
+.git-branch-item.current {
+  color: var(--accent, #6cf);
+}
+
+.palette-kind.file {
+  color: var(--dim);
 }

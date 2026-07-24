@@ -13,7 +13,6 @@ import ChatHeader from "./components/chat/ChatHeader.vue";
 import Composer from "./components/chat/Composer.vue";
 import MessageList from "./components/chat/MessageList.vue";
 import Sidebar from "./components/sidebar/Sidebar.vue";
-import CoderMenu from "./components/popovers/CoderMenu.vue";
 import ConnectScreen from "./components/dialogs/ConnectDialog.vue";
 
 async function boot() {
@@ -40,9 +39,6 @@ onMounted(() => {
     <Sidebar />
 
     <div v-if="!opencodeStore.activeSessionId" class="chat-panel chat-empty">
-      <div class="chat-empty-header">
-        <CoderMenu />
-      </div>
       <p>Select or create an OpenCode session to start chatting</p>
     </div>
 

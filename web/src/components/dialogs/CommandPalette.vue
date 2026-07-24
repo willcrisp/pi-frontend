@@ -4,7 +4,8 @@
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { openSession, projectsStore, startNewChat } from "../../stores/projects.js";
+import { activeSessionDirectory, openSession, projectsStore, startNewChat } from "../../stores/projects.js";
+import { filesFor, refreshFiles } from "../../stores/filesearch.js";
 
 const open = ref(false);
 const query = ref("");
@@ -15,6 +16,8 @@ function openPalette() {
   open.value = true;
   query.value = "";
   index.value = 0;
+  const dir = activeSessionDirectory();
+  if (dir) refreshFiles(dir); // background refresh; cached list shows immediately
   nextTick(() => inputEl.value?.focus());
 }
 
@@ -65,12 +68,26 @@ const items = computed(() => {
   return out;
 });
 
+const fileItems = computed(() => {
+  const dir = activeSessionDirectory();
+  if (!dir) return [];
+  return filesFor(dir).files.map((path) => ({
+    kind: "file",
+    id: `file:${path}`,
+    label: path,
+    run: () => navigator.clipboard?.writeText(path),
+  }));
+});
+
 const matches = computed(() => {
   const q = query.value.trim().toLowerCase();
   if (!q) return items.value.slice(0, 20);
-  return items.value
-    .map((it) => ({ it, score: fuzzyScore(q, it.label.toLowerCase()) }))
-    .filter((x) => x.score !== null)
+  const scored = [];
+  for (const it of items.value.concat(fileItems.value)) {
+    const score = fuzzyScore(q, it.label.toLowerCase());
+    if (score !== null) scored.push({ it, score });
+  }
+  return scored
     .sort((a, b) => b.score - a.score)
     .map((x) => x.it)
     .slice(0, 20);
@@ -123,7 +140,7 @@ function onBackdrop(e) {
           @mousedown.prevent="choose(it)"
           @mouseenter="index = i"
         >
-          <span class="palette-kind session">session</span>
+          <span class="palette-kind" :class="it.kind">{{ it.kind }}</span>
           <span class="palette-label">{{ it.label }}</span>
         </li>
       </ul>

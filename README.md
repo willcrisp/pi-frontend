@@ -36,3 +36,5 @@ npm run build
 ```
 
 The output will be in `web/dist/`.
+
+ssh -L 5000:localhost:4096 ALF-UAT.coder

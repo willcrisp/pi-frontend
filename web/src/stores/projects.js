@@ -2,6 +2,7 @@
 import { reactive } from "vue";
 import { connectToSession, opencodeStore, selectedModelRef } from "./opencode.js";
 import { apiBase, authHeaders } from "./ssh.js";
+import { fetchBranches } from "./git.js";
 
 // Unwrap the opencode2 `{ data: [...] }` list envelope.
 function unwrap(payload) {
@@ -11,13 +12,39 @@ function unwrap(payload) {
 }
 
 const LAST_SESSION_KEY = "opencode-web:lastSessionId";
+const ARCHIVED_KEY = "opencode-web:archivedProjects"; // string[] of directories
+
+function loadArchived() {
+  try {
+    const list = JSON.parse(localStorage.getItem(ARCHIVED_KEY));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
 
 export const projectsStore = reactive({
   projects: [], // [{ id, name, path }]
   currentProjectId: null,
   sessions: [], // [{ id, title, updatedAt, directory }]
   loadingSessions: false,
+  // Client-only project archiving (by root directory) — the server has no
+  // project entity to archive, so this just hides groups in the sidebar.
+  archivedDirectories: loadArchived(),
 });
+
+export function isArchived(directory) {
+  return projectsStore.archivedDirectories.includes(directory);
+}
+
+export function setProjectArchived(directory, archived) {
+  const list = projectsStore.archivedDirectories.filter((d) => d !== directory);
+  if (archived) list.push(directory);
+  projectsStore.archivedDirectories = list;
+  try {
+    localStorage.setItem(ARCHIVED_KEY, JSON.stringify(list));
+  } catch {}
+}
 
 export async function fetchSessions() {
   projectsStore.loadingSessions = true;
@@ -72,7 +99,12 @@ export function groupSessionsByDirectory(sessions) {
   return groups;
 }
 
-export async function startNewChat() {
+// Create a session, optionally rooted at `directory` (a new "project" — sessions
+// are grouped by their root directory). Sessions read the root back as
+// `location.directory` (see docs/opencode-api.md), so try `{ directory }` first
+// and fall back to `{ location: { directory } }` if the server rejects it —
+// re-verify the create-body shape against the live server's /doc.
+export async function startNewChat(directory) {
   try {
     // opencode2 create body takes no title (rename endpoint sets it); seed with current selection.
     const body = {};
@@ -80,22 +112,33 @@ export async function startNewChat() {
     const modelRef = selectedModelRef();
     if (modelRef) body.model = modelRef;
 
-    const res = await fetch(`${apiBase()}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
-    });
+    const post = (b) =>
+      fetch(`${apiBase()}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(b),
+      });
 
-    if (res.ok) {
-      const payload = await res.json();
-      const newId = payload && payload.data ? payload.data.id : payload && payload.id;
-      await fetchSessions();
-      if (newId) {
-        openSession(newId);
-      }
+    let res;
+    if (directory) {
+      res = await post({ ...body, directory });
+      if (!res.ok) res = await post({ ...body, location: { directory } });
+    } else {
+      res = await post(body);
+    }
+
+    if (!res.ok) {
+      throw new Error(`session create failed (${res.status})`);
+    }
+    const payload = await res.json();
+    const newId = payload && payload.data ? payload.data.id : payload && payload.id;
+    await fetchSessions();
+    if (newId) {
+      openSession(newId);
     }
   } catch (err) {
     console.error("Failed to create new OpenCode session:", err);
+    throw err;
   }
 }
 
@@ -107,7 +150,7 @@ export async function removeSession(sessionID) {
       if (projectsStore.sessions.length > 0) {
         openSession(projectsStore.sessions[0].id);
       } else {
-        startNewChat();
+        startNewChat().catch(() => {});
       }
     }
   } catch (err) {
@@ -119,6 +162,15 @@ export function openSession(sessionID) {
   if (!sessionID) return;
   localStorage.setItem(LAST_SESSION_KEY, sessionID);
   connectToSession(sessionID);
+  const session = projectsStore.sessions.find((s) => s.id === sessionID);
+  if (session?.directory) fetchBranches(session.directory);
+}
+
+export function activeSessionDirectory() {
+  const id = opencodeStore.activeSessionId;
+  if (!id) return "";
+  const session = projectsStore.sessions.find((s) => s.id === id);
+  return session?.directory || "";
 }
 
 export async function initProjects() {
@@ -132,6 +184,6 @@ export async function initProjects() {
   } else if (projectsStore.sessions.length > 0) {
     openSession(projectsStore.sessions[0].id);
   } else {
-    await startNewChat();
+    await startNewChat().catch(() => {});
   }
 }
