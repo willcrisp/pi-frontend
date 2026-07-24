@@ -1,37 +1,22 @@
 <!--
   Floating index of the prompts sent in this chat, shown faded in the gutter
-  left of the message column. Clicking an entry scrolls its message into view;
-  hovering reveals a fork button (forkFrom in pi.js) that branches the session
-  at that prompt. Entries are paired positionally with store.forkMessages.
+  left of the message column. Clicking an entry scrolls its message into view.
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { forkFrom, store } from "../../stores/pi.js";
+import { opencodeStore as store } from "../../stores/opencode.js";
 
 const props = defineProps({
-  // The scrollable <main> the message elements live in, for scroll tracking.
   scroller: { type: Object, default: null },
 });
 
 const activeIndex = ref(-1);
 const atBottom = ref(true);
-const forking = ref(null);
 
 function messageText(m) {
-  const c = m.content;
-  if (typeof c === "string") return c;
-  if (!Array.isArray(c)) return "";
-  return c
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join(" ")
-    .trim();
+  return m.text || "";
 }
 
-// One entry per user message, carrying its index in the rendered message list
-// (for scrolling) and — paired positionally with get_fork_messages, which lists
-// the same user messages in the same order — its fork point. A message sent
-// optimistically this turn has no entryId yet and simply isn't forkable.
 const items = computed(() => {
   const visible = store.messages.filter(
     (m) => m.role === "user" || m.role === "assistant"
@@ -43,7 +28,7 @@ const items = computed(() => {
     const text = messageText(m);
     out.push({
       index,
-      text: text || "(image)",
+      text: text || "(prompt)",
       entryId: store.forkMessages[nth]?.entryId,
     });
     nth++;
@@ -57,25 +42,11 @@ function scrollTo(item) {
     ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function fork(item) {
-  if (!item.entryId || forking.value) return;
-  forking.value = item.entryId;
-  try {
-    await forkFrom(item.entryId);
-  } catch (e) {
-    console.warn("fork failed:", e.message);
-  } finally {
-    forking.value = null;
-  }
-}
-
 function scrollToBottom() {
   const el = props.scroller;
   if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
 }
 
-// Highlight whichever prompt the reader is currently sitting in, and track
-// whether there's anything below the fold worth jumping to.
 function syncScroll() {
   const el = props.scroller;
   if (!el) return;
@@ -89,8 +60,6 @@ function syncScroll() {
   atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 }
 
-// The scroller is a parent template ref, so it arrives as null on first render
-// and is patched in afterwards — bind the listener when it actually shows up.
 watch(
   () => props.scroller,
   (el, prev) => {
@@ -101,7 +70,6 @@ watch(
   { immediate: true }
 );
 
-// New messages change both the fold position and the set of rail entries.
 watch(items, () => nextTick(syncScroll));
 
 onMounted(syncScroll);
@@ -123,26 +91,6 @@ onBeforeUnmount(() => props.scroller?.removeEventListener("scroll", syncScroll))
           @click="scrollTo(item)"
         >
           {{ item.text }}
-        </button>
-        <button
-          v-if="item.entryId"
-          type="button"
-          class="msg-rail-fork"
-          :disabled="forking === item.entryId"
-          title="Fork the chat from this message"
-          @click="fork(item)"
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="4" cy="3" r="1.8" stroke="currentColor" stroke-width="1.2" />
-            <circle cx="4" cy="13" r="1.8" stroke="currentColor" stroke-width="1.2" />
-            <circle cx="12" cy="6" r="1.8" stroke="currentColor" stroke-width="1.2" />
-            <path
-              d="M4 4.8v6.4M4 9c0-2 1.5-3 4-3"
-              stroke="currentColor"
-              stroke-width="1.2"
-              stroke-linecap="round"
-            />
-          </svg>
         </button>
       </li>
     </ol>

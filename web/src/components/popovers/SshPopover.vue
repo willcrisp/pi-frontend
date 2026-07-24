@@ -1,31 +1,14 @@
 <!--
-  Click-toggled popup on the header's connection dot for viewing/testing/
-  saving/clearing the SSH target (ssh.js), the runtime-editable relay host
-  every project's pi process is spawned against. Closes on outside-click or
-  Escape, like a form (contrast UsagePopover.vue's hover/read-only pattern).
+  Click-toggled popup for configuring OpenCode V2 SSH forwarding / remote server targets.
 -->
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from "vue";
-import { store } from "../../stores/pi.js";
-import { sshStore, fetchSshConfig, testSshConfig, saveSshConfig, clearSshConfig } from "../../stores/ssh.js";
+import { ref, onMounted, onUnmounted } from "vue";
+import { opencodeStore as store } from "../../stores/opencode.js";
+import { sshStore, testTargetUrl, setTargetUrl } from "../../stores/ssh.js";
 
 const root = ref(null);
 const open = ref(false);
-const formHost = ref("");
-const formIdentity = ref("");
-const formPort = ref("");
-
-function resetForm() {
-  formHost.value = sshStore.host || "";
-  formIdentity.value = sshStore.identity || "";
-  formPort.value = sshStore.port ? String(sshStore.port) : "";
-}
-
-watch(open, async (isOpen) => {
-  if (!isOpen) return;
-  await fetchSshConfig();
-  resetForm();
-});
+const targetUrlInput = ref(sshStore.targetUrl);
 
 function onDocClick(e) {
   if (open.value && root.value && !root.value.contains(e.target)) {
@@ -48,26 +31,13 @@ onUnmounted(() => {
 });
 
 async function onTest() {
-  await testSshConfig({ host: formHost.value.trim(), identity: formIdentity.value.trim(), port: formPort.value ? Number(formPort.value) : null });
+  await testTargetUrl(targetUrlInput.value);
 }
 
-async function onSave() {
-  try {
-    await saveSshConfig({ host: formHost.value.trim(), identity: formIdentity.value.trim(), port: formPort.value ? Number(formPort.value) : null });
-    open.value = false;
-  } catch {
-    // sshStore.error is shown inline; keep the popover open.
-  }
-}
-
-async function onClear() {
-  if (!confirm("Switch back to local execution? Every project's running chat will be restarted.")) return;
-  try {
-    await clearSshConfig();
-    resetForm();
-  } catch {
-    // sshStore.error is shown inline.
-  }
+function onSave() {
+  setTargetUrl(targetUrlInput.value);
+  open.value = false;
+  window.location.reload();
 }
 </script>
 
@@ -76,43 +46,41 @@ async function onClear() {
     <button
       type="button"
       class="ssh-trigger"
-      :title="store.connected ? (store.streaming ? 'Connected · agent running' : 'Connected') : 'Disconnected'"
+      :title="store.connected ? (store.isStreaming ? 'Connected · agent running' : 'Connected') : 'Disconnected'"
       @click="open = !open"
     >
-      <span class="dot" :class="{ connected: store.connected, streaming: store.streaming }"></span>
+      <span class="dot" :class="{ connected: store.connected, streaming: store.isStreaming }"></span>
     </button>
 
     <div class="ssh-popover-panel" :class="{ open }">
       <div class="ssh-status usage-dim">
-        {{ sshStore.host ? `remote: ${sshStore.host}` : "local execution" }}
+        OpenCode Target: {{ sshStore.targetUrl }}
       </div>
 
-      <input v-model="formHost" type="text" placeholder="user@host" autocomplete="off" spellcheck="false" />
-      <input v-model="formIdentity" type="text" placeholder="~/.ssh/id_ed25519 (optional)" autocomplete="off" spellcheck="false" />
-      <input v-model="formPort" type="number" placeholder="22" min="1" max="65535" />
+      <input
+        v-model="targetUrlInput"
+        type="text"
+        placeholder="http://127.0.0.1:4096"
+        autocomplete="off"
+        spellcheck="false"
+      />
 
       <div class="ssh-actions">
-        <button type="button" :disabled="!formHost.trim() || sshStore.testing" @click="onTest">
+        <button type="button" :disabled="!targetUrlInput.trim() || sshStore.testing" @click="onTest">
           {{ sshStore.testing ? "Testing…" : "Test Connection" }}
         </button>
-        <button type="button" :disabled="!formHost.trim() || sshStore.saving" @click="onSave">
-          {{ sshStore.saving ? "Saving…" : "Save" }}
+        <button type="button" :disabled="!targetUrlInput.trim()" @click="onSave">
+          Save &amp; Connect
         </button>
       </div>
 
       <div v-if="sshStore.testResult" class="ssh-test-result" :class="sshStore.testResult.ok ? 'ok' : 'fail'">
         {{ sshStore.testResult.message }}
       </div>
-      <div v-if="sshStore.testResult && sshStore.testResult.piFound === false" class="usage-dim">
-        pi not found on remote PATH yet
+
+      <div class="usage-dim ssh-help">
+        For SSH remote workspaces, forward port 4096 (`ssh -L 4096:localhost:4096 user@host`) or enter direct endpoint.
       </div>
-      <div v-if="sshStore.error" class="ssh-test-result fail">{{ sshStore.error }}</div>
-
-      <button v-if="sshStore.host" type="button" class="ssh-clear-link" :disabled="sshStore.clearing" @click="onClear">
-        {{ sshStore.clearing ? "Switching…" : "Use local execution" }}
-      </button>
-
-      <div class="usage-dim ssh-help">Applies to all projects · saving restarts every project's session</div>
     </div>
   </div>
 </template>

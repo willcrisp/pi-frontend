@@ -1,24 +1,17 @@
 <!--
   Hover-triggered popover with session-level token/cost stats
-  (store.sessionStats) plus a per-sub-agent usage breakdown, flattened from
-  store.toolResults via the shared subagentDetails() heuristic so it stays in
-  sync with SubagentView.vue/MessageView.vue on what counts as a sub-agent
-  call. Read-only — unlike SshPopover.vue this isn't click-toggled/a form.
+  (store.sessionStats) plus a per-sub-agent usage breakdown.
 -->
 <script setup>
 import { computed } from "vue";
-import { store, subagentDetails } from "../../stores/pi.js";
+import { opencodeStore as store, subagentDetails } from "../../stores/opencode.js";
 
-// Flattened from store.toolResults rather than tracked separately, so a
-// reconnect's get_messages backfill can't produce duplicate entries.
-// Detection goes through the shared subagentDetails() helper (pi.js) so
-// this stays in sync with SubagentView.vue / MessageView.vue on what
-// counts as a sub-agent dispatch.
 const subagentRuns = computed(() => {
   const runs = [];
+  if (!store.toolResults) return runs;
   for (const [toolCallId, r] of Object.entries(store.toolResults)) {
     const details = subagentDetails(r);
-    if (!details) continue;
+    if (!details || !Array.isArray(details.results)) continue;
     const durationMs = r.startedAt && r.endedAt ? r.endedAt - r.startedAt : null;
     details.results.forEach((sub, i) => {
       if (!sub || typeof sub !== "object") return;
@@ -53,11 +46,6 @@ const subagentTotals = computed(() => {
 
 const subagentTotalTokens = computed(() => {
   return subagentTotals.value.input + subagentTotals.value.output;
-});
-
-const grandTotalCost = computed(() => {
-  const session = store.sessionStats?.cost || 0;
-  return session + subagentTotals.value.cost;
 });
 
 function formatTokens(n) {

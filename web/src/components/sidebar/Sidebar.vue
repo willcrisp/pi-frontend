@@ -1,286 +1,65 @@
 <!--
-  Left sidebar: project list (add/remove, with a directory-browse autocomplete
-  for the add-project path field, backed by /api/projects) and, for the
-  active project, its paginated chat history (/api/projects/{id}/sessions),
-  each row showing a status dot from chatIndicator()/projectIndicator()
-  (pi.js). Also handles session archiving (client-only, projects.js) and the
-  footer's "connect model" trigger (auth.js).
+  Sidebar component: list sessions, start new session, switch active session.
 -->
 <script setup>
-import { computed, ref, watch } from "vue";
-import { chatIndicator, projectIndicator, store } from "../../stores/pi.js";
+import { computed } from "vue";
+import { opencodeStore } from "../../stores/opencode.js";
 import {
-  addProject,
-  isArchived,
   openSession,
   projectsStore,
-  removeProject,
-  selectProject,
-  refreshCurrentSessions,
   startNewChat,
-  toggleArchive,
+  removeSession,
+  fetchSessions,
 } from "../../stores/projects.js";
-import { openConnect } from "../../stores/auth.js";
-import { alertDialog, confirmDialog } from "../../stores/confirm.js";
 
-const showAddForm = ref(false);
-const newName = ref("");
-const newPath = ref("/home/coder/");
-const addError = ref("");
-const adding = ref(false);
+const activeSessionId = computed(() => opencodeStore.activeSessionId);
 
-const pathSuggestions = ref([]);
-const showSuggestions = ref(false);
-const activeSuggestion = ref(-1);
-let browseSeq = 0;
-
-async function onPathInput() {
-  showSuggestions.value = true;
-  activeSuggestion.value = -1;
-  const seq = ++browseSeq;
-  try {
-    const res = await fetch(`/api/browse-dirs?path=${encodeURIComponent(newPath.value)}`);
-    const dirs = res.ok ? await res.json() : [];
-    if (seq !== browseSeq) return; // stale response
-    pathSuggestions.value = dirs;
-  } catch {
-    if (seq === browseSeq) pathSuggestions.value = [];
-  }
-}
-
-function pickSuggestion(dir) {
-  newPath.value = dir + "/";
-  pathSuggestions.value = [];
-  showSuggestions.value = false;
-  onPathInput();
-}
-
-function onPathKeydown(e) {
-  if (!showSuggestions.value || !pathSuggestions.value.length) return;
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    activeSuggestion.value = (activeSuggestion.value + 1) % pathSuggestions.value.length;
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    activeSuggestion.value = (activeSuggestion.value - 1 + pathSuggestions.value.length) % pathSuggestions.value.length;
-  } else if (e.key === "Tab" || e.key === "Enter") {
-    if (activeSuggestion.value >= 0) {
-      e.preventDefault();
-      pickSuggestion(pathSuggestions.value[activeSuggestion.value]);
-    }
-  } else if (e.key === "Escape") {
-    showSuggestions.value = false;
-  }
-}
-
-const PAGE_SIZE = 5;
-const historyLimit = ref(PAGE_SIZE);
-const showArchived = ref(false);
-const historyFilter = ref("");
-watch(
-  () => projectsStore.currentProjectId,
-  () => {
-    historyLimit.value = PAGE_SIZE;
-    showArchived.value = false;
-    historyFilter.value = "";
-  }
-);
-
-// Filter applies before the historyLimit slice, so a match buried past the
-// visible page is still reachable without clicking "load more".
-const filteredSessions = computed(() => {
-  const q = historyFilter.value.trim().toLowerCase();
-  return projectsStore.sessions
-    .filter((s) => isArchived(s.path) === showArchived.value)
-    .filter((s) => !q || s.title.toLowerCase().includes(q));
-});
-const visibleSessions = computed(() => filteredSessions.value.slice(0, historyLimit.value));
-const hasMoreSessions = computed(() => filteredSessions.value.length > historyLimit.value);
-// Only worth showing the filter box once there's enough history to search.
-const showHistoryFilter = computed(() => projectsStore.sessions.length > PAGE_SIZE);
-
-function loadMoreSessions() {
-  historyLimit.value += PAGE_SIZE;
-}
-
-const activeSessionPath = computed(() => store.sessionStats?.sessionFile || null);
-
-async function submitAdd() {
-  const name = newName.value.trim();
-  const path = newPath.value.trim();
-  if (!name || !path) return;
-  adding.value = true;
-  addError.value = "";
-  try {
-    const project = await addProject(name, path);
-    newName.value = "";
-    newPath.value = "/home/coder/";
-    showAddForm.value = false;
-    selectProject(project.id);
-  } catch (e) {
-    addError.value = e.message || "failed to add project";
-  } finally {
-    adding.value = false;
-  }
-}
-
-async function onRemove(id, name) {
-  const ok = await confirmDialog({
-    title: "Remove project",
-    message: `Remove project "${name}"? Its running chat will be stopped.`,
-    confirmLabel: "Remove",
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await removeProject(id);
-  } catch (e) {
-    await alertDialog({ title: "Remove failed", message: e.message || "failed to remove project" });
-  }
-}
-
-function relativeTime(ms) {
-  if (!ms) return "";
-  const diff = Date.now() - ms;
-  const min = Math.round(diff / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.round(hr / 24);
-  return `${day}d ago`;
+function onRemoveSession(id) {
+  removeSession(id);
 }
 </script>
 
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <span class="sidebar-title">projects</span>
+      <span class="sidebar-title">OpenCode Sessions</span>
       <div class="sidebar-header-actions">
-        <button
-          class="icon-btn archive-toggle"
-          :class="{ active: showArchived }"
-          :title="showArchived ? 'Show active chats' : 'Show archived chats'"
-          @click="showArchived = !showArchived"
-        >
-          🗄
-        </button>
-        <button class="icon-btn" title="Add project" @click="showAddForm = !showAddForm">+</button>
+        <button class="icon-btn" title="Refresh sessions" @click="fetchSessions">⟳</button>
+        <button class="icon-btn" title="New Session" @click="startNewChat">+</button>
       </div>
     </div>
-
-    <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
-      <input v-model="newName" placeholder="name" autofocus />
-      <div class="path-input-wrap">
-        <input
-          v-model="newPath"
-          placeholder="/path/to/project"
-          autocomplete="off"
-          @input="onPathInput"
-          @focus="onPathInput"
-          @keydown="onPathKeydown"
-          @blur="showSuggestions = false"
-        />
-        <ul v-if="showSuggestions && pathSuggestions.length" class="path-suggestions">
-          <li
-            v-for="(d, i) in pathSuggestions"
-            :key="d"
-            :class="{ active: i === activeSuggestion }"
-            @mousedown.prevent="pickSuggestion(d)"
-          >
-            {{ d }}
-          </li>
-        </ul>
-      </div>
-      <div v-if="addError" class="add-project-error">{{ addError }}</div>
-      <button type="submit" :disabled="adding">{{ adding ? "adding…" : "add project" }}</button>
-    </form>
 
     <div class="project-list">
-      <div v-for="p in projectsStore.projects" :key="p.id" class="project-group">
-        <div
-          class="project-row"
-          :class="{ active: p.id === projectsStore.currentProjectId }"
-          @click="selectProject(p.id)"
-        >
-          <span
-            v-if="projectIndicator(p.id)"
-            class="status-dot"
-            :class="projectIndicator(p.id)"
-            :title="projectIndicator(p.id) === 'working' ? 'Agent working' : 'Unread response'"
-          ></span>
-          <span class="project-name" :title="p.path">{{ p.name }}</span>
-          <button
-            v-if="p.id === projectsStore.currentProjectId && !showArchived"
-            class="refresh-chats-btn"
-            title="Refresh chats"
-            @click.stop="refreshCurrentSessions"
-          >⟳</button>
-          <button
-            v-if="p.id === projectsStore.currentProjectId && !showArchived"
-            class="new-chat-btn"
-            title="New chat"
-            @click.stop="startNewChat"
-          >+</button>
-          <button class="icon-btn remove-btn" title="Remove project" @click.stop="onRemove(p.id, p.name)">×</button>
-        </div>
-
-        <div v-if="p.id === projectsStore.currentProjectId" class="chat-history">
-          <div v-if="showHistoryFilter" class="chat-filter-wrap">
-            <input
-              v-model="historyFilter"
-              class="chat-filter-input"
-              placeholder="filter chats…"
-              @keydown.escape="historyFilter = ''"
-            />
-          </div>
-          <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading…</div>
-          <template v-else>
-            <div
-              v-for="s in visibleSessions"
-              :key="s.path"
-              class="chat-row"
-              :class="{ active: s.path === activeSessionPath }"
-              :title="s.title"
-              @click="showArchived ? null : openSession(s.path)"
+      <div class="chat-history">
+        <div v-if="projectsStore.loadingSessions" class="chat-row dim">loading sessions…</div>
+        <template v-else>
+          <div
+            v-for="s in projectsStore.sessions"
+            :key="s.id"
+            class="chat-row"
+            :class="{ active: s.id === activeSessionId }"
+            :title="s.title"
+            @click="openSession(s.id)"
+          >
+            <span
+              v-if="s.id === activeSessionId && opencodeStore.isStreaming"
+              class="status-dot working"
+              title="Agent working"
+            ></span>
+            <span class="chat-title">{{ s.title }}</span>
+            <button
+              class="icon-btn remove-btn"
+              title="Delete session"
+              @click.stop="onRemoveSession(s.id)"
             >
-              <span
-                v-if="chatIndicator(s.path)"
-                class="status-dot"
-                :class="chatIndicator(s.path)"
-                :title="chatIndicator(s.path) === 'working' ? 'Agent working' : 'Unread response'"
-              ></span>
-              <span class="chat-title">{{ s.title }}</span>
-              <span class="chat-time">{{ relativeTime(s.mtimeMs) }}</span>
-              <button
-                class="icon-btn archive-btn"
-                :title="showArchived ? 'Unarchive chat' : 'Archive chat'"
-                @click.stop="toggleArchive(s.path)"
-              >
-                {{ showArchived ? "↩" : "🗄" }}
-              </button>
-            </div>
-            <div v-if="hasMoreSessions" class="chat-row load-more" @click="loadMoreSessions">load more…</div>
-            <div v-if="!filteredSessions.length" class="chat-row dim">
-              {{
-                historyFilter.trim()
-                  ? "no chats match"
-                  : showArchived
-                  ? "no archived chats"
-                  : "no past chats"
-              }}
-            </div>
-          </template>
-        </div>
+              ×
+            </button>
+          </div>
+          <div v-if="!projectsStore.sessions.length" class="chat-row dim">
+            no active sessions — click + to create one
+          </div>
+        </template>
       </div>
-
-      <div v-if="!projectsStore.projects.length" class="sidebar-empty">no projects yet — add one above</div>
-    </div>
-
-    <div class="sidebar-footer">
-      <button class="connect-trigger" title="Connect a model provider" @click="openConnect">
-        connect model
-      </button>
     </div>
   </aside>
 </template>

@@ -10,7 +10,7 @@
 -->
 <script setup>
 import { computed, onUnmounted, ref, watch } from "vue";
-import { store, subagentDetails } from "../../stores/pi.js";
+import { opencodeStore as store, subagentDetails } from "../../stores/opencode.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 
 const props = defineProps({

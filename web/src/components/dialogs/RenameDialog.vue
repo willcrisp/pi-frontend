@@ -1,16 +1,14 @@
 <!--
-  Small modal for renaming the active chat's session (pi.js's
-  setSessionName), opened from ChatHeader's title button or the composer's
-  /name slash command. On success, refreshes the sidebar's session list
-  immediately rather than waiting for the next project/session switch.
+  Small modal for renaming the active session. On success, refreshes
+  the sidebar's session list immediately.
 -->
 <script setup>
 import { nextTick, onMounted, ref } from "vue";
-import { setSessionName, store } from "../../stores/pi.js";
-import { refreshCurrentSessions } from "../../stores/projects.js";
+import { opencodeStore } from "../../stores/opencode.js";
+import { fetchSessions } from "../../stores/projects.js";
 import { closeRenameDialog } from "../../stores/renameDialog.js";
 
-const value = ref(store.sessionName || "");
+const value = ref("");
 const inputEl = ref(null);
 const busy = ref(false);
 
@@ -26,11 +24,15 @@ async function confirm() {
   }
   busy.value = true;
   try {
-    await setSessionName(next);
-    // The sidebar's session list is only otherwise re-fetched on
-    // project/session switch or after a turn settles — refresh right away
-    // so a rename shows up immediately instead of waiting for either.
-    refreshCurrentSessions();
+    const sessionID = opencodeStore.activeSessionId;
+    if (sessionID) {
+      await fetch(`/api/session/${sessionID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: next }),
+      });
+      await fetchSessions();
+    }
   } finally {
     busy.value = false;
   }

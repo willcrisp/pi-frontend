@@ -1,93 +1,39 @@
-// REST client + reactive store for the runtime-editable SSH target that
-// every project's pi process is spawned against (see /api/ssh in
-// server/src/main.rs). Mirrors the conventions in projects.js.
-//
-// Key exports:
-//   sshStore                    — {host, identity, port, loaded, testing, testResult, saving, clearing, error}
-//   fetchSshConfig()             — GET /api/ssh, populates the store
-//   testSshConfig({host, identity, port}) — POST /api/ssh/test, does not persist
-//   saveSshConfig({host, identity, port}) — PUT /api/ssh; server respawns every running chat's process
-//   clearSshConfig()             — DELETE /api/ssh, switches back to local execution
+// OpenCode V2 SSH & Target Server Store
 import { reactive } from "vue";
 
+const TARGET_KEY = "opencode-web:serverTarget";
+
 export const sshStore = reactive({
+  targetUrl: localStorage.getItem(TARGET_KEY) || "http://127.0.0.1:4096",
   host: null,
-  identity: null,
-  port: null,
-  loaded: false,
   testing: false,
-  testResult: null, // { ok, message, piFound } | null
-  saving: false,
-  clearing: false,
+  testResult: null,
   error: "",
 });
 
-function applyConfig(cfg) {
-  sshStore.host = cfg.host ?? null;
-  sshStore.identity = cfg.identity ?? null;
-  sshStore.port = cfg.port ?? null;
-}
-
-export async function fetchSshConfig() {
-  const res = await fetch("/api/ssh");
-  if (!res.ok) return;
-  applyConfig(await res.json());
-  sshStore.loaded = true;
-}
-
-export async function testSshConfig({ host, identity, port }) {
+export async function testTargetUrl(url) {
   sshStore.testing = true;
   sshStore.testResult = null;
+  sshStore.error = "";
   try {
-    const res = await fetch("/api/ssh/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host, identity: identity || null, port: port || null }),
-    });
-    const result = await res.json();
-    sshStore.testResult = result;
-    return result;
+    const res = await fetch(`${url.replace(/\/$/, "")}/api/health`);
+    if (res.ok) {
+      sshStore.testResult = { ok: true, message: "Connected to OpenCode V2 server!" };
+      return true;
+    } else {
+      sshStore.testResult = { ok: false, message: `Server returned status ${res.status}` };
+      return false;
+    }
+  } catch (err) {
+    sshStore.testResult = { ok: false, message: err.message || "Failed to reach target server" };
+    return false;
   } finally {
     sshStore.testing = false;
   }
 }
 
-export async function saveSshConfig({ host, identity, port }) {
-  sshStore.saving = true;
-  sshStore.error = "";
-  try {
-    const res = await fetch("/api/ssh", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host, identity: identity || null, port: port || null }),
-    });
-    if (!res.ok) {
-      const message = await res.text().catch(() => "");
-      throw new Error(message || `failed to save ssh config (${res.status})`);
-    }
-    applyConfig(await res.json());
-  } catch (e) {
-    sshStore.error = e.message || String(e);
-    throw e;
-  } finally {
-    sshStore.saving = false;
-  }
-}
-
-export async function clearSshConfig() {
-  sshStore.clearing = true;
-  sshStore.error = "";
-  try {
-    const res = await fetch("/api/ssh", { method: "DELETE" });
-    if (!res.ok) {
-      throw new Error(`failed to clear ssh config (${res.status})`);
-    }
-    applyConfig(await res.json());
-    sshStore.testResult = null;
-  } catch (e) {
-    sshStore.error = e.message || String(e);
-    throw e;
-  } finally {
-    sshStore.clearing = false;
-  }
+export function setTargetUrl(url) {
+  const cleanUrl = url.trim().replace(/\/$/, "");
+  sshStore.targetUrl = cleanUrl;
+  localStorage.setItem(TARGET_KEY, cleanUrl);
 }

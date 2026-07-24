@@ -14,7 +14,7 @@
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { store } from "../../stores/pi.js";
+import { opencodeStore as store } from "../../stores/opencode.js";
 
 const props = defineProps({
   // The `.messages` element to search within (a plain DOM node, not a Vue
@@ -22,8 +22,8 @@ const props = defineProps({
   container: { type: Object, default: null },
 });
 
-const HL_ALL = "pi-find";
-const HL_CURRENT = "pi-find-current";
+const HL_ALL = "oc-find";
+const HL_CURRENT = "oc-find-current";
 const supportsHighlight =
   typeof window !== "undefined" && !!window.CSS?.highlights && typeof window.Highlight === "function";
 
