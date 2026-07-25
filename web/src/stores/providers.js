@@ -1,14 +1,14 @@
-// Provider/credential management: lists connected-provider metadata and lets
-// the user add/remove API-key credentials from the UI instead of only via
-// the server's own config. All routes here are UNVERIFIED against /doc —
-// see docs/opencode-api.md — so every handler catches errors into `error`
-// and never throws to the caller (matches runCommand's shim style).
+// Integration/credential management. In the V2 HttpApi, providers and their
+// auth methods are exposed under GET /api/integration — a large list of
+// ~150 entries, each with `methods` (key/env/oauth) and `connections[]`
+// showing what's already configured. Adding an API key goes through
+// POST /api/integration/{id}/connect/key. There is no list-of-credentials
+// endpoint — connection status lives inline on each integration.
 import { reactive } from "vue";
 import { apiBase, authHeaders } from "./ssh.js";
 
 export const providersStore = reactive({
-  providers: [], // [{ id, name, ... }]
-  credentials: [], // [{ id, providerID, ... }]
+  integrations: [], // [{ id, name, methods, connections }]
   loading: false,
   error: null,
 });
@@ -19,61 +19,54 @@ function unwrap(payload) {
   return [];
 }
 
-// UNVERIFIED against /doc — see docs/opencode-api.md
-export async function loadProviders() {
+export async function loadIntegrations() {
   providersStore.loading = true;
+  providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/provider`, { headers: authHeaders() });
+    const res = await fetch(`${apiBase()}/integration`, { headers: authHeaders() });
     if (res.ok) {
-      providersStore.providers = unwrap(await res.json());
-      providersStore.error = null;
+      providersStore.integrations = unwrap(await res.json());
     } else {
-      providersStore.error = `Failed to load providers (${res.status})`;
+      providersStore.error = `Failed to load integrations (${res.status})`;
     }
   } catch (err) {
-    providersStore.error = err.message || "Failed to load providers";
+    providersStore.error = err.message || "Failed to load integrations";
   } finally {
     providersStore.loading = false;
   }
 }
 
-// UNVERIFIED against /doc — see docs/opencode-api.md
-export async function loadCredentials() {
+// POST /api/integration/{id}/connect/key { key, label? } — attaches an API
+// key to the integration. Server re-reads its provider table after this so
+// the model list picks up the newly-available provider.
+export async function connectKey(integrationID, key, label) {
+  providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/credential`, { headers: authHeaders() });
-    if (res.ok) {
-      providersStore.credentials = unwrap(await res.json());
-      providersStore.error = null;
-    } else {
-      providersStore.error = `Failed to load credentials (${res.status})`;
-    }
-  } catch (err) {
-    providersStore.error = err.message || "Failed to load credentials";
-  }
-}
-
-// UNVERIFIED against /doc — see docs/opencode-api.md
-export async function addCredential(providerID, apiKey) {
-  try {
-    const res = await fetch(`${apiBase()}/credential`, {
+    const body = { key };
+    if (label) body.label = label;
+    const res = await fetch(`${apiBase()}/integration/${integrationID}/connect/key`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ providerID, apiKey }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       providersStore.error = `Failed to add credential (${res.status})`;
-      return;
+      return false;
     }
-    providersStore.error = null;
-    await Promise.all([loadProviders(), loadCredentials()]);
+    await loadIntegrations();
+    return true;
   } catch (err) {
     providersStore.error = err.message || "Failed to add credential";
+    return false;
   }
 }
 
-export async function removeCredential(id) {
+// DELETE /api/credential/{credentialID} — credential IDs come from the
+// integration's `connections[]` entries.
+export async function removeCredential(credentialID) {
+  providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/credential/${id}`, {
+    const res = await fetch(`${apiBase()}/credential/${credentialID}`, {
       method: "DELETE",
       headers: authHeaders(),
     });
@@ -81,8 +74,7 @@ export async function removeCredential(id) {
       providersStore.error = `Failed to remove credential (${res.status})`;
       return;
     }
-    providersStore.error = null;
-    await Promise.all([loadProviders(), loadCredentials()]);
+    await loadIntegrations();
   } catch (err) {
     providersStore.error = err.message || "Failed to remove credential";
   }
