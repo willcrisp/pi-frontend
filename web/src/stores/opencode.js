@@ -500,7 +500,8 @@ function toolContentText(content) {
     .join("\n");
 }
 
-// Send user prompt (POST /api/session/:id/prompt { text }).
+// Send user prompt (POST /api/session/:id/prompt { prompt: PromptInput }).
+// Body wraps under `prompt` — a flat `{ text }` 400s with "Missing key at [prompt]".
 export async function sendPrompt(text) {
   if (!text || !text.trim() || !opencodeStore.activeSessionId) return;
   const sessionID = opencodeStore.activeSessionId;
@@ -508,7 +509,6 @@ export async function sendPrompt(text) {
   const promptText = text.trim();
   opencodeStore.draft = "";
 
-  // Optimistically display the user message; session.idle later reconciles with server truth.
   const userMsgId = `user-${Date.now()}`;
   opencodeStore.messages.push({
     id: userMsgId,
@@ -524,7 +524,7 @@ export async function sendPrompt(text) {
     const res = await fetch(`${apiBase()}/session/${sessionID}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ text: promptText }),
+      body: JSON.stringify({ prompt: { text: promptText } }),
     });
 
     if (!res.ok) {
