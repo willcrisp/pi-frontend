@@ -612,3 +612,65 @@ export function selectedModelRef() {
   if (opencodeStore.thinkingLevel) ref.variant = opencodeStore.thinkingLevel;
   return ref;
 }
+
+// Fork the active session from a given message (POST /api/session/:id/fork
+// { messageID }); switches to the new session on success. Imports projects.js
+// lazily — it imports this module, so a static import here would cycle.
+// UNVERIFIED against /doc — see docs/opencode-api.md
+export async function forkSession(messageID) {
+  const sessionID = opencodeStore.activeSessionId;
+  if (!sessionID || !messageID) return;
+  try {
+    const res = await fetch(`${apiBase()}/session/${sessionID}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ messageID }),
+    });
+    if (!res.ok) return;
+    const body = await res.json();
+    const newId = body && body.data ? body.data.id : body && body.id;
+    if (!newId) return;
+    const { fetchSessions, openSession } = await import("./projects.js");
+    await fetchSessions();
+    openSession(newId);
+  } catch (err) {
+    console.warn("Failed to fork session:", err);
+  }
+}
+
+// Share the active session (POST /api/session/:id/share); returns the share
+// URL on success, null on any failure so the caller never has to catch.
+// UNVERIFIED against /doc — see docs/opencode-api.md
+export async function shareSession() {
+  const sessionID = opencodeStore.activeSessionId;
+  if (!sessionID) return null;
+  try {
+    const res = await fetch(`${apiBase()}/session/${sessionID}/share`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return (body && body.data && body.data.url) || null;
+  } catch (err) {
+    console.warn("Failed to share session:", err);
+    return null;
+  }
+}
+
+// Compact/summarize the active session's context (POST /api/session/:id/summarize),
+// then reconcile the transcript with server truth.
+// UNVERIFIED against /doc — see docs/opencode-api.md
+export async function compactSession() {
+  const sessionID = opencodeStore.activeSessionId;
+  if (!sessionID) return;
+  try {
+    const res = await fetch(`${apiBase()}/session/${sessionID}/summarize`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (res.ok) await refreshActiveMessages();
+  } catch (err) {
+    console.warn("Failed to compact session:", err);
+  }
+}
