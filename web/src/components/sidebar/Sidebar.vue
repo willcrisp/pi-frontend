@@ -22,10 +22,12 @@ import {
   setProjectArchived,
 } from "../../stores/projects.js";
 import { listDirectories } from "../../stores/filesearch.js";
+import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
 
 const activeSessionId = computed(() => opencodeStore.activeSessionId);
 
 const showArchived = ref(false);
+const showProviders = ref(false);
 
 const groups = computed(() =>
   groupSessionsByDirectory(projectsStore.sessions).filter(
@@ -193,9 +195,12 @@ async function newSessionIn(directory) {
           🗄
         </button>
         <button class="icon-btn" title="Refresh sessions" @click="fetchSessions">⟳</button>
+        <button class="icon-btn" title="Providers" @click="showProviders = true">⚙</button>
         <button class="icon-btn" title="New project" @click="showAddForm = !showAddForm">+</button>
       </div>
     </div>
+
+    <ProvidersDialog v-if="showProviders" @close="showProviders = false" />
 
     <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
       <div class="path-input-wrap">
