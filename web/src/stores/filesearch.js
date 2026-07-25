@@ -3,7 +3,6 @@
 // palette has results instantly; refresh runs in the background on demand.
 import { reactive } from "vue";
 import { runCommand } from "./pty.js";
-import { apiBase, authHeaders } from "./ssh.js";
 
 const CACHE_KEY = "opencode-web:files-cache"; // { [directory]: { files, fetchedAt } }
 const MAX_CACHED_FILES = 20000;
@@ -63,33 +62,10 @@ const LISTING_COMMANDS = [
   ["git", ["ls-files"]],
 ];
 
-// Try the dedicated fs listing route first; returns null (not an error) on
-// a 404 or unexpected shape so the caller falls back to PTY. Response is
-// `{data: [{path, type}]}` — filter down to files. Note this endpoint is
-// NOT recursive in this build; if the server only returns top-level entries,
-// PTY (fdfind) still runs and provides the recursive tree for the palette.
-async function listFilesViaRoute(directory) {
-  try {
-    const res = await fetch(
-      `${apiBase()}/fs/list?path=${encodeURIComponent(directory)}`,
-      { headers: authHeaders() }
-    );
-    if (!res.ok) return null;
-    const body = await res.json();
-    if (!body || !Array.isArray(body.data)) return null;
-    const files = body.data
-      .filter((e) => e && e.type === "file" && e.path)
-      .map((e) => e.path);
-    return files.slice(0, MAX_CACHED_FILES);
-  } catch {
-    return null;
-  }
-}
-
+// GET /api/fs/list exists but is single-level; the palette needs a recursive
+// tree, so PTY (fdfind / fd / git ls-files) is the only viable source here.
+// If a recursive endpoint lands, replace the loop below with it.
 async function listFiles(directory) {
-  const viaRoute = await listFilesViaRoute(directory);
-  if (viaRoute && viaRoute.length) return viaRoute;
-
   let lastErr = null;
   for (const [cmd, args] of LISTING_COMMANDS) {
     try {
