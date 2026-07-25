@@ -146,40 +146,12 @@ export async function loadSkills() {
   }
 }
 
-// Run a server slash command (POST /api/session/:id/command { command, arguments }).
-// If the server doesn't accept that route/shape, fall back to sending the raw
-// "/name args" text as a plain prompt so the input is never swallowed.
+// Run a slash command. The V2 HttpApi has no server-side command dispatch
+// route, so this just sends the raw "/name args" text as a plain prompt —
+// the agent parses the leading slash itself.
 export async function runCommand(name, args) {
-  const sessionID = opencodeStore.activeSessionId;
   const rawText = `/${name}${args ? ` ${args}` : ""}`;
-  if (!sessionID) return;
-
-  // Optimistic echo, same as sendPrompt; session.idle reconciles with server truth.
-  const userMsgId = `user-${Date.now()}`;
-  opencodeStore.messages.push({
-    id: userMsgId,
-    role: "user",
-    parts: [{ type: "text", text: rawText }],
-    text: rawText,
-  });
-  opencodeStore.isStreaming = true;
-
-  try {
-    const res = await fetch(`${apiBase()}/session/${sessionID}/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ command: name, arguments: args || "" }),
-    });
-    if (res.ok) return;
-    // Route missing or shape rejected — drop the echo (sendPrompt re-adds it)
-    // and send the raw text instead.
-    opencodeStore.messages = opencodeStore.messages.filter((m) => m.id !== userMsgId);
-    await sendPrompt(rawText);
-  } catch (err) {
-    opencodeStore.isStreaming = false;
-    opencodeStore.error = err.message;
-    console.error("Error running slash command:", err);
-  }
+  await sendPrompt(rawText);
 }
 
 // Subscribe to the event stream (fetch-based, so we can attach an Authorization header —

@@ -4,10 +4,7 @@
 -->
 <script setup>
 import { nextTick, onMounted, ref } from "vue";
-import { opencodeStore } from "../../stores/opencode.js";
-import { fetchSessions } from "../../stores/projects.js";
 import { closeRenameDialog } from "../../stores/renameDialog.js";
-import { apiBase, authHeaders } from "../../stores/ssh.js";
 
 const value = ref("");
 const inputEl = ref(null);
@@ -17,26 +14,9 @@ onMounted(() => {
   nextTick(() => inputEl.value?.focus());
 });
 
+// The V2 HttpApi in this build has no PATCH /session/{id} — rename would
+// 404. Left as a no-op close until the server exposes a rename route.
 async function confirm() {
-  const next = value.value.trim();
-  if (!next || busy.value) {
-    closeRenameDialog();
-    return;
-  }
-  busy.value = true;
-  try {
-    const sessionID = opencodeStore.activeSessionId;
-    if (sessionID) {
-      await fetch(`${apiBase()}/session/${sessionID}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ title: next }),
-      });
-      await fetchSessions();
-    }
-  } finally {
-    busy.value = false;
-  }
   closeRenameDialog();
 }
 

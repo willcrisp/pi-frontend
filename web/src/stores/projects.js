@@ -165,19 +165,17 @@ export async function startNewChat(directory) {
   }
 }
 
+// The V2 HttpApi in this build does not expose DELETE /session/{id}, so this
+// is a client-only hide — the session will reappear the next time fetchSessions
+// runs. If a real delete route lands, add the fetch back.
 export async function removeSession(sessionID) {
-  try {
-    await fetch(`${apiBase()}/session/${sessionID}`, { method: "DELETE", headers: authHeaders() });
-    projectsStore.sessions = projectsStore.sessions.filter((s) => s.id !== sessionID);
-    if (opencodeStore.activeSessionId === sessionID) {
-      if (projectsStore.sessions.length > 0) {
-        openSession(projectsStore.sessions[0].id);
-      } else {
-        startNewChat().catch(() => {});
-      }
+  projectsStore.sessions = projectsStore.sessions.filter((s) => s.id !== sessionID);
+  if (opencodeStore.activeSessionId === sessionID) {
+    if (projectsStore.sessions.length > 0) {
+      openSession(projectsStore.sessions[0].id);
+    } else {
+      startNewChat().catch(() => {});
     }
-  } catch (err) {
-    console.error("Failed to delete session:", err);
   }
 }
 
