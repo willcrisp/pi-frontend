@@ -63,19 +63,24 @@ const LISTING_COMMANDS = [
   ["git", ["ls-files"]],
 ];
 
-// Try the dedicated filesystem listing route first; returns null (not an
-// error) on a 404 or unexpected shape so the caller falls back to PTY.
-// UNVERIFIED against /doc — see docs/opencode-api.md
+// Try the dedicated fs listing route first; returns null (not an error) on
+// a 404 or unexpected shape so the caller falls back to PTY. Response is
+// `{data: [{path, type}]}` — filter down to files. Note this endpoint is
+// NOT recursive in this build; if the server only returns top-level entries,
+// PTY (fdfind) still runs and provides the recursive tree for the palette.
 async function listFilesViaRoute(directory) {
   try {
     const res = await fetch(
-      `${apiBase()}/filesystem/list?directory=${encodeURIComponent(directory)}&recursive=1`,
+      `${apiBase()}/fs/list?path=${encodeURIComponent(directory)}`,
       { headers: authHeaders() }
     );
     if (!res.ok) return null;
     const body = await res.json();
     if (!body || !Array.isArray(body.data)) return null;
-    return body.data.slice(0, MAX_CACHED_FILES);
+    const files = body.data
+      .filter((e) => e && e.type === "file" && e.path)
+      .map((e) => e.path);
+    return files.slice(0, MAX_CACHED_FILES);
   } catch {
     return null;
   }
