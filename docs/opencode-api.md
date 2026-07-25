@@ -1,354 +1,186 @@
 # OpenCode V2 HTTP API reference (for this frontend)
 
-This frontend (`web/src/stores/opencode.js`, `projects.js`, `ssh.js`) talks
-directly to an OpenCode V2 server's HTTP/SSE API — there is no server-side
-component in this repo translating or documenting the protocol, so getting
-field names wrong here is a silent runtime bug, not a compile error.
+This frontend (`web/src/stores/*.js`) talks directly to an OpenCode V2
+server's HTTP/SSE API. Getting field names wrong here is a silent runtime
+bug, not a compile error.
 
-## The only source of truth: the live server's own `/doc`
+## Source of truth: the live server's own OpenAPI
 
-**Do not trust any packaged SDK, prose docs, or this file's field-shape
-notes over the actual server you're pointed at.** OpenCode's HTTP server
-generates its OpenAPI 3.1 spec live from its own route definitions
-(`hono-openapi`/`describeRoute`), and serves it at `/doc` on whatever port
-`opencode serve` is running — e.g. `http://127.0.0.1:4096/doc`. That is
-ground truth for that specific server build. Anything else (a versioned npm
-package, this doc, a hosted docs page) can drift out from under a given
-server and produce silent runtime bugs, not compile errors — verify against
-`/doc` before relying on a field name.
+The V2 server serves its OpenAPI 3.1 spec at `/openapi.json`. That's the
+only ground truth — a packaged SDK, a hosted docs page, or this file can
+all drift from the specific server you're pointed at. Verify against the
+live spec before relying on a field name.
 
 ```sh
-# direct to the opencode server (adjust port):
-curl -s http://127.0.0.1:4096/doc | jq '.components.schemas.SessionV2Info'
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys'
+# Get the CLI:
+npm install -g opencode-ai@next   # ships binary `opencode2`
+opencode2 serve --hostname 127.0.0.1 --port 4096
 
-# through this repo's dev setup, from the browser/vite side, apiBase() adds
-# its own /api prefix on top of the proxy prefix — see ssh.js — so the doc
-# route (if the server exposes it under the same prefix) is reachable at
-# /api/<port>/api/doc during `npm run dev`.
+# Server auto-creates an auth password; retrieve with:
+opencode2 service password
+# Basic auth: `Authorization: Basic $(echo -n opencode:$PW | base64 -w0)`
+
+# Inspect the spec:
+curl -s http://127.0.0.1:4096/openapi.json | jq '.paths | keys'
+curl -s http://127.0.0.1:4096/openapi.json | jq '.components.schemas | keys'
 ```
 
-If no server is reachable to check against (e.g. this sandbox has none
-running), say so explicitly rather than asserting a field shape from memory
-or from a package that may not match. `https://v2.opencode.ai/docs/api/`
-and the DeepWiki mirrors return HTTP 403 through this environment's fetch
-tooling (Cloudflare block on the agent proxy) — don't waste time retrying
-those; they're not a substitute for `/doc` on the real server anyway, since
-they can't reflect the exact build you're targeting.
+Notes:
+- The spec is at `/openapi.json` (unprefixed), **not** `/doc` or `/api/doc`.
+- All operational routes live under `/api/*`.
+- Every operation has `security: []` in the current build, but requests
+  without basic-auth headers still return 401 — auth is enforced out-of-band.
+- The frontend proxies through `/api/<port>/api` (Vite dev proxy strips
+  `/api/<port>`, forwards `/api/...` to the server). `apiBase()` in
+  `web/src/stores/ssh.js` builds that prefix.
 
-## Which route surface this frontend actually calls
+## Verified endpoint inventory (build: opencode-ai@next 0.0.0-next-202606270058)
 
-`apiBase()` (`web/src/stores/ssh.js`) resolves to `/api/<port>/api` — after
-the Vite dev proxy strips the `/api/<port>` prefix, requests land on the
-real server at `/api/...`. Confirm any endpoint you're about to use is
-actually under that `/api`-prefixed surface in the target server's own
-`/doc` output — OpenCode has historically exposed more than one HttpApi
-surface with similarly-shaped-but-different types mounted at different
-prefixes, so a field or path that "looks right" from a doc, package, or
-memory of a different surface can silently be the wrong one.
+Every path below has been probed against a live server and either used by
+this frontend or flagged as a known gap.
 
-### Known gotcha (verify against your server's `/doc` before trusting)
+### Session lifecycle
 
-The last time this was checked, the session objects returned by this
-frontend's `GET /api/session` (`SessionsResponse.data: SessionV2Info[]`) did
-**not** have a flat `directory` field — the project root instead lived at
-`session.location.directory` (`location: { directory, workspaceID? }`).
-`projects.js#fetchSessions` reads `s.location.directory` accordingly. If
-that's wrong for the server you're pointed at, `curl .../doc | jq
-'.components.schemas.SessionV2Info'` (or whatever the live schema calls it)
-will show the real shape — trust that over this paragraph.
-
-Two more, confirmed against a live server via HAR capture (2026-07-24):
-
-- **Agents are addressed by `id`, not `name`.** `GET /api/agent` returns
-  `{ id: "build", name: "Build", ... }`; every place an agent is sent
-  (`POST /session` body, `POST /session/:id/agent`) must use the lowercase
-  `id`. Sending the display name fails with `Agent not found: "Build"` —
-  and see the next point for why that failure used to be invisible.
-- **The SSE stream uses a `session.execution.*` lifecycle**, not just the
-  classic `message.*`/`session.idle` vocabulary. Observed events:
-  `server.connected`, `session.input.admitted`, `session.execution.started`,
-  `session.execution.failed` (payload `{ sessionID, error: { type, message } }`),
-  `session.model.selected`, `pty.created`/`pty.exited`/`pty.deleted`.
-  Envelope is `{ id, type, data, created?, durable?, location? }`.
-  `opencode.js#handleServerEvent` must handle execution completion/failure
-  or the UI spins on "thinking" forever with no error shown.
-- `handleServerEvent` now has explicit cases for `server.connected`,
-  `session.execution.started`, `session.model.selected`,
-  `session.input.admitted` (acknowledged, no state change), and
-  `pty.created`/`pty.exited`/`pty.deleted` (no state change — PTY runner
-  uses a one-shot lifecycle, see `pty.js`).
-
-## What this frontend currently reads from each response
-
-Recorded here as "what the code assumes today," not as a schema — confirm
-against `/doc` before changing any of it:
-
-- **`GET /api/session`** (`projects.js#fetchSessions`) — per session:
-  `id`, `title`, `time.updated`/`time.created`, `location.directory` (see
-  gotcha above). Mapped to `{ id, title, updatedAt, directory }`, sorted
-  most-recently-updated first; `groupSessionsByDirectory()` then groups by
-  `directory` for the sidebar (`Sidebar.vue`), one collapsible section per
-  project root, most recently active first.
-- **`GET /api/model`** (`opencode.js#loadModels`) — per model: `id`,
-  `providerID`, `name`, `limit.context`, and optionally `variants`
-  (reasoning-effort presets; the composer's reasoning `<select>` shows its
-  keys, and the chosen key is sent as `variant` inside the Model.Ref —
-  **UNVERIFIED against a live `/doc`**, both field name and ref shape).
-  Mapped to `{ providerID, modelID: id, label: name || providerID/id,
-  contextLimit: limit.context, variants }`.
-  `Composer.vue`'s `modelsByProvider` groups the model `<select>`'s options
-  by `providerID` into `<optgroup>`s.
-- **`GET /api/agent`**, **`GET /api/command`** — consumed close to as-is;
-  see the inline comments in `opencode.js#loadAgents`/`loadCommands`.
-
-## Endpoints this frontend calls
-
-| Method | Path | Used by |
+| Method | Path | Notes |
 |---|---|---|
-| GET | `/api/session` | `projects.js#fetchSessions` |
-| POST | `/api/session` | `projects.js#startNewChat` — body may include `agent`, `model` (Model.Ref), and for "new project" a root directory: tries `{ directory }`, falls back to `{ location: { directory } }` on a non-2xx (**UNVERIFIED** — check the create body's real field against `/doc`) |
-| DELETE | `/api/session/{sessionID}` | `projects.js#removeSession` |
-| GET | `/api/session/{sessionID}/message` | `opencode.js#refreshActiveMessages` |
-| POST | `/api/session/{sessionID}/prompt` | `opencode.js#sendPrompt` |
-| POST | `/api/session/{sessionID}/interrupt` | `opencode.js#abortSession` |
-| POST | `/api/session/{sessionID}/model` | `opencode.js#setModel` |
-| POST | `/api/session/{sessionID}/agent` | `opencode.js#setAgent` |
-| GET | `/api/model` | `opencode.js#loadModels` |
-| GET | `/api/agent` | `opencode.js#loadAgents` |
-| GET | `/api/command` | `opencode.js#loadCommands` |
-| GET | `/api/skill` | `opencode.js#loadSkills` (optional; empty list if the route is missing) |
-| POST | `/api/session/{sessionID}/command` | `opencode.js#runCommand` — `{ command, arguments }`; on non-2xx falls back to sending the raw `/name args` as a plain prompt (**UNVERIFIED** — check route + body against `/doc`) |
-| GET | `/api/event` (SSE) | `opencode.js#setupEventStream` |
-| GET | `/health` | `opencode.js#initOpenCode` |
-| POST | `/api/session/{sessionID}/permission/{permissionID}` | `permission.js#respond` — `{ response: "once"\|"always"\|"reject" }` (**UNVERIFIED**) |
-| GET | `/api/vcs/branches?directory=` | `git.js#fetchBranchesViaRoute` — expects `{ current, branches }`; falls back to the PTY `git branch -a` implementation on 404/shape mismatch (**UNVERIFIED**) |
-| POST | `/api/vcs/checkout` | `git.js#checkoutBranchViaRoute` — `{ directory, branch }`; falls back to PTY `git checkout` (**UNVERIFIED**) |
-| GET | `/api/filesystem/list?directory=&recursive=1` | `filesearch.js#listFilesViaRoute` — expects `{ data: string[] }`; falls back to the PTY `fd`/`git ls-files` chain (**UNVERIFIED**) |
-| GET | `/api/project` | `projects.js#fetchProjects` — expects `{ data: [{ id, name, path|directory }] }`; failure silently leaves the directory->name map empty (**UNVERIFIED**) |
-| GET | `/api/provider` | `providers.js#loadProviders` (**UNVERIFIED**) |
-| GET | `/api/credential` | `providers.js#loadCredentials` (**UNVERIFIED**) |
-| POST | `/api/credential` | `providers.js#addCredential` — `{ providerID, apiKey }` (**UNVERIFIED**) |
-| DELETE | `/api/credential/{id}` | `providers.js#removeCredential` (**UNVERIFIED**) |
-| POST | `/api/session/{sessionID}/fork` | `opencode.js#forkSession` — `{ messageID }`; expects `{ data: { id } }` (**UNVERIFIED**) |
-| POST | `/api/session/{sessionID}/share` | `opencode.js#shareSession` — expects `{ data: { url } }` (**UNVERIFIED**) |
-| POST | `/api/session/{sessionID}/summarize` | `opencode.js#compactSession` (**UNVERIFIED**) |
-
-For anything not in this table — check the target server's own `/doc` for
-whether it exists and what it's shaped like, rather than assuming from this
-list.
-
-## Project grouping: server project list used as a label override
-
-`projects.js#fetchProjects` (called from `initProjects`, in parallel with
-`fetchSessions`) fetches `GET /api/project` and, on success, builds a
-`directory -> name` map (`projectsStore.projectsByDirectory`). `Sidebar.vue`/
-`projects.js#groupSessionsByDirectory` checks that map first for a group's
-label and falls back to the directory's basename (`directoryLabel()`) when
-the route is missing or a session's directory has no matching entry — see
-the checklist below for confirming the response shape.
-
-## Verification checklist
-
-Every endpoint below is marked **UNVERIFIED** somewhere in this codebase —
-the field names/shapes come from the hosted docs, a prior HAR capture, or
-plain guesswork, not a confirmed live `/doc`. Run these against your target
-server (adjust the port) before trusting the corresponding code path; each
-one dumps the relevant schema or path list from the OpenAPI spec.
-
-```sh
-# session create body — projects.js#startNewChat (docs/opencode-api.md:110)
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/session".post.requestBody'
-
-# session command body — opencode.js#runCommand (docs/opencode-api.md:121)
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/command".post.requestBody'
-
-# Model.Info variant field + Model.Ref variant field (docs/opencode-api.md:92)
-curl -s http://127.0.0.1:4096/doc | jq '.components.schemas["Model.Info"], .components.schemas["Model.Ref"]'
-
-# permission respond route + body — permission.js#respond (task 2)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("permission")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/permission/{permissionID}"'
-
-# vcs branches/checkout routes — git.js (task 5)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("vcs")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/vcs/branches", .paths."/vcs/checkout"'
-
-# filesystem list route — filesearch.js#listFilesViaRoute (task 5)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("filesystem")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/filesystem/list"'
-
-# project list route — projects.js#fetchProjects (task 6)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("project")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/project".get.responses'
-
-# provider list + credential CRUD routes — providers.js (task 7)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("provider|credential")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/provider", .paths."/credential", .paths."/credential/{id}"'
-
-# session fork/share/summarize routes — opencode.js (task 8)
-curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("fork|share|summarize")))'
-curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/fork", .paths."/session/{id}/share", .paths."/session/{id}/summarize"'
-```
-
-If a `keys | map(select(test(...)))` lookup comes back empty, the route
-doesn't exist on that server build — the calling code already treats a
-non-2xx/404 as "route missing" and falls back or leaves the UI in a good
-state (see the UNVERIFIED comment next to each call site), so nothing
-breaks, but the feature silently won't do anything until the real path is
-found and the code updated to match.
-
----
-seo:
-  description: Experimental HttpApi surface for selected instance routes.
-sidebar:
-  label: Overview
-title: opencode HttpApi
----
-Experimental HttpApi surface for selected instance routes.
-
-<ApiOverview source="api" />
-
-## health
-
-<ApiTagOperations source="api" tag="health" />
-
-## server
-
-<ApiTagOperations source="api" tag="server" />
-
-## location
-
-<ApiTagOperations source="api" tag="location" />
-
-## agent
-
-<ApiTagOperations source="api" tag="agent" />
-
-## plugin
-
-Experimental plugin routes.
-
-<ApiTagOperations source="api" tag="plugin" />
-
-## session
-
-Experimental message routes.
-
-<ApiTagOperations source="api" tag="session" />
-
-## model
-
-Experimental model routes.
-
-<ApiTagOperations source="api" tag="model" />
-
-## generate
-
-Experimental one-shot generation routes.
-
-<ApiTagOperations source="api" tag="generate" />
-
-## provider
-
-Experimental provider routes.
-
-<ApiTagOperations source="api" tag="provider" />
-
-## integration
-
-Integration discovery and authentication routes.
-
-<ApiTagOperations source="api" tag="integration" />
-
-## mcp
-
-MCP server and resource routes.
-
-<ApiTagOperations source="api" tag="mcp" />
-
-## credential
-
-<ApiTagOperations source="api" tag="credential" />
-
-## project
-
-Location-scoped project routes.
-
-<ApiTagOperations source="api" tag="project" />
-
-## form
-
-Session form routes.
-
-<ApiTagOperations source="api" tag="form" />
-
-## permission
-
-Experimental permission routes.
-
-<ApiTagOperations source="api" tag="permission" />
-
-## filesystem
-
-Experimental location-scoped filesystem routes.
-
-<ApiTagOperations source="api" tag="filesystem" />
-
-## command
-
-Experimental command routes.
-
-<ApiTagOperations source="api" tag="command" />
-
-## skill
-
-Experimental skill routes.
-
-<ApiTagOperations source="api" tag="skill" />
-
-## event
-
-Experimental event stream routes.
-
-<ApiTagOperations source="api" tag="event" />
-
-## pty
-
-Experimental location-scoped PTY routes.
-
-<ApiTagOperations source="api" tag="pty" />
-
-## shell
-
-Experimental location-scoped shell command routes.
-
-<ApiTagOperations source="api" tag="shell" />
-
-## question
-
-Experimental session question routes.
-
-<ApiTagOperations source="api" tag="question" />
-
-## reference
-
-Location-scoped project references.
-
-<ApiTagOperations source="api" tag="reference" />
-
-## projectCopy
-
-Project copy management routes.
-
-<ApiTagOperations source="api" tag="projectcopy" />
-
-## vcs
-
-Location-scoped version control routes.
-
-<ApiTagOperations source="api" tag="vcs" />
-
-## debug
-
-<ApiTagOperations source="api" tag="debug" />
+| GET | `/api/session` | Wired: `projects.js#fetchSessions`. Returns `{data: SessionV2.Info[]}` |
+| GET | `/api/session/active` | Not wired. Current active-session pointer |
+| GET | `/api/session/{sessionID}` | Not wired. Single-session detail |
+| POST | `/api/session` | Wired: `projects.js#startNewChat`. Body `{id?, agent?, model?, location?}` where `location` is `{directory, workspaceID?}` (`Location.Ref`) |
+| ❌ | ~~DELETE `/api/session/{sessionID}`~~ | **Not exposed in this build.** `removeSession` is client-side-only |
+| ❌ | ~~PATCH `/api/session/{sessionID}`~~ | **Not exposed.** RenameDialog is a no-op |
+
+### Prompts and execution
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/session/{sessionID}/prompt` | Wired: `sendPrompt`. **Body must wrap under `prompt`**: `{prompt: {text, files?, agents?}, id?, delivery?, resume?}`. A flat `{text}` 400s |
+| POST | `/api/session/{sessionID}/interrupt` | Wired: `abortSession` |
+| POST | `/api/session/{sessionID}/wait` | Not wired. Sync wait for completion |
+| GET | `/api/session/{sessionID}/message` | Wired: `refreshActiveMessages` |
+| GET | `/api/session/{sessionID}/message/{messageID}` | Not wired |
+| GET | `/api/session/{sessionID}/context` | Not wired. Server-computed context/tokens; UI currently derives from messages |
+| GET | `/api/session/{sessionID}/event` | Not wired. Session-scoped SSE — cleaner than filtering the global stream |
+
+### Session-level operations
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/session/{sessionID}/model` | Wired: `setModel` → `pushSessionModel`. Body `{model: Model.Ref}` |
+| POST | `/api/session/{sessionID}/agent` | Wired: `setAgent`. Body `{agent}` — must be agent `id`, not display `name` |
+| POST | `/api/session/{sessionID}/compact` | Wired: `compactSession`. **Returns 503 "Session compact is not available yet" in this build** — endpoint reserved but unimplemented |
+| POST | `/api/session/{sessionID}/revert/stage` | Not wired. Alternative to a fork endpoint |
+| POST | `/api/session/{sessionID}/revert/commit` | Not wired |
+| POST | `/api/session/{sessionID}/revert/clear` | Not wired |
+| ❌ | ~~POST `/api/session/{sessionID}/fork`~~ | **Not exposed.** Use `revert/*` instead |
+| ❌ | ~~POST `/api/session/{sessionID}/share`~~ | **Not exposed at all** in this build |
+| ❌ | ~~POST `/api/session/{sessionID}/command`~~ | **Not exposed.** Slash commands are sent as raw prompt text |
+
+### Permissions (tool-approval gating)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/permission/request` | Not wired. Poll for all pending requests (fallback for missed SSE) |
+| GET | `/api/permission/saved` | Not wired. List always-allow rules |
+| DELETE | `/api/permission/saved/{id}` | Not wired. Revoke a saved rule |
+| GET | `/api/session/{sessionID}/permission/{requestID}` | Not wired. Fetch specific request |
+| POST | `/api/session/{sessionID}/permission/{requestID}/reply` | Wired: `permission.js#respond`. Body `{reply: "once"\|"always"\|"reject", message?}` |
+| POST | `/api/session/{sessionID}/permission` | Not wired. Server-side create — probably not caller-facing |
+
+### Questions (interactive Q&A)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/session/{sessionID}/question` | Not wired |
+| POST | `/api/session/{sessionID}/question/{requestID}/reply` | Not wired |
+| POST | `/api/session/{sessionID}/question/{requestID}/reject` | Not wired |
+| GET | `/api/question/request` | Not wired. Global pending questions |
+
+### Metadata
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/health` | Wired: `initOpenCode` |
+| GET | `/api/location` | Not wired. Returns current server's `{directory, project: {id, directory}}` — the closest thing to project metadata (no listing endpoint) |
+| GET | `/api/model` | Wired: `loadModels`. Returns `Model.Info[]` |
+| GET | `/api/agent` | Wired: `loadAgents`. Filter `mode !== "subagent"` and `!hidden` |
+| GET | `/api/command` | Wired: `loadCommands` |
+| GET | `/api/skill` | Wired: `loadSkills` |
+| GET | `/api/reference` | Not wired |
+
+### Providers, integrations, credentials
+
+The credential model is integration-driven — there is no top-level list of
+credentials, and no `POST /api/credential`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/provider` | Not wired. Providers that already have a working connection (differs from integration list) |
+| GET | `/api/provider/{providerID}` | Not wired |
+| GET | `/api/integration` | Wired: `providers.js#loadIntegrations`. ~150 entries: `{id, name, methods, connections[]}` |
+| GET | `/api/integration/{integrationID}` | Not wired |
+| POST | `/api/integration/{integrationID}/connect/key` | Wired: `connectKey`. Body `{key, label?}` → 204. Attaches an API key |
+| POST | `/api/integration/{integrationID}/connect/oauth` | Not wired |
+| POST | `/api/integration/attempt/{attemptID}/complete` | Not wired. Complete an OAuth attempt |
+| DELETE | `/api/integration/attempt/{attemptID}` | Not wired. Cancel an attempt |
+| GET | `/api/integration/attempt/{attemptID}` | Not wired |
+| PATCH | `/api/credential/{credentialID}` | Not wired. Edit label |
+| DELETE | `/api/credential/{credentialID}` | Wired: `removeCredential`. Credential ID comes from an integration's `connections[]` |
+
+Connection shape (from a real integration `.connections[]` after connect):
+`{type: "credential", id: "cred_...", label: "default"}`
+
+### Filesystem, PTY, events
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/fs/list` | Not wired for palette (see below). Params: `location[directory]`, `path` (relative). Non-recursive — returns one directory level, `{data: [{path, type}]}` |
+| GET | `/api/fs/find` | Not wired. Query-based search (`query` required) |
+| GET | `/api/fs/read/*` | Not wired. Read file contents |
+| ❌ | ~~/api/vcs/*~~ | **No git/vcs routes at all** in this build. `git.js` uses PTY (`git branch -a`, `git checkout`) — the only viable path |
+| GET | `/api/pty` / `/{ptyID}` | Wired: `pty.js` for create/delete/connect flow |
+| POST | `/api/pty` | Wired: `pty.js#runCommand` |
+| DELETE | `/api/pty/{ptyID}` | Wired: cleanup after one-shot run |
+| POST | `/api/pty/{ptyID}/connect-token` | Wired |
+| GET | `/api/pty/{ptyID}/connect` | Wired: WebSocket, streams stdout |
+| PUT | `/api/pty/{ptyID}` | Not wired. Update PTY (resize?) |
+| GET | `/api/event` | Wired: `setupEventStream` (SSE) |
+
+**Why `fs/list` isn't wired for the file palette:** the endpoint is
+single-level. The palette needs a recursive file tree, which only the
+PTY-based `fdfind` / `fd` / `git ls-files` path in `filesearch.js`
+delivers today. If a recursive endpoint lands, replace the loop there.
+
+## Confirmed schemas
+
+- **`Location.Ref`** = `{directory: string, workspaceID?: string}`
+- **`Model.Ref`** = `{id: string, providerID: string, variant?: string}`
+- **`PromptInput`** = `{text: string, files?: [], agents?: []}`
+- **`PermissionV2.Reply`** = `"once" | "always" | "reject"`
+- **`PermissionV2.Request`** = `{id: "per_..." , sessionID: "ses_...", action: string, resources: string[], save?: string[], metadata?: object, source?: object}`
+- **`SessionV2.Info`** = `{id, title?, agent, model, location: Location.Info, cost, tokens, parentID?, projectID, subpath, revert?, time}`
+
+## SSE event catalog
+
+Envelope: `{id: "evt_...", type: string, data: object, metadata?, durable?, location?}`. Types seen in the spec:
+
+- `server.connected` — wired, sets `connected = true`
+- `message.updated`, `message.part.updated`, `message.part.removed`, `message.removed` — wired
+- `session.execution.started` / `.completed` / `.failed` — wired
+- `session.idle` — wired
+- `session.model.selected` — wired, syncs local model selection
+- `session.input.admitted` — wired (acknowledged, no state change)
+- `permission.v2.asked` — wired, enqueues in permission store
+- `permission.v2.replied` — wired, clears queue entry
+- `question.v2.asked` / `question.v2.rejected` — **not wired**; wire up when you build the questions UI
+- `pty.created` / `.updated` / `.exited` / `.deleted` — wired (no state change today)
+- `file.edited` / `file.watcher.updated` — not wired
+- `integration.updated` / `integration.connection.updated` — not wired; would let the providers dialog auto-refresh
+- `plugin.added`, `catalog.updated`, `project.directories.updated`, `models-dev.refreshed` — not wired
+
+## Known gotchas
+
+- **Agents are addressed by `id`, not `name`.** `{id: "build", name: "Build"}` — send `build`. Sending `Build` fails with `Agent not found: "Build"`.
+- **`fs/list` `path` is relative to `location.directory`.** Sending an absolute path when the location is the server's own workspace returns 500 because the server sandboxes to the project root.
+- **`compact` is stubbed server-side in this build** — the endpoint exists (POST `/api/session/{id}/compact`) but always returns 503 with `{message: "Session compact is not available yet"}`. Frontend surfaces this as an error banner.
+- **Auth is basic and out-of-band.** The OpenAPI declares `security: []` on every op, but a request without the `Authorization: Basic ...` header returns 401. Password comes from `opencode2 service password`.
