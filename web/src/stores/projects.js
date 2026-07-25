@@ -31,7 +31,29 @@ export const projectsStore = reactive({
   // Client-only project archiving (by root directory) — the server has no
   // project entity to archive, so this just hides groups in the sidebar.
   archivedDirectories: loadArchived(),
+  // directory -> server-provided project name, for nicer sidebar group labels.
+  projectsByDirectory: {},
 });
+
+// Fetch server-side project metadata (a user-set name, etc.) to use as the
+// sidebar group label instead of the directory basename, where available.
+// UNVERIFIED against /doc — see docs/opencode-api.md
+export async function fetchProjects() {
+  try {
+    const res = await fetch(`${apiBase()}/project`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const list = unwrap(await res.json());
+    const byDirectory = {};
+    for (const p of list) {
+      const dir = p && (p.directory || p.path);
+      if (dir && p.name) byDirectory[dir] = p.name;
+    }
+    projectsStore.projectsByDirectory = byDirectory;
+  } catch (err) {
+    // Silently leave the map empty — group labels fall back to directoryLabel().
+    console.warn("Could not load OpenCode projects:", err);
+  }
+}
 
 export function isArchived(directory) {
   return projectsStore.archivedDirectories.includes(directory);
@@ -90,7 +112,8 @@ export function groupSessionsByDirectory(sessions) {
   for (const s of sessions) {
     let group = byDirectory.get(s.directory);
     if (!group) {
-      group = { directory: s.directory, label: directoryLabel(s.directory), sessions: [] };
+      const label = projectsStore.projectsByDirectory[s.directory] || directoryLabel(s.directory);
+      group = { directory: s.directory, label, sessions: [] };
       byDirectory.set(s.directory, group);
       groups.push(group);
     }
@@ -174,7 +197,7 @@ export function activeSessionDirectory() {
 }
 
 export async function initProjects() {
-  await fetchSessions();
+  await Promise.all([fetchSessions(), fetchProjects()]);
 
   const lastId = localStorage.getItem(LAST_SESSION_KEY);
   const found = projectsStore.sessions.find((s) => s.id === lastId);
