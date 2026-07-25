@@ -7,6 +7,7 @@ import { nextTick, onMounted, ref } from "vue";
 import { opencodeStore } from "../../stores/opencode.js";
 import { fetchSessions } from "../../stores/projects.js";
 import { closeRenameDialog } from "../../stores/renameDialog.js";
+import { apiBase, authHeaders } from "../../stores/ssh.js";
 
 const value = ref("");
 const inputEl = ref(null);
@@ -26,9 +27,9 @@ async function confirm() {
   try {
     const sessionID = opencodeStore.activeSessionId;
     if (sessionID) {
-      await fetch(`/api/session/${sessionID}`, {
+      await fetch(`${apiBase()}/session/${sessionID}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ title: next }),
       });
       await fetchSessions();
