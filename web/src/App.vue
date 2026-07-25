@@ -9,11 +9,13 @@ import { onMounted } from "vue";
 import { opencodeStore, initOpenCode } from "./stores/opencode.js";
 import { initProjects } from "./stores/projects.js";
 import { connectionStore, testConnection } from "./stores/ssh.js";
+import { permissionStore } from "./stores/permission.js";
 import ChatHeader from "./components/chat/ChatHeader.vue";
 import Composer from "./components/chat/Composer.vue";
 import MessageList from "./components/chat/MessageList.vue";
 import Sidebar from "./components/sidebar/Sidebar.vue";
 import ConnectScreen from "./components/dialogs/ConnectDialog.vue";
+import PermissionDialog from "./components/dialogs/PermissionDialog.vue";
 
 async function boot() {
   connectionStore.status = "connecting";
@@ -36,6 +38,7 @@ onMounted(() => {
   <ConnectScreen v-if="connectionStore.status !== 'connected'" @connect="boot" />
 
   <template v-else>
+    <PermissionDialog v-if="permissionStore.queue.length" />
     <Sidebar />
 
     <div v-if="!opencodeStore.activeSessionId" class="chat-panel chat-empty">
