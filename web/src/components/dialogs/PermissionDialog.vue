@@ -1,9 +1,9 @@
 <!--
   Modal for approving/denying a tool call that needs permission. Backed by
-  stores/permission.js — permissionStore.queue is a FIFO of pending requests;
-  this dialog always shows the queue head and advances automatically as
-  responses come back (see App.vue, which mounts this while the queue is
-  non-empty).
+  stores/permission.js — permissionStore.queue is a FIFO of pending requests
+  from `permission.v2.asked`; this dialog always shows the queue head and
+  advances automatically as replies come back (see App.vue, which mounts
+  this while the queue is non-empty).
 -->
 <script setup>
 import { computed } from "vue";
@@ -11,18 +11,20 @@ import { permissionStore, respond } from "../../stores/permission.js";
 
 const current = computed(() => permissionStore.queue[0] || null);
 
-const argumentsJson = computed(() => {
+const metadataJson = computed(() => {
   if (!current.value) return "";
+  const meta = current.value.metadata;
+  if (!meta || !Object.keys(meta).length) return "";
   try {
-    return JSON.stringify(current.value.arguments, null, 2);
+    return JSON.stringify(meta, null, 2);
   } catch {
-    return String(current.value.arguments);
+    return String(meta);
   }
 });
 
-function respondCurrent(response) {
+function respondCurrent(reply) {
   if (!current.value) return;
-  respond(current.value.id, response);
+  respond(current.value.id, reply);
 }
 </script>
 
@@ -36,9 +38,12 @@ function respondCurrent(response) {
       <p v-if="current.error" class="connect-error">{{ current.error }}</p>
 
       <div class="connect-hint">
-        Tool <strong>{{ current.tool }}</strong> wants to run:
+        Action: <strong>{{ current.action }}</strong>
       </div>
-      <pre class="permission-arguments">{{ argumentsJson }}</pre>
+      <ul v-if="current.resources.length" class="permission-resources">
+        <li v-for="r in current.resources" :key="r">{{ r }}</li>
+      </ul>
+      <pre v-if="metadataJson" class="permission-metadata">{{ metadataJson }}</pre>
 
       <div class="connect-actions">
         <button type="button" @click="respondCurrent('once')">Allow once</button>
@@ -50,8 +55,26 @@ function respondCurrent(response) {
 </template>
 
 <style scoped>
-.permission-arguments {
-  max-height: 240px;
+.permission-resources {
+  margin: 6px 0 8px;
+  padding: 6px 10px;
+  list-style: none;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.permission-resources li {
+  padding: 1px 0;
+  word-break: break-all;
+}
+
+.permission-metadata {
+  max-height: 200px;
   overflow: auto;
   background: var(--bg-raised);
   border: 1px solid var(--border);

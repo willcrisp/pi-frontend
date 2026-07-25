@@ -4,7 +4,7 @@
 import { reactive } from "vue";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { apiBase, authHeaders } from "./ssh.js";
-import { enqueue as enqueuePermission } from "./permission.js";
+import { handlePermissionEvent } from "./permission.js";
 
 export const opencodeStore = reactive({
   connected: false,
@@ -259,10 +259,10 @@ function handleServerEvent(event) {
     return;
   }
 
-  // Permission requests use a `permission.*` type family (not a single fixed
-  // type), so they're handled ahead of the switch rather than as a case.
-  if (type.startsWith("permission.")) {
-    enqueuePermission(event);
+  // permission.v2.asked / .replied — routed to the permission store's own
+  // handler so it can enqueue asks and clear replies with the right shape.
+  if (type === "permission.v2.asked" || type === "permission.v2.replied") {
+    handlePermissionEvent(event);
     return;
   }
 
