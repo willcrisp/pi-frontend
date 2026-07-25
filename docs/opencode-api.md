@@ -121,23 +121,82 @@ against `/doc` before changing any of it:
 | POST | `/api/session/{sessionID}/command` | `opencode.js#runCommand` — `{ command, arguments }`; on non-2xx falls back to sending the raw `/name args` as a plain prompt (**UNVERIFIED** — check route + body against `/doc`) |
 | GET | `/api/event` (SSE) | `opencode.js#setupEventStream` |
 | GET | `/health` | `opencode.js#initOpenCode` |
+| POST | `/api/session/{sessionID}/permission/{permissionID}` | `permission.js#respond` — `{ response: "once"\|"always"\|"reject" }` (**UNVERIFIED**) |
+| GET | `/api/vcs/branches?directory=` | `git.js#fetchBranchesViaRoute` — expects `{ current, branches }`; falls back to the PTY `git branch -a` implementation on 404/shape mismatch (**UNVERIFIED**) |
+| POST | `/api/vcs/checkout` | `git.js#checkoutBranchViaRoute` — `{ directory, branch }`; falls back to PTY `git checkout` (**UNVERIFIED**) |
+| GET | `/api/filesystem/list?directory=&recursive=1` | `filesearch.js#listFilesViaRoute` — expects `{ data: string[] }`; falls back to the PTY `fd`/`git ls-files` chain (**UNVERIFIED**) |
+| GET | `/api/project` | `projects.js#fetchProjects` — expects `{ data: [{ id, name, path|directory }] }`; failure silently leaves the directory->name map empty (**UNVERIFIED**) |
+| GET | `/api/provider` | `providers.js#loadProviders` (**UNVERIFIED**) |
+| GET | `/api/credential` | `providers.js#loadCredentials` (**UNVERIFIED**) |
+| POST | `/api/credential` | `providers.js#addCredential` — `{ providerID, apiKey }` (**UNVERIFIED**) |
+| DELETE | `/api/credential/{id}` | `providers.js#removeCredential` (**UNVERIFIED**) |
+| POST | `/api/session/{sessionID}/fork` | `opencode.js#forkSession` — `{ messageID }`; expects `{ data: { id } }` (**UNVERIFIED**) |
+| POST | `/api/session/{sessionID}/share` | `opencode.js#shareSession` — expects `{ data: { url } }` (**UNVERIFIED**) |
+| POST | `/api/session/{sessionID}/summarize` | `opencode.js#compactSession` (**UNVERIFIED**) |
 
-For anything not in this table (session fork/revert/compact/share, provider
-listing/auth, PTY, permissions, `fs/*`, project listing, etc.) — check the
-target server's own `/doc` for whether it exists and what it's shaped like,
-rather than assuming from this list.
+For anything not in this table — check the target server's own `/doc` for
+whether it exists and what it's shaped like, rather than assuming from this
+list.
 
-## Project grouping: no separate project-list fetch (yet)
+## Project grouping: server project list used as a label override
 
-A `GET /project`-style listing (if the target server exposes one) may return
-richer project metadata (a user-set `name`, icon, etc.) than sessions carry.
-This frontend doesn't call it — `Sidebar.vue`/
-`projects.js#groupSessionsByDirectory` derives the group label from the
-directory's basename instead. If nicer names are wanted later, check `/doc`
-for the real shape of that endpoint on your target server, fetch it once,
-and use it as a `directory -> name` lookup keyed off the same directory
-string sessions already carry.
+`projects.js#fetchProjects` (called from `initProjects`, in parallel with
+`fetchSessions`) fetches `GET /api/project` and, on success, builds a
+`directory -> name` map (`projectsStore.projectsByDirectory`). `Sidebar.vue`/
+`projects.js#groupSessionsByDirectory` checks that map first for a group's
+label and falls back to the directory's basename (`directoryLabel()`) when
+the route is missing or a session's directory has no matching entry — see
+the checklist below for confirming the response shape.
 
+## Verification checklist
+
+Every endpoint below is marked **UNVERIFIED** somewhere in this codebase —
+the field names/shapes come from the hosted docs, a prior HAR capture, or
+plain guesswork, not a confirmed live `/doc`. Run these against your target
+server (adjust the port) before trusting the corresponding code path; each
+one dumps the relevant schema or path list from the OpenAPI spec.
+
+```sh
+# session create body — projects.js#startNewChat (docs/opencode-api.md:110)
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/session".post.requestBody'
+
+# session command body — opencode.js#runCommand (docs/opencode-api.md:121)
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/command".post.requestBody'
+
+# Model.Info variant field + Model.Ref variant field (docs/opencode-api.md:92)
+curl -s http://127.0.0.1:4096/doc | jq '.components.schemas["Model.Info"], .components.schemas["Model.Ref"]'
+
+# permission respond route + body — permission.js#respond (task 2)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("permission")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/permission/{permissionID}"'
+
+# vcs branches/checkout routes — git.js (task 5)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("vcs")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/vcs/branches", .paths."/vcs/checkout"'
+
+# filesystem list route — filesearch.js#listFilesViaRoute (task 5)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("filesystem")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/filesystem/list"'
+
+# project list route — projects.js#fetchProjects (task 6)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("project")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/project".get.responses'
+
+# provider list + credential CRUD routes — providers.js (task 7)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("provider|credential")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/provider", .paths."/credential", .paths."/credential/{id}"'
+
+# session fork/share/summarize routes — opencode.js (task 8)
+curl -s http://127.0.0.1:4096/doc | jq '.paths | keys | map(select(test("fork|share|summarize")))'
+curl -s http://127.0.0.1:4096/doc | jq '.paths."/session/{id}/fork", .paths."/session/{id}/share", .paths."/session/{id}/summarize"'
+```
+
+If a `keys | map(select(test(...)))` lookup comes back empty, the route
+doesn't exist on that server build — the calling code already treats a
+non-2xx/404 as "route missing" and falls back or leaves the UI in a good
+state (see the UNVERIFIED comment next to each call site), so nothing
+breaks, but the feature silently won't do anything until the real path is
+found and the code updated to match.
 
 ---
 seo:
