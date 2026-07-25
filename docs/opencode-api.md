@@ -73,6 +73,11 @@ Two more, confirmed against a live server via HAR capture (2026-07-24):
   Envelope is `{ id, type, data, created?, durable?, location? }`.
   `opencode.js#handleServerEvent` must handle execution completion/failure
   or the UI spins on "thinking" forever with no error shown.
+- `handleServerEvent` now has explicit cases for `server.connected`,
+  `session.execution.started`, `session.model.selected`,
+  `session.input.admitted` (acknowledged, no state change), and
+  `pty.created`/`pty.exited`/`pty.deleted` (no state change — PTY runner
+  uses a one-shot lifecycle, see `pty.js`).
 
 ## What this frontend currently reads from each response
 

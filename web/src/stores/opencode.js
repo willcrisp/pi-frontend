@@ -287,6 +287,39 @@ function handleServerEvent(event) {
   }
 
   switch (type) {
+    case "server.connected": {
+      opencodeStore.connected = true;
+      break;
+    }
+
+    case "session.execution.started": {
+      if (!props.sessionID || props.sessionID === opencodeStore.activeSessionId) {
+        opencodeStore.isStreaming = true;
+      }
+      break;
+    }
+
+    case "session.model.selected": {
+      if (props.providerID && props.modelID) {
+        opencodeStore.selectedModel = { providerID: props.providerID, modelID: props.modelID };
+      }
+      if (props.variant) opencodeStore.thinkingLevel = props.variant;
+      break;
+    }
+
+    // Explicitly acknowledged so a maintainer scanning this switch sees it
+    // was considered, not missed — no state change today.
+    case "session.input.admitted": {
+      break;
+    }
+
+    // No state today — PTY runner uses one-shot lifecycle (see pty.js).
+    case "pty.created":
+    case "pty.exited":
+    case "pty.deleted": {
+      break;
+    }
+
     case "message.updated": {
       const info = props.info;
       if (!info) break;
