@@ -3,6 +3,7 @@
 // palette has results instantly; refresh runs in the background on demand.
 import { reactive } from "vue";
 import { runCommand } from "./pty.js";
+import { apiBase, authHeaders } from "./ssh.js";
 
 const CACHE_KEY = "opencode-web:files-cache"; // { [directory]: { files, fetchedAt } }
 const MAX_CACHED_FILES = 20000;
@@ -62,7 +63,28 @@ const LISTING_COMMANDS = [
   ["git", ["ls-files"]],
 ];
 
+// Try the dedicated filesystem listing route first; returns null (not an
+// error) on a 404 or unexpected shape so the caller falls back to PTY.
+// UNVERIFIED against /doc — see docs/opencode-api.md
+async function listFilesViaRoute(directory) {
+  try {
+    const res = await fetch(
+      `${apiBase()}/filesystem/list?directory=${encodeURIComponent(directory)}&recursive=1`,
+      { headers: authHeaders() }
+    );
+    if (!res.ok) return null;
+    const body = await res.json();
+    if (!body || !Array.isArray(body.data)) return null;
+    return body.data.slice(0, MAX_CACHED_FILES);
+  } catch {
+    return null;
+  }
+}
+
 async function listFiles(directory) {
+  const viaRoute = await listFilesViaRoute(directory);
+  if (viaRoute && viaRoute.length) return viaRoute;
+
   let lastErr = null;
   for (const [cmd, args] of LISTING_COMMANDS) {
     try {
