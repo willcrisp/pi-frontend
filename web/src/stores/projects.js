@@ -24,36 +24,12 @@ function loadArchived() {
 }
 
 export const projectsStore = reactive({
-  projects: [], // [{ id, name, path }]
-  currentProjectId: null,
   sessions: [], // [{ id, title, updatedAt, directory }]
   loadingSessions: false,
   // Client-only project archiving (by root directory) — the server has no
   // project entity to archive, so this just hides groups in the sidebar.
   archivedDirectories: loadArchived(),
-  // directory -> server-provided project name, for nicer sidebar group labels.
-  projectsByDirectory: {},
 });
-
-// Fetch server-side project metadata (a user-set name, etc.) to use as the
-// sidebar group label instead of the directory basename, where available.
-// UNVERIFIED against /doc — see docs/opencode-api.md
-export async function fetchProjects() {
-  try {
-    const res = await fetch(`${apiBase()}/project`, { headers: authHeaders() });
-    if (!res.ok) return;
-    const list = unwrap(await res.json());
-    const byDirectory = {};
-    for (const p of list) {
-      const dir = p && (p.directory || p.path);
-      if (dir && p.name) byDirectory[dir] = p.name;
-    }
-    projectsStore.projectsByDirectory = byDirectory;
-  } catch (err) {
-    // Silently leave the map empty — group labels fall back to directoryLabel().
-    console.warn("Could not load OpenCode projects:", err);
-  }
-}
 
 export function isArchived(directory) {
   return projectsStore.archivedDirectories.includes(directory);
@@ -112,8 +88,7 @@ export function groupSessionsByDirectory(sessions) {
   for (const s of sessions) {
     let group = byDirectory.get(s.directory);
     if (!group) {
-      const label = projectsStore.projectsByDirectory[s.directory] || directoryLabel(s.directory);
-      group = { directory: s.directory, label, sessions: [] };
+      group = { directory: s.directory, label: directoryLabel(s.directory), sessions: [] };
       byDirectory.set(s.directory, group);
       groups.push(group);
     }
@@ -122,33 +97,22 @@ export function groupSessionsByDirectory(sessions) {
   return groups;
 }
 
-// Create a session, optionally rooted at `directory` (a new "project" — sessions
-// are grouped by their root directory). Sessions read the root back as
-// `location.directory` (see docs/opencode-api.md), so try `{ directory }` first
-// and fall back to `{ location: { directory } }` if the server rejects it —
-// re-verify the create-body shape against the live server's /doc.
+// Create a session, optionally rooted at `directory`. Body shape is
+// `{ agent?, model?, location?: Location.Ref }` where Location.Ref is
+// `{ directory, workspaceID? }` — verified against /openapi.json.
 export async function startNewChat(directory) {
   try {
-    // opencode2 create body takes no title (rename endpoint sets it); seed with current selection.
     const body = {};
     if (opencodeStore.selectedAgent) body.agent = opencodeStore.selectedAgent;
     const modelRef = selectedModelRef();
     if (modelRef) body.model = modelRef;
+    if (directory) body.location = { directory };
 
-    const post = (b) =>
-      fetch(`${apiBase()}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(b),
-      });
-
-    let res;
-    if (directory) {
-      res = await post({ ...body, directory });
-      if (!res.ok) res = await post({ ...body, location: { directory } });
-    } else {
-      res = await post(body);
-    }
+    const res = await fetch(`${apiBase()}/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
 
     if (!res.ok) {
       throw new Error(`session create failed (${res.status})`);
@@ -195,7 +159,7 @@ export function activeSessionDirectory() {
 }
 
 export async function initProjects() {
-  await Promise.all([fetchSessions(), fetchProjects()]);
+  await fetchSessions();
 
   const lastId = localStorage.getItem(LAST_SESSION_KEY);
   const found = projectsStore.sessions.find((s) => s.id === lastId);

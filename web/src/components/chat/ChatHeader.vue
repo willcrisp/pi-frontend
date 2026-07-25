@@ -4,8 +4,8 @@
 -->
 <script setup>
 import { computed, ref } from "vue";
-import { opencodeStore as store, shareSession, compactSession, forkSession } from "../../stores/opencode.js";
-import { projectsStore, activeSessionDirectory } from "../../stores/projects.js";
+import { opencodeStore as store, compactSession } from "../../stores/opencode.js";
+import { activeSessionDirectory } from "../../stores/projects.js";
 import { gitStore, fetchBranches, checkoutBranch } from "../../stores/git.js";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
@@ -34,46 +34,14 @@ async function pickBranch(branch) {
   }
 }
 
-// Session menu: share (returns a URL to copy), compact context, fork from
-// the latest user message. Fork is per-message in principle, but there's no
-// per-message action row in MessageView yet — "fork from latest user
-// message" is the simpler path for now (see docs/opencode-api.md).
+// Session menu: currently just "compact context". The V2 HttpApi in this
+// build has no session share or fork endpoints, so those menu items are
+// removed until the routes land.
 const menuOpen = ref(false);
-const sharing = ref(false);
 const compacting = ref(false);
-const shareUrl = ref("");
-const shareError = ref("");
-const copied = ref(false);
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
-  if (!menuOpen.value) {
-    shareUrl.value = "";
-    shareError.value = "";
-  }
-}
-
-async function onShare() {
-  sharing.value = true;
-  shareUrl.value = "";
-  shareError.value = "";
-  try {
-    const url = await shareSession();
-    if (url) shareUrl.value = url;
-    else shareError.value = "Failed to share session";
-  } finally {
-    sharing.value = false;
-  }
-}
-
-async function copyShareUrl() {
-  try {
-    await navigator.clipboard.writeText(shareUrl.value);
-    copied.value = true;
-    setTimeout(() => (copied.value = false), 1500);
-  } catch {
-    // clipboard permission denied — the URL is still visible to copy by hand
-  }
 }
 
 async function onCompact() {
@@ -84,17 +52,6 @@ async function onCompact() {
     compacting.value = false;
     menuOpen.value = false;
   }
-}
-
-const latestUserMessageId = computed(() => {
-  const users = store.messages.filter((m) => m.role === "user");
-  return users.length ? users[users.length - 1].id : null;
-});
-
-function onForkFromHere() {
-  if (!latestUserMessageId.value) return;
-  forkSession(latestUserMessageId.value);
-  menuOpen.value = false;
 }
 </script>
 
@@ -144,25 +101,9 @@ function onForkFromHere() {
       <span class="session-menu">
         <button class="icon-btn" title="Session actions" @click="toggleMenu">⋯</button>
         <div v-if="menuOpen" class="session-menu-panel">
-          <button class="session-menu-item" :disabled="sharing" @click="onShare">
-            {{ sharing ? "Sharing…" : "Share…" }}
-          </button>
           <button class="session-menu-item" :disabled="compacting" @click="onCompact">
             {{ compacting ? "Compacting…" : "Compact context" }}
           </button>
-          <button
-            class="session-menu-item"
-            :disabled="!latestUserMessageId"
-            title="Fork from the latest user message"
-            @click="onForkFromHere"
-          >
-            Fork from here
-          </button>
-          <div v-if="shareError" class="session-menu-error">{{ shareError }}</div>
-          <div v-if="shareUrl" class="session-menu-share">
-            <input type="text" readonly :value="shareUrl" @click="$event.target.select()" />
-            <button type="button" @click="copyShareUrl">{{ copied ? "copied" : "copy" }}</button>
-          </div>
         </div>
       </span>
       <UsagePopover class="header-usage" />
@@ -215,34 +156,5 @@ function onForkFromHere() {
 .session-menu-item:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.session-menu-error {
-  padding: 4px 8px;
-  color: var(--danger, #e57373);
-  font-size: 11.5px;
-}
-
-.session-menu-share {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-}
-
-.session-menu-share input {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-family: var(--mono);
-  padding: 3px 6px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--fg);
-}
-
-.session-menu-share button {
-  padding: 3px 8px;
-  font-size: 11px;
 }
 </style>
