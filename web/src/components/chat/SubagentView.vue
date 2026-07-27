@@ -1,31 +1,67 @@
 <!--
-  Rich inline view for a `subagent` tool call (single/parallel/chain
-  dispatch), replacing the generic <details class="tool"> rendering in
-  MessageView.vue. `details` on the tool result is a whole-state snapshot
-  (see pi.js's tool_execution_update handling) so this component just
-  re-renders from store.toolResults[toolCallId] reactively — no local
-  accumulation needed. Per-agent cards show task/activity log/final output;
-  before the first snapshot arrives, placeholderCards derive minimal cards
-  straight from the tool call's own arguments.
+  Rich inline view for a `subagent` tool call, replacing the generic
+  <details class="tool"> rendering in MessageView.vue.
+
+  A dispatch spawns a CHILD SESSION whose turn streams over the same
+  /api/event connection under its own sessionID; opencode.js routes those
+  events into a child record and exposes it by callID. So this component is
+  a pure render of childForCall(callID) — no local accumulation. Before the
+  first linkage event arrives there is no child yet, and the card falls back
+  to a placeholder derived from the dispatch arguments.
+
+  One card per call: V2 has no chain/parallel dispatch primitive, so
+  parallelism is just several concurrent calls, one card each.
+
+  Cost is always 0 on this server (see docs/subagents-alfuat.md) — show
+  tokens, never dollars.
 -->
 <script setup>
 import { computed, onUnmounted, ref, watch } from "vue";
-import { opencodeStore as store, subagentDetails } from "../../stores/opencode.js";
+import { childForCall } from "../../stores/opencode.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 
 const props = defineProps({
-  toolCallId: { type: String, required: true },
+  callID: { type: String, required: true },
   args: { type: [Object, String], default: null },
 });
 
-const r = computed(() => store.toolResults[props.toolCallId]);
-const details = computed(() => subagentDetails(r.value));
-const results = computed(() => details.value?.results || null);
+const child = computed(() => childForCall(props.callID));
 
-// Live-ticking clock for the overall duration while the tool call is still
-// running; started/stopped by the watcher below and cleared on unmount.
+const parsedArgs = computed(() => parseArgs(props.args));
+
+// The dispatch input is the earliest (and most complete) source for these —
+// the child session record only learns them once it reports in.
+const agentName = computed(() => child.value?.agent || parsedArgs.value?.agent || null);
+const taskText = computed(() => parsedArgs.value?.prompt || child.value?.task || null);
+const label = computed(() => parsedArgs.value?.description || child.value?.title || null);
+
+// Model arrives as a Model.Ref-ish object ({id, providerID, variant}) from
+// both the session record and the child's first step.
+const modelLabel = computed(() => {
+  const m = child.value?.model;
+  if (!m) return "";
+  if (typeof m === "string") return m;
+  return m.variant && m.variant !== "default" ? `${m.id} (${m.variant})` : m.id || "";
+});
+
+const status = computed(() => child.value?.status || "starting");
+
+// The pre-existing `.subagent-dot` / `.subagent-status` CSS is keyed on
+// running/done/error, so map the child's status vocabulary onto it.
+const statusClass = computed(() =>
+  ({ completed: "done", starting: "running" })[status.value] || status.value
+);
+
+const totalTokens = computed(() => {
+  const t = child.value?.tokens;
+  if (!t) return null;
+  return (t.input || 0) + (t.output || 0);
+});
+
+// Live-ticking clock for the card duration while the sub-agent is running;
+// started/stopped by the watcher below and cleared on unmount.
 const now = ref(Date.now());
-const isRunning = computed(() => !!r.value?.running);
+const isRunning = computed(() => status.value === "running" || status.value === "starting");
 let timer = null;
 watch(
   isRunning,
@@ -45,74 +81,63 @@ onUnmounted(() => {
   if (timer) clearInterval(timer);
 });
 
-const overallDurationMs = computed(() => {
-  const started = r.value?.startedAt;
-  if (!started) return null; // history backfill has no startedAt — show nothing
-  const end = r.value.endedAt || now.value;
-  return end - started;
+const durationMs = computed(() => {
+  const started = child.value?.startedAt;
+  if (!started) return null; // history backfill without a timestamp — show nothing
+  return (child.value.endedAt || now.value) - started;
 });
-
-function resultStatus(res) {
-  if (res.exitCode === -1) return "running";
-  if (res.errorMessage || res.exitCode > 0) return "error";
-  return "done";
-}
-
-const overallStatus = computed(() => {
-  if (!results.value) return "starting";
-  if (results.value.some((res) => resultStatus(res) === "running")) return "running";
-  if (results.value.some((res) => resultStatus(res) === "error")) return "error";
-  return "done";
-});
-
-function messageText(m) {
-  if (typeof m.content === "string") return m.content;
-  if (!Array.isArray(m.content)) return "";
-  return m.content
-    .filter((c) => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-}
 
 // Index of the message the final answer comes from, so the activity log can
 // skip it — otherwise the agent's conclusion shows up twice (once mid-log,
-// once in the result block below it).
-function finalMessageIndex(res) {
-  const messages = res.messages || [];
+// once in the Result block below it).
+function finalMessageIndex(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant" && messageText(messages[i]).trim()) return i;
+    const m = messages[i];
+    if (m.role === "assistant" && partsText(m).trim()) return i;
   }
   return -1;
 }
 
-function finalOutputText(res) {
-  const i = finalMessageIndex(res);
-  return i === -1 ? "" : messageText(res.messages[i]);
+function partsText(m) {
+  if (typeof m.text === "string" && m.text) return m.text;
+  return (m.parts || [])
+    .filter((p) => p.type === "text")
+    .map((p) => p.text || "")
+    .join("");
 }
 
-// Flatten the agent's transcript into a display list: its narration (as
-// markdown), the tools it called, and their (clamped) results.
-function activityItems(res) {
-  const messages = res.messages || [];
-  const final = finalMessageIndex(res);
+const finalOutputText = computed(() => {
+  const messages = child.value?.messages || [];
+  const i = finalMessageIndex(messages);
+  return i === -1 ? "" : partsText(messages[i]);
+});
+
+// Flatten the child's transcript into a display list: its narration (as
+// markdown), the tools it called, and their (clamped) outputs. The child
+// speaks the same normalized message shape as the main transcript, so this
+// walks `parts` exactly as MessageView does.
+const activityItems = computed(() => {
+  const messages = child.value?.messages || [];
+  const final = finalMessageIndex(messages);
   const items = [];
   messages.forEach((m, mi) => {
-    if (m.role === "assistant") {
-      const blocks = Array.isArray(m.content) ? m.content : [];
-      for (const block of blocks) {
-        if (block.type === "text" && block.text.trim()) {
-          if (mi !== final) items.push({ kind: "text", text: block.text });
-        } else if (block.type === "toolCall") {
-          items.push({ kind: "tool", name: block.name, args: argsSummary(block.arguments) });
-        }
+    if (m.role !== "assistant") return;
+    for (const part of m.parts || []) {
+      if (part.type === "text") {
+        if (mi !== final && (part.text || "").trim()) items.push({ kind: "text", text: part.text });
+      } else if (part.type === "tool") {
+        items.push({
+          kind: "tool",
+          name: part.tool || "tool",
+          args: argsSummary(part.input),
+        });
+        const out = part.state && (part.state.output || part.state.error);
+        if (out && String(out).trim()) items.push({ kind: "result", text: truncate(out, 400) });
       }
-    } else if (m.role === "toolResult") {
-      const text = messageText(m).trim();
-      if (text) items.push({ kind: "result", text });
     }
   });
   return items;
-}
+});
 
 // Tool arguments are shown as a one-line hint next to the tool name, so
 // prefer the few fields that actually identify the call over raw JSON.
@@ -142,11 +167,6 @@ function formatTokens(n) {
   return String(n);
 }
 
-function formatCost(n) {
-  if (n == null) return "—";
-  return `$${n.toFixed(n < 1 ? 4 : 2)}`;
-}
-
 function formatDuration(ms) {
   if (ms == null) return "";
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
@@ -156,9 +176,6 @@ function formatDuration(ms) {
   return `${m}m ${Math.round(s - m * 60)}s`;
 }
 
-// Before any details snapshot has arrived (dispatch just started), derive
-// placeholder cards straight from the tool call's arguments so the UI isn't
-// empty during that first round-trip.
 function parseArgs(args) {
   if (!args) return null;
   if (typeof args === "object") return args;
@@ -168,87 +185,65 @@ function parseArgs(args) {
     return null;
   }
 }
-
-const placeholderCards = computed(() => {
-  if (details.value) return null;
-  const parsed = parseArgs(props.args);
-  if (!parsed) return [{ agent: null, task: null }];
-  if (Array.isArray(parsed.tasks)) return parsed.tasks.map((t) => ({ agent: t?.agent, task: t?.task }));
-  if (Array.isArray(parsed.chain)) return parsed.chain.map((t) => ({ agent: t?.agent, task: t?.task }));
-  if (parsed.agent || parsed.task) return [{ agent: parsed.agent, task: parsed.task }];
-  return [{ agent: null, task: null }];
-});
 </script>
 
 <template>
-  <div :id="'tc-' + toolCallId" class="subagent">
+  <div :id="'tc-' + callID" class="subagent">
     <div class="subagent-header">
-      <span class="subagent-label">sub-agents</span>
-      <span v-if="details" class="subagent-mode">{{ details.mode }}</span>
-      <span class="subagent-status" :class="overallStatus">
-        <span class="subagent-dot" :class="overallStatus"></span>
-        {{ overallStatus }}
+      <span class="subagent-label">sub-agent</span>
+      <span v-if="label" class="subagent-mode">{{ label }}</span>
+      <span class="subagent-status" :class="statusClass">
+        <span class="subagent-dot" :class="statusClass"></span>
+        {{ status }}
       </span>
-      <span v-if="overallDurationMs != null" class="subagent-duration">{{ formatDuration(overallDurationMs) }}</span>
+      <span v-if="durationMs != null" class="subagent-duration">{{ formatDuration(durationMs) }}</span>
     </div>
 
-    <template v-if="results">
-      <details
-        v-for="(res, i) in results"
-        :key="i"
-        class="subagent-card"
-        :open="resultStatus(res) === 'running'"
-      >
-        <summary title="Click to expand/collapse">
-          <span class="subagent-dot" :class="resultStatus(res)"></span>
-          <span v-if="details.mode === 'chain'" class="subagent-step">step {{ res.step }}</span>
-          <span class="subagent-agent">{{ res.agent }}</span>
-          <span class="subagent-model">{{ res.model || "" }}</span>
-          <span class="subagent-usage">
-            {{ formatTokens((res.usage?.input || 0) + (res.usage?.output || 0)) }} tokens ·
-            {{ formatCost(res.usage?.cost) }} · {{ res.usage?.turns ?? 0 }} turns
-          </span>
-        </summary>
-        <div class="subagent-body">
-          <section v-if="res.task" class="subagent-section">
-            <h4 class="subagent-section-title">Task</h4>
-            <div class="subagent-task markdown" v-html="renderMarkdown(res.task)"></div>
-          </section>
+    <details v-if="child" class="subagent-card" :open="status === 'running'">
+      <summary title="Click to expand/collapse">
+        <span class="subagent-dot" :class="statusClass"></span>
+        <span class="subagent-agent">{{ agentName || "agent" }}</span>
+        <span class="subagent-model">{{ modelLabel }}</span>
+        <span class="subagent-usage">{{ formatTokens(totalTokens) }} tokens</span>
+      </summary>
+      <div class="subagent-body">
+        <section v-if="taskText" class="subagent-section">
+          <h4 class="subagent-section-title">Task</h4>
+          <div class="subagent-task markdown" v-html="renderMarkdown(taskText)"></div>
+        </section>
 
-          <section v-if="activityItems(res).length" class="subagent-section">
-            <h4 class="subagent-section-title">Activity</h4>
-            <div class="subagent-activity">
-              <template v-for="(item, ii) in activityItems(res)" :key="ii">
-                <div v-if="item.kind === 'text'" class="subagent-line markdown" v-html="renderMarkdown(item.text)"></div>
-                <p v-else-if="item.kind === 'tool'" class="subagent-line subagent-toolcall">
-                  <span class="subagent-toolcall-name">{{ item.name }}</span>
-                  <span v-if="item.args" class="subagent-toolcall-args">{{ item.args }}</span>
-                </p>
-                <p v-else class="subagent-line subagent-toolresult">{{ item.text }}</p>
-              </template>
-            </div>
-          </section>
+        <section v-if="activityItems.length" class="subagent-section">
+          <h4 class="subagent-section-title">Activity</h4>
+          <div class="subagent-activity">
+            <template v-for="(item, ii) in activityItems" :key="ii">
+              <div v-if="item.kind === 'text'" class="subagent-line markdown" v-html="renderMarkdown(item.text)"></div>
+              <p v-else-if="item.kind === 'tool'" class="subagent-line subagent-toolcall">
+                <span class="subagent-toolcall-name">{{ item.name }}</span>
+                <span v-if="item.args" class="subagent-toolcall-args">{{ item.args }}</span>
+              </p>
+              <p v-else class="subagent-line subagent-toolresult">{{ item.text }}</p>
+            </template>
+          </div>
+        </section>
 
-          <section v-if="finalOutputText(res)" class="subagent-section">
-            <h4 class="subagent-section-title">Result</h4>
-            <div class="subagent-output markdown" v-html="renderMarkdown(finalOutputText(res))"></div>
-          </section>
+        <section v-if="finalOutputText" class="subagent-section">
+          <h4 class="subagent-section-title">Result</h4>
+          <div class="subagent-output markdown" v-html="renderMarkdown(finalOutputText)"></div>
+        </section>
 
-          <div v-if="res.errorMessage" class="subagent-error-msg">{{ res.errorMessage }}</div>
-          <pre v-if="res.stderr && (res.errorMessage || res.exitCode > 0)" class="subagent-stderr">{{ res.stderr }}</pre>
-        </div>
-      </details>
-    </template>
-
-    <template v-else>
-      <div v-for="(card, i) in placeholderCards" :key="i" class="subagent-card subagent-placeholder">
-        <div class="subagent-placeholder-row">
-          <span class="subagent-dot running"></span>
-          <span v-if="card.agent" class="subagent-agent">{{ card.agent }}</span>
-          <span class="subagent-starting">starting…</span>
-        </div>
-        <div v-if="card.task" class="subagent-task markdown" v-html="renderMarkdown(card.task)"></div>
+        <div v-if="child.error" class="subagent-error-msg">{{ child.error }}</div>
       </div>
-    </template>
+    </details>
+
+    <!-- No child record yet: the window between the tool call appearing and
+         the first session.tool.progress that links it to its child session. -->
+    <div v-else class="subagent-card subagent-placeholder">
+      <div class="subagent-placeholder-row">
+        <span class="subagent-dot running"></span>
+        <span v-if="agentName" class="subagent-agent">{{ agentName }}</span>
+        <span class="subagent-starting">starting…</span>
+      </div>
+      <div v-if="taskText" class="subagent-task markdown" v-html="renderMarkdown(taskText)"></div>
+    </div>
   </div>
 </template>

@@ -1,6 +1,6 @@
-// Tiny reactive store for a custom confirm()/alert() replacement, same spirit
-// as renameDialog.js (pure UI state, deliberately not part of pi.js's
-// per-chat state). Two entry points:
+// Tiny reactive store for a custom confirm()/alert() replacement. Pure UI
+// state, deliberately not part of opencode.js's per-session state. Two entry
+// points:
 //   - confirmDialog({ title, message, confirmLabel, cancelLabel, danger })
 //     -> Promise<boolean>, resolves true on confirm, false on cancel/dismiss.
 //   - alertDialog({ title, message }) -> Promise<void>, a single-button

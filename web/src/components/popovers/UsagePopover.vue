@@ -4,49 +4,31 @@
 -->
 <script setup>
 import { computed } from "vue";
-import { opencodeStore as store, subagentDetails } from "../../stores/opencode.js";
+import { opencodeStore as store } from "../../stores/opencode.js";
 
-const subagentRuns = computed(() => {
-  const runs = [];
-  if (!store.toolResults) return runs;
-  for (const [toolCallId, r] of Object.entries(store.toolResults)) {
-    const details = subagentDetails(r);
-    if (!details || !Array.isArray(details.results)) continue;
-    const durationMs = r.startedAt && r.endedAt ? r.endedAt - r.startedAt : null;
-    details.results.forEach((sub, i) => {
-      if (!sub || typeof sub !== "object") return;
-      runs.push({
-        id: `${toolCallId}:${i}`,
-        agent: sub.agent || sub.name || "agent",
-        model: sub.model || null,
-        usage: sub.usage || null,
-        stopReason: sub.stopReason || null,
-        errorMessage: sub.errorMessage || null,
-        running: sub.exitCode === -1,
-        durationMs,
-      });
-    });
-  }
-  return runs;
-});
+// Each sub-agent dispatch is a child session, metered separately from the
+// parent — its tokens are additive with the session totals above, never a
+// double-count of them (docs/subagents-alfuat.md).
+const subagentRuns = computed(() =>
+  Object.values(store.childSessions || {}).map((child) => ({
+    id: child.sessionID,
+    agent: child.agent || "agent",
+    model: modelLabel(child.model),
+    tokens: (child.tokens?.input || 0) + (child.tokens?.output || 0),
+    error: child.error || null,
+    running: child.status === "running",
+    durationMs: child.startedAt && child.endedAt ? child.endedAt - child.startedAt : null,
+  }))
+);
 
-const subagentTotals = computed(() => {
-  return subagentRuns.value.reduce(
-    (acc, r) => {
-      const u = r.usage;
-      if (!u) return acc;
-      acc.input += u.input || 0;
-      acc.output += u.output || 0;
-      acc.cost += u.cost || 0;
-      return acc;
-    },
-    { input: 0, output: 0, cost: 0 }
-  );
-});
+const subagentTotalTokens = computed(() =>
+  subagentRuns.value.reduce((sum, r) => sum + r.tokens, 0)
+);
 
-const subagentTotalTokens = computed(() => {
-  return subagentTotals.value.input + subagentTotals.value.output;
-});
+function modelLabel(m) {
+  if (!m) return "";
+  return typeof m === "string" ? m : m.id || "";
+}
 
 function formatTokens(n) {
   if (n == null) return "—";
@@ -115,8 +97,16 @@ function formatDuration(ms) {
           <span>{{ formatCost(store.sessionStats.cost) }}</span>
         </div>
         <div class="usage-row usage-dim" v-if="store.sessionStats.contextUsage?.percent != null">
-          <span>context used</span>
-          <span>{{ Math.round(store.sessionStats.contextUsage.percent) }}%</span>
+          <!-- Flagged when it's the server's own accounting rather than our
+               estimate against the model catalog's context limit. -->
+          <span>context used{{ store.sessionStats.contextUsage.fromServer ? "" : " (est.)" }}</span>
+          <span>
+            {{ Math.round(store.sessionStats.contextUsage.percent) }}%
+            <template v-if="store.sessionStats.contextUsage.limit">
+              · {{ formatTokens(store.sessionStats.contextUsage.used) }} /
+              {{ formatTokens(store.sessionStats.contextUsage.limit) }}
+            </template>
+          </span>
         </div>
       </template>
       <div v-else class="usage-row usage-dim">no session stats yet</div>
@@ -130,14 +120,14 @@ function formatDuration(ms) {
         </div>
         <div v-for="run in subagentRuns" :key="run.id" class="usage-agent">
           <div class="usage-row">
-            <span class="usage-agent-name" :class="{ error: run.errorMessage }">
+            <span class="usage-agent-name" :class="{ error: run.error }">
               <span v-if="run.running" class="subagent-dot running"></span>
               {{ run.agent }}
             </span>
-            <span class="usage-dim">{{ run.model || "" }}</span>
+            <span class="usage-dim">{{ run.model }}</span>
           </div>
           <div class="usage-row usage-dim">
-            <span>{{ formatTokens((run.usage?.input || 0) + (run.usage?.output || 0)) }} tok · {{ formatCost(run.usage?.cost) }}</span>
+            <span>{{ formatTokens(run.tokens) }} tok</span>
             <span>{{ run.running ? "running…" : formatDuration(run.durationMs) }}</span>
           </div>
         </div>

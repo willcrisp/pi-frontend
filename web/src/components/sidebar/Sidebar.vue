@@ -22,12 +22,17 @@ import {
   setProjectArchived,
 } from "../../stores/projects.js";
 import { listDirectories } from "../../stores/filesearch.js";
+import { confirmDialog } from "../../stores/confirm.js";
 import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
+import AgentsDialog from "../dialogs/AgentsDialog.vue";
+import SavedPermissionsDialog from "../dialogs/SavedPermissionsDialog.vue";
 
 const activeSessionId = computed(() => opencodeStore.activeSessionId);
 
 const showArchived = ref(false);
 const showProviders = ref(false);
+const showAgents = ref(false);
+const showSavedPermissions = ref(false);
 
 const groups = computed(() =>
   groupSessionsByDirectory(projectsStore.sessions).filter(
@@ -56,8 +61,18 @@ function visibleSessions(group) {
   return expanded.has(group.directory) ? group.sessions : group.sessions.slice(0, RECENT_LIMIT);
 }
 
-function onRemoveSession(id) {
-  removeSession(id);
+// The server exposes no DELETE for sessions, so this only hides the row
+// locally — it comes back on refresh. Say so rather than letting the × imply
+// a delete that never happened.
+async function onRemoveSession(id) {
+  const ok = await confirmDialog({
+    title: "Hide session",
+    message:
+      "This server has no delete-session route, so the session is only hidden here — it reappears after a refresh.",
+    confirmLabel: "Hide",
+    danger: true,
+  });
+  if (ok) removeSession(id);
 }
 
 // "New project" = a session rooted at a user-chosen directory; the group
@@ -195,12 +210,25 @@ async function newSessionIn(directory) {
           🗄
         </button>
         <button class="icon-btn" title="Refresh sessions" @click="fetchSessions">⟳</button>
+        <button class="icon-btn" title="Agents" @click="showAgents = true">🤖</button>
+        <button
+          class="icon-btn"
+          title="Saved permissions"
+          @click="showSavedPermissions = true"
+        >
+          🔒
+        </button>
         <button class="icon-btn" title="Providers" @click="showProviders = true">⚙</button>
         <button class="icon-btn" title="New project" @click="showAddForm = !showAddForm">+</button>
       </div>
     </div>
 
     <ProvidersDialog v-if="showProviders" @close="showProviders = false" />
+    <AgentsDialog v-if="showAgents" @close="showAgents = false" />
+    <SavedPermissionsDialog
+      v-if="showSavedPermissions"
+      @close="showSavedPermissions = false"
+    />
 
     <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
       <div class="path-input-wrap">

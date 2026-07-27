@@ -8,6 +8,9 @@
 <script setup>
 import { computed } from "vue";
 import { renderMarkdown } from "../../lib/markdown.js";
+import { isSubagentPart, stageRevert } from "../../stores/opencode.js";
+import { filePathFromToolInput, openPreview } from "../../stores/filepreview.js";
+import SubagentView from "./SubagentView.vue";
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -33,12 +36,31 @@ function truncate(text) {
   if (!text) return "";
   return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
 }
+
+// V2 has no fork endpoint; staging a revert to this message is the closest
+// thing to branching from it. Offered on user messages only — those are the
+// points a user actually thinks in terms of going back to. Staging is
+// reversible (clear discards it), so it needs no confirmation of its own.
+function revertToHere() {
+  if (props.message.id) stageRevert(props.message.id);
+}
 </script>
 
 <template>
   <div class="msg" :class="isUser ? 'msg-user' : 'msg-assistant'">
+    <button
+      v-if="isUser && message.id"
+      class="msg-revert"
+      type="button"
+      title="Stage a revert back to this message"
+      @click="revertToHere"
+    >
+      ↩ revert here
+    </button>
     <template v-if="hasParts">
-      <template v-for="part in message.parts" :key="part.id">
+      <!-- REST-normalized parts carry no `id` (only tool parts get a callID),
+           so fall back to the index to keep keys distinct. -->
+      <template v-for="(part, pi) in message.parts" :key="part.id || part.callID || pi">
         <!-- text -->
         <div v-if="part.type === 'text' && isUser" class="user-text">{{ part.text }}</div>
         <div
@@ -50,10 +72,30 @@ function truncate(text) {
         <!-- reasoning -->
         <div v-else-if="part.type === 'reasoning'" class="thinking markdown" v-html="renderPart(part.text)"></div>
 
+        <!-- subagent dispatch: rendered as a rich card driven by the child
+             session the call spawned, not as a generic tool row -->
+        <SubagentView
+          v-else-if="isSubagentPart(part)"
+          :call-id="part.callID"
+          :args="part.input"
+        />
+
         <!-- tool -->
         <details v-else-if="part.type === 'tool'" class="tool" :class="{ error: part.state?.status === 'error' }">
           <summary title="Click to expand/collapse">
             <span class="tool-name" :title="part.tool">{{ part.tool }}</span>
+            <!-- Tool calls that name a file get a shortcut into the preview
+                 pane, so following a reference doesn't mean leaving the app.
+                 .stop keeps the click from toggling the <details>. -->
+            <button
+              v-if="filePathFromToolInput(part.input)"
+              class="tool-file-link"
+              type="button"
+              :title="`Preview ${filePathFromToolInput(part.input)}`"
+              @click.stop.prevent="openPreview(filePathFromToolInput(part.input))"
+            >
+              {{ filePathFromToolInput(part.input) }}
+            </button>
             <span v-if="part.state?.status === 'running' || part.state?.status === 'pending'" class="running" title="Running">⋯</span>
           </summary>
           <pre v-if="part.state?.status === 'completed'">{{ truncate(part.state.output) }}</pre>
@@ -93,6 +135,53 @@ function truncate(text) {
 </template>
 
 <style scoped>
+/* Kept out of the way until the message is hovered — it's a destructive-ish
+   action sitting next to every user turn. */
+.msg-revert {
+  float: right;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.msg:hover .msg-revert {
+  opacity: 1;
+}
+
+.msg-revert:hover {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.tool-file-link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.tool-file-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .msg-file {
   display: inline-flex;
   align-items: center;

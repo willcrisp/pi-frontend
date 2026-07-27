@@ -3,6 +3,12 @@
 Status snapshot as of `main` at `3612a66`. What works today, what doesn't,
 and what to pick up next.
 
+> **In-flight work not covered here:** inline sub-agent rendering is
+> partly landed (store layer done, UI phases remaining). See
+> `docs/handover-subagents.md`, and `docs/subagents-alfuat.md` for the
+> verified API ground truth — including a build-divergence warning that
+> supersedes this file's SSE and prompt-body notes.
+
 ## What works end-to-end
 
 - Connect to a local `opencode2 serve` on any port (dev proxy at `/api/<port>/api`)

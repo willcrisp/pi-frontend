@@ -69,6 +69,24 @@ function toggleBranchMenu() {
   if (branchOpen.value && directory.value) fetchBranches(directory.value);
 }
 
+// Running sub-agents are easy to lose track of once the transcript scrolls
+// past the dispatch, so count them here and jump to the first one on click.
+const subagentBadge = computed(() => {
+  let count = 0;
+  let firstCallID = null;
+  for (const child of Object.values(store.childSessions || {})) {
+    if (child.status !== "running") continue;
+    count += 1;
+    if (!firstCallID && child.callID) firstCallID = child.callID;
+  }
+  return { count, firstCallID };
+});
+
+function scrollToRunningSubagent() {
+  const id = subagentBadge.value.firstCallID;
+  if (!id) return;
+  document.getElementById(`tc-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 </script>
 
 <template>
@@ -118,6 +136,16 @@ function toggleBranchMenu() {
     </div>
 
     <div class="header-right">
+      <button
+        v-if="subagentBadge.count > 0"
+        class="subagent-badge"
+        type="button"
+        title="Jump to running sub-agent"
+        @click="scrollToRunningSubagent"
+      >
+        <span class="subagent-badge-dot"></span>
+        {{ subagentBadge.count }} agent{{ subagentBadge.count === 1 ? "" : "s" }}
+      </button>
       <UsagePopover class="header-usage" />
       <ModelFilterPopover />
       <ColorProfilePopover />

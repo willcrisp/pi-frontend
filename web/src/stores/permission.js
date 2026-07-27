@@ -7,6 +7,11 @@ import { apiBase, authHeaders } from "./ssh.js";
 
 export const permissionStore = reactive({
   queue: [], // [{ id, sessionID, action, resources, save, metadata, source, receivedAt, error }]
+  // "Allow always" rules the server has persisted. Without a way to list and
+  // revoke these, a single mis-click grants a tool forever with no route back.
+  saved: [],
+  savedLoading: false,
+  savedError: null,
 });
 
 // Only `permission.v2.asked` enqueues; `permission.v2.replied` is the outbound
@@ -29,6 +34,43 @@ export function handlePermissionEvent(event) {
     });
   } else if (type === "permission.v2.replied") {
     permissionStore.queue = permissionStore.queue.filter((p) => p.id !== data.requestID);
+  }
+}
+
+// GET /api/permission/saved — the persisted always-allow rules.
+export async function loadSavedPermissions() {
+  permissionStore.savedLoading = true;
+  permissionStore.savedError = null;
+  try {
+    const res = await fetch(`${apiBase()}/permission/saved`, { headers: authHeaders() });
+    if (!res.ok) {
+      permissionStore.savedError = `Failed to load saved rules (${res.status})`;
+      return;
+    }
+    const payload = await res.json();
+    permissionStore.saved = Array.isArray(payload) ? payload : payload?.data || [];
+  } catch (err) {
+    permissionStore.savedError = err.message || "Failed to load saved rules";
+  } finally {
+    permissionStore.savedLoading = false;
+  }
+}
+
+// DELETE /api/permission/saved/{id} — revoke one rule.
+export async function revokeSavedPermission(id) {
+  permissionStore.savedError = null;
+  try {
+    const res = await fetch(`${apiBase()}/permission/saved/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      permissionStore.savedError = `Failed to revoke rule (${res.status})`;
+      return;
+    }
+    await loadSavedPermissions();
+  } catch (err) {
+    permissionStore.savedError = err.message || "Failed to revoke rule";
   }
 }
 

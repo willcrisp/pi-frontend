@@ -1,9 +1,13 @@
 <!--
-  Modal for viewing and selecting agents available in OpenCode V2.
-  Agents are managed server-side; this dialog lists them from /api/agent.
+  Agent roster. Agents are defined server-side and V2 exposes them read-only
+  (GET /api/agent — there is no CRUD route), so this dialog does two things
+  and no more: switch the active session's primary agent, and show which
+  sub-agents the `subagent` tool can dispatch. Sub-agents are listed but not
+  selectable — they are dispatched by a tool call, never set as the session
+  agent.
 -->
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { opencodeStore, loadAgents, setAgent } from "../../stores/opencode.js";
 
 const emit = defineEmits(["close"]);
@@ -46,26 +50,49 @@ function onBackdrop(e) {
 
       <template v-else>
         <div v-if="!opencodeStore.availableAgents.length" class="connect-hint">
-          No agents available from OpenCode V2 server.
+          No agents available from the OpenCode server.
         </div>
         <ul v-else class="agents-list">
           <li
             v-for="a in opencodeStore.availableAgents"
-            :key="typeof a === 'object' ? a.id : a"
+            :key="a.id"
             class="agents-row"
-            :class="{ active: (typeof a === 'object' ? a.id : a) === opencodeStore.selectedAgent }"
-            @click="selectAgent(typeof a === 'object' ? a.id : a)"
+            :class="{ active: a.id === opencodeStore.selectedAgent }"
+            @click="selectAgent(a.id)"
           >
             <div class="agents-row-main">
-              <span class="agents-name">{{ typeof a === 'object' ? (a.name || a.id) : a }}</span>
-              <span v-if="typeof a === 'object' && a.description" class="agents-desc">{{ a.description }}</span>
+              <span class="agents-name">{{ a.name || a.id }}</span>
+              <span v-if="a.description" class="agents-desc">{{ a.description }}</span>
             </div>
             <div class="agents-row-meta">
-              <span v-if="(typeof a === 'object' ? a.id : a) === opencodeStore.selectedAgent" class="agents-chip">active</span>
+              <span v-if="a.id === opencodeStore.selectedAgent" class="agents-chip">active</span>
             </div>
           </li>
         </ul>
+
+        <template v-if="opencodeStore.subagentRoster.length">
+          <div class="connect-hint">
+            Sub-agents — dispatched by the <code>subagent</code> tool, not selectable here.
+          </div>
+          <ul class="agents-list">
+            <li v-for="a in opencodeStore.subagentRoster" :key="a.id" class="agents-row readonly">
+              <div class="agents-row-main">
+                <span class="agents-name">{{ a.name || a.id }}</span>
+                <span v-if="a.description" class="agents-desc">{{ a.description }}</span>
+              </div>
+              <div class="agents-row-meta">
+                <span class="agents-chip">subagent</span>
+              </div>
+            </li>
+          </ul>
+        </template>
       </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.agents-row.readonly {
+  cursor: default;
+}
+</style>

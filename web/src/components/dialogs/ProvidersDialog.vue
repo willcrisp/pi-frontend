@@ -10,6 +10,9 @@ import {
   loadIntegrations,
   connectKey,
   removeCredential,
+  startOAuth,
+  completeOAuth,
+  cancelOAuth,
 } from "../../stores/providers.js";
 
 const emit = defineEmits(["close"]);
@@ -34,6 +37,26 @@ const addable = computed(() => {
     .filter((i) => (i.methods || []).some((m) => m.type === "key"))
     .filter((i) => !q || i.id.toLowerCase().includes(q) || (i.name || "").toLowerCase().includes(q));
 });
+
+// Providers that only offer OAuth used to be invisible here — they have no
+// key method, so the "Add API key" list filtered them out entirely.
+const oauthable = computed(() => {
+  const q = filter.value.trim().toLowerCase();
+  return providersStore.integrations
+    .filter((i) => (i.methods || []).some((m) => m.type === "oauth"))
+    .filter((i) => !q || i.id.toLowerCase().includes(q) || (i.name || "").toLowerCase().includes(q));
+});
+
+const oauthCode = ref("");
+
+async function onStartOAuth(integrationID) {
+  oauthCode.value = "";
+  await startOAuth(integrationID);
+}
+
+async function onCompleteOAuth() {
+  await completeOAuth(oauthCode.value.trim() || null);
+}
 
 async function onAdd() {
   if (!selectedID.value || !apiKey.value.trim() || adding.value) return;
@@ -119,7 +142,71 @@ function onBackdrop(e) {
             {{ adding ? "adding…" : "Add" }}
           </button>
         </form>
+
+        <template v-if="oauthable.length">
+          <div class="connect-head" style="margin-top: 16px">
+            <span>Sign in with OAuth</span>
+          </div>
+
+          <!-- An attempt is in flight: the user has to leave the app,
+               authorize there, and come back. Keep the attempt on screen the
+               whole time so returning doesn't mean starting over. -->
+          <div v-if="providersStore.oauthAttempt" class="oauth-attempt">
+            <div class="connect-hint">
+              {{ providersStore.oauthAttempt.instructions || "Authorize in the page that opens, then finish here." }}
+            </div>
+            <a
+              v-if="providersStore.oauthAttempt.url"
+              class="oauth-link"
+              :href="providersStore.oauthAttempt.url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open authorization page ↗
+            </a>
+            <div v-if="providersStore.oauthAttempt.userCode" class="connect-hint">
+              Code to enter there: <strong>{{ providersStore.oauthAttempt.userCode }}</strong>
+            </div>
+            <form class="add-project-form" @submit.prevent="onCompleteOAuth">
+              <input
+                v-model="oauthCode"
+                type="text"
+                class="connect-filter"
+                placeholder="Paste the code from the provider (if it gave one)"
+                autocomplete="off"
+              />
+              <button type="submit" :disabled="providersStore.oauthAttempt.busy">
+                {{ providersStore.oauthAttempt.busy ? "finishing…" : "Finish sign-in" }}
+              </button>
+              <button type="button" class="connect-secondary" @click="cancelOAuth">Cancel</button>
+            </form>
+          </div>
+
+          <ul v-else class="agents-list">
+            <li v-for="i in oauthable" :key="i.id" class="agents-row">
+              <div class="agents-row-main">
+                <span class="agents-name">{{ i.name || i.id }}</span>
+              </div>
+              <div class="agents-row-meta">
+                <button type="button" @click="onStartOAuth(i.id)">Sign in</button>
+              </div>
+            </li>
+          </ul>
+        </template>
       </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.oauth-attempt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.oauth-link {
+  color: var(--accent);
+  font-size: 12px;
+}
+</style>
