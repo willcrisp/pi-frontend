@@ -19,6 +19,16 @@ function opencodeDynamicProxy() {
         req.url = m[2]; // strip /api/<port>
         proxy.web(req, res, { target: `http://127.0.0.1:${port}` });
       });
+      // WebSocket upgrades (PTY connect) — middlewares only see HTTP requests,
+      // so forward upgrade events on the underlying HTTP server ourselves.
+      // Skip Vite's own HMR socket (no /api/<port> prefix) so it keeps working.
+      server.httpServer?.on("upgrade", (req, socket, head) => {
+        const m = req.url && req.url.match(/^\/api\/(\d+)(\/.*)$/);
+        if (!m) return;
+        const port = m[1];
+        req.url = m[2];
+        proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` });
+      });
     },
   };
 }

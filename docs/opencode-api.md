@@ -155,7 +155,12 @@ delivers today. If a recursive endpoint lands, replace the loop there.
 
 - **`Location.Ref`** = `{directory: string, workspaceID?: string}`
 - **`Model.Ref`** = `{id: string, providerID: string, variant?: string}`
-- **`PromptInput`** = `{text: string, files?: [], agents?: []}`
+- **`PromptInput`** = `{text: string, files?: PromptInput.FileAttachment[], agents?: [], metadata?, delivery?, resume?}` — `additionalProperties: false`
+- **`PromptInput.FileAttachment`** = `{uri: string, name?, description?, mention?}`. `uri` accepts a
+  `data:<mime>;base64,...` URL; the server parses it and stores the attachment as
+  `Prompt.FileAttachment` = `{data: base64, mime, source: {type: "inline"}, name?}`. Sending
+  `{filename, mime, url}` (the FilePart render shape) 400s — the schema is closed.
+- Stored **user messages** carry those attachments at the top level: `{id, time, text, files, type: "user"}`
 - **`PermissionV2.Reply`** = `"once" | "always" | "reject"`
 - **`PermissionV2.Request`** = `{id: "per_..." , sessionID: "ses_...", action: string, resources: string[], save?: string[], metadata?: object, source?: object}`
 - **`SessionV2.Info`** = `{id, title?, agent, model, location: Location.Info, cost, tokens, parentID?, projectID, subpath, revert?, time}`

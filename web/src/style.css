@@ -2134,7 +2134,7 @@ footer {
   flex: 1;
   position: relative;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2144,6 +2144,111 @@ footer {
   border-color: #2c3540;
 }
 
+.composer-field.dragging {
+  border-color: var(--accent, #4a6b8a);
+  border-style: dashed;
+}
+
+/* Attachment strip above the textarea: image thumbnails, name chips otherwise. */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 8px 8px 0;
+}
+
+.attachment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.attachment img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+}
+
+.attachment-name {
+  padding: 6px 22px 6px 8px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.attachment-remove:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* Pencil (open the annotator) reveals on hover so it doesn't cover the thumbnail. */
+.attachment-edit {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.attachment:hover .attachment-edit,
+.attachment-edit:focus-visible {
+  opacity: 1;
+}
+
+.attachment-edit:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 textarea {
   flex: 1;
   resize: none;
@@ -2151,7 +2256,7 @@ textarea {
   border: none;
   color: var(--fg);
   font: inherit;
-  padding: 9px 44px 9px 12px;
+  padding: 9px 74px 9px 12px;
   max-height: 200px;
   outline: none;
 }
@@ -2194,6 +2299,15 @@ button:hover {
   border: none;
   border-radius: 6px;
   flex-shrink: 0;
+}
+
+.composer-icon-btn.attach {
+  color: var(--dim);
+}
+
+.composer-icon-btn.attach:hover {
+  color: var(--fg);
+  background: var(--bg);
 }
 
 .composer-icon-btn.send {
@@ -2399,6 +2513,107 @@ button:hover {
 .controls select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* themed select popover (SelectMenu.vue) — opens upward, unlike a native select */
+.select-menu {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.select-trigger:hover,
+.select-trigger.open {
+  border-color: #2c3540;
+  color: var(--fg);
+}
+
+.select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-caret {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.select-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 100%;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.select-group + .select-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.select-group-label {
+  padding: 3px 8px;
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+.select-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.select-option.active {
+  background: var(--border);
+}
+
+.select-check {
+  width: 10px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.select-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* UI-only model filter (funnel button + checkbox popover) */
@@ -3600,11 +3815,6 @@ button:hover {
   border-color: var(--fg, #666);
 }
 
-.git-branch-btn.switching {
-  opacity: 0.6;
-  pointer-events: none;
-}
-
 .git-branch-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -3632,18 +3842,16 @@ button:hover {
   color: var(--fg, #ddd);
   font-size: 12px;
   font-family: inherit;
-  cursor: pointer;
+  /* Read-only list: no pointer cursor or hover highlight, so it doesn't read as clickable. */
+  cursor: default;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.git-branch-item:hover {
-  background: var(--hover, rgba(255, 255, 255, 0.06));
-}
-
 .git-branch-item.current {
   color: var(--accent, #6cf);
+  font-weight: 600;
 }
 
 .palette-kind.file {

@@ -1,26 +1,61 @@
 // One-shot remote command execution via the OpenCode V2 PTY API.
-// Spins up a PTY, streams its output over the WebSocket connect route until the
-// process exits, then tears the PTY down. Not a persistent-shell abstraction —
-// callers get back the captured text of one command's run.
+// Callers get back the captured output of one command; the PTY is torn down after.
 //
-// Endpoint shapes here come from the hosted OpenCode V2 API docs (v2.opencode.ai),
-// not a verified live-server /doc — re-check field names against your target
-// server's /doc if something doesn't line up (see docs/opencode-api.md).
+// Verified against a live server's openapi.json + the upstream handler source:
+//   POST /api/pty                     -> { location, data: { id, status, pid, ... } }
+//   POST /api/pty/{id}/connect-token  -> { data: { ticket, expires_in } }
+//        requires header `x-opencode-ticket: 1` and a same-origin request, else
+//        403 "Invalid PTY connect token request".
+//   GET  /api/pty/{id}/connect?ticket=…  (WebSocket upgrade)
+//        A valid ticket bypasses Basic Auth, so no credentials go on the URL.
+//
+// Wire protocol (PtyProtocol): outbound frames are raw UTF-8 terminal text; one
+// binary control frame — 0x00 followed by JSON {cursor} — marks the end of replay.
+//
+// Why a shell session instead of running the command as the PTY process: connect
+// rejects any PTY whose status is not "running" (close code 4404 "session exited"),
+// and a command like `git branch` exits in milliseconds — far faster than the
+// create -> token -> upgrade round-trip, so it is never attachable. Instead the PTY
+// runs an interactive `sh`, which stays alive, and the command is written to its
+// stdin bracketed by sentinel markers that delimit the real output.
 import { apiBase, authHeaders } from "./ssh.js";
 
-function wsBase() {
-  const base = apiBase(); // e.g. "/api/4096/api"
+const TICKET_HEADER = "x-opencode-ticket";
+
+function wsUrl(path) {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${base}`;
+  return `${proto}//${window.location.host}${apiBase()}${path}`;
 }
 
-// Runs `command` with `args` in `cwd` on the connected opencode server, returns the
-// captured stdout/stderr text once the PTY session reports status "exited".
+// PTY output is a terminal stream: it carries the echoed input line, the shell
+// prompt, ANSI/OSC escape sequences and \r line endings. Strip the escapes and
+// control bytes so line-based parsing sees real text.
+export function cleanPtyOutput(text) {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "") // OSC (title set etc.)
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI (colors, cursor moves)
+    .replace(/\x1b[()#][0-~]/g, "") // charset selection (ESC ( B …)
+    .replace(/\x1b[0-~]/g, "") // any remaining two-byte escape, incl. keypad ESC = / ESC >
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function shellQuote(token) {
+  return `'${String(token).replace(/'/g, `'\\''`)}'`;
+}
+
+// No `location` query is sent on any PTY call: create resolves to the server's
+// default location, and connect must address that same instance for the ticket
+// scope to match. The process's working directory comes from `cwd`.
 export async function runCommand(cwd, command, args = [], { timeoutMs = 15000 } = {}) {
   const createRes = await fetch(`${apiBase()}/pty`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ command, args, cwd, title: `${command} ${args.join(" ")}`.trim() }),
+    body: JSON.stringify({
+      command: "sh",
+      args: [],
+      cwd,
+      title: `harness: ${command} ${args.join(" ")}`.trim(),
+    }),
   });
   if (!createRes.ok) {
     throw new Error(`pty create failed (${createRes.status}): ${command} ${args.join(" ")}`);
@@ -30,56 +65,84 @@ export async function runCommand(cwd, command, args = [], { timeoutMs = 15000 } 
   if (!ptyId) throw new Error("pty create response had no id");
 
   try {
-    return await streamUntilExit(ptyId, timeoutMs);
+    return await runInShell(ptyId, command, args, timeoutMs);
   } finally {
     fetch(`${apiBase()}/pty/${ptyId}`, { method: "DELETE", headers: authHeaders() }).catch(() => {});
   }
 }
 
-async function streamUntilExit(ptyId, timeoutMs) {
+async function runInShell(ptyId, command, args, timeoutMs) {
   const tokenRes = await fetch(`${apiBase()}/pty/${ptyId}/connect-token`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), [TICKET_HEADER]: "1" },
   });
   if (!tokenRes.ok) throw new Error(`pty connect-token failed (${tokenRes.status})`);
   const tokenBody = await tokenRes.json();
-  const token = tokenBody?.data?.token ?? tokenBody?.token;
+  const ticket = tokenBody?.data?.ticket ?? tokenBody?.ticket;
+  if (!ticket) throw new Error("pty connect-token response had no ticket");
+
+  // The terminal echoes the line we send, so the markers must not appear literally
+  // in it — `printf '__OC%sS__' _` echoes as `__OC%sS__` but prints `__OC_S__`.
+  const nonce = Math.random().toString(36).slice(2, 10);
+  const startMarker = `__OC_S${nonce}__`;
+  const endMarker = `__OC_E${nonce}__`;
+  const cmdLine = [command, ...args].map(shellQuote).join(" ");
+  // `stty -echo` and the empty prompts keep the shell's own echo and PS1/PS2 out of
+  // the captured region; without them the output carries stray prompt characters.
+  const input =
+    `stty -echo 2>/dev/null; PS1=''; PS2=''; ` +
+    `printf '\\n__OC%sS${nonce}__\\n' _; ${cmdLine}; printf '\\n__OC%sE${nonce}__\\n' _\n`;
 
   return new Promise((resolve, reject) => {
-    const url = `${wsBase()}/pty/${ptyId}/connect${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-    const ws = new WebSocket(url);
-    let output = "";
+    const ws = new WebSocket(wsUrl(`/pty/${ptyId}/connect?ticket=${encodeURIComponent(ticket)}`));
+    ws.binaryType = "arraybuffer";
+    let buffer = "";
     let settled = false;
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      ws.close();
-      reject(new Error(`pty command timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+    const timer = setTimeout(
+      () => finish(new Error(`pty command timed out after ${timeoutMs}ms`)),
+      timeoutMs
+    );
 
-    function finish(err) {
+    function finish(err, value) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      ws.close();
+      try {
+        ws.close();
+      } catch {}
       if (err) reject(err);
-      else resolve(output);
+      else resolve(value);
     }
 
+    function checkComplete() {
+      const clean = cleanPtyOutput(buffer);
+      const start = clean.indexOf(startMarker);
+      if (start === -1) return;
+      const end = clean.indexOf(endMarker, start + startMarker.length);
+      if (end === -1) return;
+      finish(null, clean.slice(start + startMarker.length, end).replace(/\r/g, ""));
+    }
+
+    ws.onopen = () => ws.send(input);
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
-        // Some servers frame exit status as a JSON control message rather than raw bytes.
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg && msg.type === "exit") return finish();
-          if (msg && msg.status === "exited") return finish();
-        } catch {
-          output += ev.data;
-        }
+        buffer += ev.data;
+      } else {
+        const bytes = new Uint8Array(ev.data);
+        if (bytes[0] === 0) return; // control frame: end-of-replay cursor
+        buffer += new TextDecoder().decode(bytes);
       }
+      checkComplete();
     };
     ws.onerror = () => finish(new Error("pty websocket error"));
-    ws.onclose = () => finish();
+    ws.onclose = (ev) =>
+      finish(
+        new Error(
+          ev.code === 4404
+            ? "pty session exited before it could be attached"
+            : `pty websocket closed (${ev.code}${ev.reason ? `: ${ev.reason}` : ""}) before the command finished`
+        )
+      );
   });
 }

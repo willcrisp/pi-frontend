@@ -1,14 +1,18 @@
 // Per-directory git branch info, fetched via the PTY runner (see pty.js) and cached in
 // localStorage so switching chats shows a branch instantly while a fresh fetch runs in
-// the background. Mirrors the old Pi-era git.js store's shape, sourced over PTY instead
-// of a Pi-only /api/projects/{id}/git/* endpoint (opencode2 has no such route).
+// the background. Sourced over PTY rather than a Pi-only /api/projects/{id}/git/*
+// endpoint, since opencode2 exposes no git route.
+//
+// READ-ONLY by design: this store only ever runs `git branch`. Checking out from the
+// UI mutates a real working tree the agent may be mid-task in, and one stray click on
+// a header badge is enough to do it — so no checkout helper lives here.
 import { reactive } from "vue";
 import { runCommand } from "./pty.js";
 
 const CACHE_KEY = "opencode-web:git-cache"; // { [directory]: { current, branches, fetchedAt } }
 
 export const gitStore = reactive({
-  // directory -> { current, branches, loading, switching, error }
+  // directory -> { current, branches, loading, error }
   byDirectory: {},
 });
 
@@ -32,7 +36,6 @@ function entry(directory) {
       current: cached?.current || "",
       branches: cached?.branches || [],
       loading: false,
-      switching: false,
       error: "",
     };
   }
@@ -63,7 +66,9 @@ export function fetchBranches(directory) {
   state.loading = true;
   state.error = "";
 
-  runCommand(directory, "git", ["branch", "-a"])
+  // --no-pager: with a PTY attached git would page through `less`, which wraps the
+  // output in terminal mode-switch escapes instead of printing it plainly.
+  runCommand(directory, "git", ["--no-pager", "branch", "-a"])
     .then((output) => {
       const { current, branches } = parseBranches(output);
       state.current = current || state.current;
@@ -76,26 +81,8 @@ export function fetchBranches(directory) {
     })
     .catch((err) => {
       state.loading = false;
-      state.error = err.message || "git branch -a failed";
+      state.error = err.message || "git branch failed";
     });
-}
-
-export async function checkoutBranch(directory, branch) {
-  const state = entry(directory);
-  state.switching = true;
-  state.error = "";
-  try {
-    await runCommand(directory, "git", ["checkout", branch]);
-    state.current = branch;
-    const cache = loadCache();
-    cache[directory] = { current: state.current, branches: state.branches, fetchedAt: Date.now() };
-    saveCache(cache);
-  } catch (err) {
-    state.error = err.message || `git checkout ${branch} failed`;
-    throw err;
-  } finally {
-    state.switching = false;
-  }
 }
 
 export function gitStateFor(directory) {

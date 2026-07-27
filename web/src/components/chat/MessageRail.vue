@@ -1,6 +1,9 @@
 <!--
   Floating index of the prompts sent in this chat, shown faded in the gutter
   left of the message column. Clicking an entry scrolls its message into view.
+
+  Vertically centred in the gutter, listed oldest to newest, so the newest
+  prompt is the bottom entry.
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -17,24 +20,25 @@ function messageText(m) {
   return m.text || "";
 }
 
+// `index` must be the index into store.messages, because that is what
+// MessageList uses for its `msg-N` element ids that scrollTo() targets.
 const items = computed(() => {
-  const visible = store.messages.filter(
-    (m) => m.role === "user" || m.role === "assistant"
-  );
   const out = [];
-  let nth = 0;
-  visible.forEach((m, index) => {
+  store.messages.forEach((m, index) => {
     if (m.role !== "user") return;
-    const text = messageText(m);
-    out.push({
-      index,
-      text: text || "(prompt)",
-      entryId: store.forkMessages[nth]?.entryId,
-    });
-    nth++;
+    out.push({ index, text: messageText(m) || "(prompt)" });
   });
   return out;
 });
+
+const listEl = ref(null);
+
+// When the list overflows its own box the newest entries are the ones that
+// fall out of view — keep them pinned instead.
+function scrollRailToNewest() {
+  const el = listEl.value;
+  if (el) el.scrollTop = el.scrollHeight;
+}
 
 function scrollTo(item) {
   document
@@ -70,15 +74,23 @@ watch(
   { immediate: true }
 );
 
-watch(items, () => nextTick(syncScroll));
+watch(items, () =>
+  nextTick(() => {
+    syncScroll();
+    scrollRailToNewest();
+  })
+);
 
-onMounted(syncScroll);
+onMounted(() => {
+  syncScroll();
+  scrollRailToNewest();
+});
 onBeforeUnmount(() => props.scroller?.removeEventListener("scroll", syncScroll));
 </script>
 
 <template>
   <nav v-if="items.length" class="msg-rail" aria-label="Prompts in this chat">
-    <ol>
+    <ol ref="listEl">
       <li
         v-for="item in items"
         :key="item.index"

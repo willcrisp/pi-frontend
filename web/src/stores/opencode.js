@@ -15,7 +15,7 @@ export const opencodeStore = reactive({
   isStreaming: false,
   availableModels: [], // [{ providerID, modelID, label, contextLimit, variants }]
   selectedModel: null, // { providerID, modelID }
-  thinkingLevel: "", // selected model variant name ("" = provider default)
+  thinkingLevel: "", // selected model variant name ("" only while no variant-capable model is selected)
   availableAgents: [],
   selectedAgent: "build",
   draft: "",
@@ -29,6 +29,87 @@ export const opencodeStore = reactive({
   commands: [],
   skills: [],
 });
+
+// --- Model / reasoning-effort persistence -----------------------------------
+// Two layers, both in localStorage:
+//   MODEL_KEY   — last model+variant the user picked, used as the seed for new
+//                 sessions and on a cold load before any session is opened.
+//   SESSION_KEY — { [sessionID]: { providerID, modelID, variant } }, so each
+//                 chat keeps the model it was last used with.
+const MODEL_KEY = "oc.model";
+const SESSION_MODEL_KEY = "oc.sessionModels";
+
+// Reasoning effort defaults to "low" (no provider-default option in the UI);
+// models that don't offer "low" fall back to their first variant.
+const DEFAULT_VARIANT = "low";
+
+function readJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage unavailable (private mode / quota) — selection just won't persist */
+  }
+}
+
+function modelInfo(model) {
+  if (!model) return null;
+  return (
+    opencodeStore.availableModels.find(
+      (m) => m.providerID === model.providerID && m.modelID === model.modelID
+    ) || null
+  );
+}
+
+// The variant to use for `model`, preferring `preferred` when the model offers it.
+function resolveVariant(model, preferred) {
+  const variants = modelInfo(model)?.variants || [];
+  if (!variants.length) return "";
+  if (preferred && variants.includes(preferred)) return preferred;
+  if (variants.includes(DEFAULT_VARIANT)) return DEFAULT_VARIANT;
+  return variants[0];
+}
+
+function persistSelection() {
+  const m = opencodeStore.selectedModel;
+  if (!m) return;
+  const entry = { providerID: m.providerID, modelID: m.modelID, variant: opencodeStore.thinkingLevel };
+  writeJSON(MODEL_KEY, entry);
+
+  const sessionID = opencodeStore.activeSessionId;
+  if (sessionID) {
+    const map = readJSON(SESSION_MODEL_KEY, {}) || {};
+    map[sessionID] = entry;
+    writeJSON(SESSION_MODEL_KEY, map);
+  }
+}
+
+// Apply a stored { providerID, modelID, variant } entry if that model still
+// exists in the catalog. Returns true when it was applied.
+function applyStoredSelection(entry) {
+  if (!entry || !modelInfo(entry)) return false;
+  opencodeStore.selectedModel = { providerID: entry.providerID, modelID: entry.modelID };
+  opencodeStore.thinkingLevel = resolveVariant(entry, entry.variant);
+  return true;
+}
+
+// Restore the model this session was last used with (falling back to the
+// global last-used model), without pushing it back to the server — the session
+// already has it, and `session.model.selected` will correct us if not.
+export function restoreSessionModel(sessionID) {
+  if (!opencodeStore.availableModels.length) return;
+  const map = readJSON(SESSION_MODEL_KEY, {}) || {};
+  if (applyStoredSelection(map[sessionID])) return;
+  applyStoredSelection(readJSON(MODEL_KEY, null));
+}
 
 // Helper function for subagent details compatibility
 export function subagentDetails(result) {
@@ -91,9 +172,19 @@ export async function loadModels() {
       }));
 
       if (!opencodeStore.selectedModel && opencodeStore.availableModels.length > 0) {
-        const first = opencodeStore.availableModels[0];
-        opencodeStore.selectedModel = { providerID: first.providerID, modelID: first.modelID };
+        // Prefer the last model the user picked; otherwise the first in the catalog.
+        if (!applyStoredSelection(readJSON(MODEL_KEY, null))) {
+          const first = opencodeStore.availableModels[0];
+          opencodeStore.selectedModel = { providerID: first.providerID, modelID: first.modelID };
+        }
       }
+      // Catalogs load after a session may already be active, and variants are
+      // only knowable once the catalog is here.
+      if (opencodeStore.activeSessionId) restoreSessionModel(opencodeStore.activeSessionId);
+      opencodeStore.thinkingLevel = resolveVariant(
+        opencodeStore.selectedModel,
+        opencodeStore.thinkingLevel
+      );
     }
   } catch (err) {
     console.warn("Could not load opencode models:", err);
@@ -239,8 +330,75 @@ function updateSessionStats(info) {
     : 0;
 }
 
+// Upsert a part on a message by a synthetic stable id. Streaming events identify
+// text/reasoning parts by `ordinal` and tool parts by `callID`, none of which are
+// part ids, so we derive one per kind (`text:0`, `reasoning:0`, `tool:call_…`).
+function upsertPart(msg, id, patch) {
+  const idx = msg.parts.findIndex((p) => p.id === id);
+  if (idx >= 0) {
+    msg.parts[idx] = { ...msg.parts[idx], ...patch };
+    return msg.parts[idx];
+  }
+  const part = { id, ...patch };
+  msg.parts.push(part);
+  return part;
+}
+
+function appendPartText(msg, id, kind, delta) {
+  const existing = msg.parts.find((p) => p.id === id);
+  upsertPart(msg, id, { type: kind, text: (existing?.text || "") + (delta || "") });
+}
+
+// Streaming events carry the assistant message id but no role/time, so seed those.
+function assistantMessageFor(props) {
+  const msg = findOrCreateMessage(props.assistantMessageID, "assistant");
+  msg.role = "assistant";
+  if (!msg.createdAt) msg.createdAt = Date.now();
+  return msg;
+}
+
+// session.usage.updated carries session-wide totals directly, so set them rather
+// than re-deriving from per-message tokens.
+function applyUsageUpdate(props) {
+  const tokens = props.tokens || {};
+  const input = tokens.input || 0;
+  const output = tokens.output || 0;
+  const cache = tokens.cache || {};
+
+  opencodeStore.sessionStats.tokens = {
+    input,
+    output,
+    total: input + output,
+    cacheRead: cache.read || 0,
+    cacheWrite: cache.write || 0,
+  };
+  if (typeof props.cost === "number") opencodeStore.sessionStats.cost = props.cost;
+
+  const selected = opencodeStore.selectedModel;
+  const model = selected
+    ? opencodeStore.availableModels.find(
+        (m) => m.providerID === selected.providerID && m.modelID === selected.modelID
+      )
+    : null;
+  const contextLimit = model && model.contextLimit;
+  opencodeStore.sessionStats.contextUsage.percent = contextLimit
+    ? ((input + output) / contextLimit) * 100
+    : 0;
+}
+
 // Process real-time events. Envelope is { id, type, data }; payload lives on `data`.
-// Streaming uses the classic Part model (message.updated { info }, message.part.updated { part }).
+//
+// Event vocabulary verified by tapping GET /api/event on a live server. This build
+// does NOT emit the classic Part model (message.updated / message.part.updated /
+// session.idle) — those never fire, which is why assistant replies used to never
+// render and the streaming flag never cleared. What it actually emits per prompt:
+//   session.input.admitted -> session.execution.started -> session.input.promoted
+//   -> session.step.started
+//      -> session.reasoning.started / .delta / .ended     (ordinal-keyed)
+//      -> session.tool.input.started / .delta / .ended    (callID-keyed)
+//      -> session.tool.called -> [.progress] -> .success
+//      -> session.text.started / .delta / .ended          (ordinal-keyed)
+//   -> session.step.ended -> session.usage.updated -> session.execution.succeeded
 function handleServerEvent(event) {
   if (!event || !event.type) return;
   const { type, data } = event;
@@ -280,16 +438,157 @@ function handleServerEvent(event) {
     }
 
     case "session.model.selected": {
+      // Selection is per-session state, so ignore events for other sessions.
+      if (props.sessionID && props.sessionID !== opencodeStore.activeSessionId) break;
       if (props.providerID && props.modelID) {
         opencodeStore.selectedModel = { providerID: props.providerID, modelID: props.modelID };
       }
-      if (props.variant) opencodeStore.thinkingLevel = props.variant;
+      opencodeStore.thinkingLevel = resolveVariant(
+        opencodeStore.selectedModel,
+        props.variant || opencodeStore.thinkingLevel
+      );
+      persistSelection();
       break;
     }
 
     // Explicitly acknowledged so a maintainer scanning this switch sees it
-    // was considered, not missed — no state change today.
-    case "session.input.admitted": {
+    // was considered, not missed — no state change today. The user message is
+    // already appended optimistically by sendPrompt, and session.execution.succeeded
+    // reconciles against the server, so re-adding it here would duplicate it.
+    case "session.input.admitted":
+    case "session.input.promoted":
+    case "shell.created":
+    case "shell.exited": {
+      break;
+    }
+
+    case "session.step.started": {
+      const msg = assistantMessageFor(props);
+      if (props.model) {
+        msg.providerID = props.model.providerID;
+        msg.modelID = props.model.id;
+      }
+      opencodeStore.isStreaming = true;
+      break;
+    }
+
+    case "session.reasoning.started":
+    case "session.text.started": {
+      const kind = type === "session.reasoning.started" ? "reasoning" : "text";
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `${kind}:${props.ordinal}`, { type: kind, text: "" });
+      opencodeStore.isStreaming = true;
+      break;
+    }
+
+    case "session.reasoning.delta":
+    case "session.text.delta": {
+      const kind = type === "session.reasoning.delta" ? "reasoning" : "text";
+      const msg = assistantMessageFor(props);
+      appendPartText(msg, `${kind}:${props.ordinal}`, kind, props.delta);
+      if (kind === "text") recomputeText(msg);
+      opencodeStore.isStreaming = true;
+      break;
+    }
+
+    // `.ended` carries the authoritative full text, so replace rather than append —
+    // this also repairs any delta that was missed.
+    case "session.reasoning.ended":
+    case "session.text.ended": {
+      const kind = type === "session.reasoning.ended" ? "reasoning" : "text";
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `${kind}:${props.ordinal}`, {
+        type: kind,
+        text: props.text || "",
+        phase: props.state && props.state.phase,
+      });
+      if (kind === "text") recomputeText(msg);
+      break;
+    }
+
+    case "session.tool.input.started": {
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `tool:${props.callID}`, {
+        type: "tool",
+        tool: props.name,
+        callID: props.callID,
+        state: { status: "pending" },
+      });
+      break;
+    }
+
+    case "session.tool.input.ended": {
+      const msg = assistantMessageFor(props);
+      // `text` is the raw JSON argument string; parse for display when it's valid.
+      let input;
+      try {
+        input = JSON.parse(props.text);
+      } catch {
+        input = props.text;
+      }
+      upsertPart(msg, `tool:${props.callID}`, { input });
+      break;
+    }
+
+    case "session.tool.called": {
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `tool:${props.callID}`, {
+        type: "tool",
+        callID: props.callID,
+        input: props.input,
+        state: { status: "running" },
+      });
+      break;
+    }
+
+    case "session.tool.progress": {
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `tool:${props.callID}`, { state: { status: "running" } });
+      break;
+    }
+
+    case "session.tool.success": {
+      const msg = assistantMessageFor(props);
+      upsertPart(msg, `tool:${props.callID}`, {
+        state: { status: "completed", output: toolContentText(props.content) },
+      });
+      break;
+    }
+
+    // Error-event names for a failed tool call are unverified against a live server
+    // (no failing call was captured); both spellings are handled so whichever the
+    // server emits surfaces the error instead of leaving the call stuck "running".
+    case "session.tool.error":
+    case "session.tool.failed": {
+      const msg = assistantMessageFor(props);
+      const err = props.error;
+      upsertPart(msg, `tool:${props.callID}`, {
+        state: {
+          status: "error",
+          error: (err && (err.message || err.type)) || props.message || "tool call failed",
+        },
+      });
+      break;
+    }
+
+    case "session.step.ended": {
+      const msg = assistantMessageFor(props);
+      msg.tokens = props.tokens;
+      msg.cost = props.cost;
+      break;
+    }
+
+    case "session.usage.updated": {
+      applyUsageUpdate(props);
+      break;
+    }
+
+    case "session.execution.succeeded": {
+      if (!props.sessionID || props.sessionID === opencodeStore.activeSessionId) {
+        opencodeStore.isStreaming = false;
+        // Reconcile with server truth (drops optimistic artifacts, applies final content).
+        refreshActiveMessages();
+      }
       break;
     }
 
@@ -390,6 +689,7 @@ export async function connectToSession(sessionID) {
   if (!sessionID) return;
   opencodeStore.activeSessionId = sessionID;
   opencodeStore.isStreaming = false;
+  restoreSessionModel(sessionID);
 
   await refreshActiveMessages();
 }
@@ -402,7 +702,13 @@ export async function refreshActiveMessages() {
     const res = await fetch(`${apiBase()}/session/${sessionID}/message`, { headers: authHeaders() });
     if (res.ok) {
       const list = unwrap(await res.json());
-      opencodeStore.messages = list.map(normalizeRestMessage).filter(Boolean);
+      // This endpoint returns newest-first; the transcript renders top-to-bottom
+      // oldest-first, so order by creation time ascending (sort is stable, so
+      // anything without a timestamp keeps its relative position).
+      opencodeStore.messages = list
+        .map(normalizeRestMessage)
+        .filter(Boolean)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       opencodeStore.forkMessages = opencodeStore.messages
         .filter((m) => m.role === "user")
         .map((m, idx) => ({ entryId: m.id || idx, text: m.text }));
@@ -422,7 +728,17 @@ function normalizeRestMessage(m) {
 
   if (m.type === "user") {
     const text = m.text || "";
-    return { id: m.id, role: "user", parts: text ? [{ type: "text", text }] : [], text, createdAt };
+    const files = Array.isArray(m.files) ? m.files : [];
+    return {
+      id: m.id,
+      role: "user",
+      parts: [
+        ...(text ? [{ type: "text", text }] : []),
+        ...files.map((f, i) => ({ id: `${m.id}-f${i}`, ...normalizeUserFile(f) })),
+      ],
+      text,
+      createdAt,
+    };
   }
 
   if (m.type === "assistant") {
@@ -442,6 +758,19 @@ function normalizeRestMessage(m) {
   }
 
   return null;
+}
+
+// A stored user attachment is `{data, mime, source, name?}` (`Prompt.FileAttachment`).
+// `source.type` is "inline" (base64 in `data`, rebuilt into a data URL so the view can
+// show it) or "uri" (the original location in `source.uri`).
+function normalizeUserFile(f) {
+  const inline = f.data ? `data:${f.mime || "application/octet-stream"};base64,${f.data}` : "";
+  return {
+    type: "file",
+    filename: f.name || "",
+    mime: f.mime || "",
+    url: f.source && f.source.type === "uri" ? f.source.uri : inline,
+  };
 }
 
 // Map a REST assistant `content[]` item to a canonical part (matching the SSE Part shape
@@ -472,20 +801,31 @@ function toolContentText(content) {
     .join("\n");
 }
 
-// Send user prompt (POST /api/session/:id/prompt { prompt: PromptInput }).
-// Body wraps under `prompt` — a flat `{ text }` 400s with "Missing key at [prompt]".
-export async function sendPrompt(text) {
-  if (!text || !text.trim() || !opencodeStore.activeSessionId) return;
+// Send user prompt (POST /api/session/:id/prompt). Body is a FLAT PromptInput —
+// `{ text, files?, agents?, delivery?, resume? }` with `text` required — per the
+// live openapi.json (a wrapped `{ prompt: {...} }` 400s with "Missing key at [text]"
+// on current builds; older builds wanted the wrapper, so re-verify on upgrade).
+// `files` are composer attachments (paste/drop/picker), each `{ filename, mime, url }`
+// where `url` is a `data:<mime>;base64,...` URL. The wire shape is different and strict:
+// `PromptInput.FileAttachment` is `{uri, name?, description?, mention?}` with
+// `additionalProperties: false`, so sending `{filename, mime, url}` 400s. The server
+// parses the data URI and stores it as `{data, mime, source: {type: "inline"}, name}`.
+export async function sendPrompt(text, files) {
+  const attachments = Array.isArray(files) ? files : [];
+  const promptText = (text || "").trim();
+  if ((!promptText && !attachments.length) || !opencodeStore.activeSessionId) return;
   const sessionID = opencodeStore.activeSessionId;
 
-  const promptText = text.trim();
   opencodeStore.draft = "";
 
   const userMsgId = `user-${Date.now()}`;
   opencodeStore.messages.push({
     id: userMsgId,
     role: "user",
-    parts: [{ type: "text", text: promptText }],
+    parts: [
+      ...(promptText ? [{ type: "text", text: promptText }] : []),
+      ...attachments.map((f, i) => ({ id: `${userMsgId}-f${i}`, type: "file", ...f })),
+    ],
     text: promptText,
   });
 
@@ -496,7 +836,14 @@ export async function sendPrompt(text) {
     const res = await fetch(`${apiBase()}/session/${sessionID}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ prompt: { text: promptText } }),
+      body: JSON.stringify(
+        attachments.length
+          ? {
+              text: promptText,
+              files: attachments.map((f) => ({ uri: f.url, name: f.filename })),
+            }
+          : { text: promptText }
+      ),
     });
 
     if (!res.ok) {
@@ -528,19 +875,17 @@ export async function abortSession() {
 // POST /api/session/:id/model { model: { id, providerID, variant? } } (Model.Ref).
 export async function setModel(model) {
   opencodeStore.selectedModel = model;
-  // Reset the variant if the new model doesn't offer the current one.
-  const info = opencodeStore.availableModels.find(
-    (m) => model && m.providerID === model.providerID && m.modelID === model.modelID
-  );
-  if (info && !info.variants.includes(opencodeStore.thinkingLevel)) {
-    opencodeStore.thinkingLevel = "";
-  }
+  // Carry the current effort across if the new model offers it, else fall back
+  // to the default ("low").
+  opencodeStore.thinkingLevel = resolveVariant(model, opencodeStore.thinkingLevel);
+  persistSelection();
   await pushSessionModel();
 }
 
-// Select the reasoning-effort variant for the current model ("" = provider default).
+// Select the reasoning-effort variant for the current model.
 export async function setThinkingLevel(level) {
-  opencodeStore.thinkingLevel = level || "";
+  opencodeStore.thinkingLevel = resolveVariant(opencodeStore.selectedModel, level);
+  persistSelection();
   await pushSessionModel();
 }
 

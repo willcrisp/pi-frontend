@@ -25,6 +25,10 @@ function renderPart(text) {
   return renderMarkdown(text || "");
 }
 
+function isImagePart(part) {
+  return !!part.url && (part.mime || "").startsWith("image/");
+}
+
 function truncate(text) {
   if (!text) return "";
   return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
@@ -56,7 +60,16 @@ function truncate(text) {
           <pre v-else-if="part.state?.status === 'error'">{{ truncate(part.state.error) }}</pre>
         </details>
 
-        <!-- file -->
+        <!-- file: images render as a thumbnail, anything else as a name chip -->
+        <a
+          v-else-if="part.type === 'file' && isImagePart(part)"
+          class="msg-image"
+          :href="part.url"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <img :src="part.url" :alt="part.filename || part.mime" />
+        </a>
         <component
           :is="part.url ? 'a' : 'span'"
           v-else-if="part.type === 'file'"
@@ -96,6 +109,20 @@ function truncate(text) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.msg-image {
+  display: block;
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.msg-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
 
 a.msg-file:hover {
