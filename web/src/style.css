@@ -84,6 +84,15 @@ body {
   padding: 0;
   font-size: 13px;
   cursor: pointer;
+  /* SVG children are flat line icons; flex keeps them optically centred the
+     same way the text glyphs (+, ⟳) already are. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn svg {
+  display: block;
 }
 
 .icon-btn:hover {

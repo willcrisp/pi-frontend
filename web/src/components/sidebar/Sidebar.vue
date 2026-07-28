@@ -232,13 +232,48 @@ async function newSessionIn(directory) {
           🗄
         </button>
         <button class="icon-btn" title="Refresh sessions" @click="fetchSessions">⟳</button>
-        <button class="icon-btn" title="Sub-agents" @click="showSubagents = true">🤖</button>
+        <button class="icon-btn" title="Sub-agents" @click="showSubagents = true">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 1.5v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+            <rect
+              x="2.6"
+              y="3.5"
+              width="10.8"
+              height="9"
+              rx="2.4"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+            <path
+              d="M5.8 7.2v1.4M10.2 7.2v1.4"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
         <button
           class="icon-btn"
           title="Saved permissions"
           @click="showSavedPermissions = true"
         >
-          🔒
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect
+              x="3.3"
+              y="7"
+              width="9.4"
+              height="6.8"
+              rx="1.6"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+            <path
+              d="M5.6 7V4.9a2.4 2.4 0 0 1 4.8 0V7"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+          </svg>
         </button>
         <button class="icon-btn" title="Providers" @click="showProviders = true">⚙</button>
         <button class="icon-btn" title="New project" @click="showAddForm = !showAddForm">+</button>
