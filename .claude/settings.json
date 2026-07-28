@@ -2,20 +2,20 @@
   "permissions": {
     "deny": [
       "Read(server/target/**)",
-      "Read(web/node_modules/**)",
-      "Read(web/dist/**)",
+      "Read(node_modules/**)",
+      "Read(dist/**)",
       "Edit(server/target/**)",
-      "Edit(web/node_modules/**)",
-      "Edit(web/dist/**)",
+      "Edit(node_modules/**)",
+      "Edit(dist/**)",
       "Write(server/target/**)",
-      "Write(web/node_modules/**)",
-      "Write(web/dist/**)",
+      "Write(node_modules/**)",
+      "Write(dist/**)",
       "Glob(server/target/**)",
-      "Glob(web/node_modules/**)",
-      "Glob(web/dist/**)",
+      "Glob(node_modules/**)",
+      "Glob(dist/**)",
       "Grep(server/target/**)",
-      "Grep(web/node_modules/**)",
-      "Grep(web/dist/**)"
+      "Grep(node_modules/**)",
+      "Grep(dist/**)"
     ]
   }
 }

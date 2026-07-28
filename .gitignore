@@ -1,7 +1,7 @@
 server/target/
-web/node_modules/
-web/dist/
+node_modules/
+dist/
 
-# Playwright run output (see web/playwright.config.js)
-web/test-results/
-web/playwright-report/
+# Playwright run output (see playwright.config.js)
+test-results/
+playwright-report/

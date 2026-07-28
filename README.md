@@ -43,7 +43,6 @@ intermediate server of our own.
 ### Run
 
 ```sh
-cd web
 npm install
 npm run dev
 ```
@@ -53,14 +52,12 @@ Open http://localhost:5173 and set the port and password in the connect dialog.
 ### Build
 
 ```sh
-cd web
-npm run build     # output in web/dist/
+npm run build     # output in dist/
 ```
 
 ### Test
 
 ```sh
-cd web
 npx playwright install chromium   # first run only
 npm test
 ```
@@ -71,7 +68,7 @@ config starts for you — no running `opencode2` needed.
 ## Project layout
 
 ```
-web/src/
+src/
   stores/          reactive() singletons (no Pinia), imported directly
     opencode.js    facade re-exporting the OpenCode V2 client
     opencode/      that client, split by concern (events, messages, steering…)

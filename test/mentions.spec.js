@@ -8,9 +8,9 @@ import { expect, test } from "@playwright/test";
 
 const DIRECTORY = "/home/user/pi-frontend"; // matches test/mock-opencode.js
 const FILES = [
-  "web/src/components/chat/Composer.vue",
-  "web/src/composables/useAttachments.js",
-  "web/src/stores/opencode/events.js",
+  "src/components/chat/Composer.vue",
+  "src/composables/useAttachments.js",
+  "src/stores/opencode/events.js",
   "README.md",
 ];
 

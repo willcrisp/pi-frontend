@@ -6,12 +6,13 @@ This file provides guidance when working with code in this repository.
 
 `radius`: A minimal dark-themed Vue 3 frontend harness for **OpenCode V2**.
 
-- `web/` — Vue 3 + Vite frontend (plain JS, no TypeScript). Talks directly to an
+- Vue 3 + Vite frontend (plain JS, no TypeScript). Talks directly to an
   OpenCode V2 HTTP REST & Event (SSE) API under `/api/*`. There is no backend of
-  our own — the old Rust server was removed in the V2 pivot.
+  our own — the old Rust server was removed in the V2 pivot, and the frontend
+  used to live under `web/` before it became the whole repo.
 - Vue is the only runtime dependency (plus `@microsoft/fetch-event-source` for the
   authenticated SSE stream). Markdown rendering and diffing are hand-rolled in
-  `web/src/lib/` rather than pulled in — keep it that way unless there's a reason.
+  `src/lib/` rather than pulled in — keep it that way unless there's a reason.
 - No linter or formatter is configured. The checks are `npm run build` (a broken
   import or bad template is otherwise a runtime-only failure) and `npm test`, a
   small Playwright suite over the composer. Run both before calling a change done.
@@ -26,8 +27,8 @@ here rather than grepping the whole tree:
 | an SSE event's effect | one entry in `HANDLERS`, `stores/opencode/events.js` |
 | the request/response shape of a server call | the store that owns the route; the transport is `lib/api.js` |
 | how a prompt is sent, or its body shape | `stores/opencode/transport.js` |
-| a component's appearance | its partial in `web/src/styles/`, or its `<style scoped>` |
-| composer input, attachments, or the `/` and `@` menus | the matching `use*` in `web/src/composables/` |
+| a component's appearance | its partial in `src/styles/`, or its `<style scoped>` |
+| composer input, attachments, or the `/` and `@` menus | the matching `use*` in `src/composables/` |
 | what the sidebar dot shows | `stores/opencode/activity.js` |
 | sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
 | a persisted preference | the owning store, via `lib/storage.js` |
@@ -35,9 +36,9 @@ here rather than grepping the whole tree:
 ## Development Commands
 
 ```sh
-cd web && npm install
+npm install
 npm run dev     # Vite dev server on http://localhost:5173
-npm run build   # Production build to web/dist/
+npm run build   # Production build to dist/
 npm test        # Playwright composer tests (starts its own servers)
 ```
 
@@ -56,8 +57,8 @@ that port.
 ### Testing
 
 `npm test` runs Playwright against the real UI. It needs no running OpenCode
-server and no setup: `web/playwright.config.js` starts both the Vite dev server
-and `web/test/mock-opencode.js`, a stand-in implementing just enough of the V2
+server and no setup: `playwright.config.js` starts both the Vite dev server
+and `test/mock-opencode.js`, a stand-in implementing just enough of the V2
 HttpApi to boot the frontend (health, the four catalogs, a session list, an
 empty transcript, an SSE stream held open).
 
@@ -65,7 +66,7 @@ First run on a fresh machine needs a browser: `npx playwright install chromium`.
 Where a sandbox or CI image already ships a Chromium that doesn't match this
 package's build number, point at it instead — `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium npm test`.
 
-The suite covers `web/src/composables/` — the composer's autosize, attachments,
+The suite covers `src/composables/` — the composer's autosize, attachments,
 the `/` and `@` menus, and the model picker — because that is the most stateful
 UI in the repo. It is a smoke suite, not a regression net for everything:
 
@@ -78,7 +79,7 @@ UI in the repo. It is a smoke suite, not a regression net for everything:
 
 ### How requests actually reach the server
 
-`web/vite.config.js` installs a **dynamic** proxy, not a fixed `/api` → `:4096`
+`vite.config.js` installs a **dynamic** proxy, not a fixed `/api` → `:4096`
 rule: `/api/<port>/<rest>` is forwarded to `http://127.0.0.1:<port>/<rest>`, and
 WebSocket upgrades (the PTY connect stream) are forwarded too. The port is
 user-selectable at runtime and persisted in localStorage, defaulting to 4096.
@@ -89,7 +90,7 @@ and the `Authorization: Basic …` header (`authHeaders()`) — the OpenAPI decl
 fetch that hardcodes `/api/...` or omits the header fails at runtime only, and
 that was the source of real bugs more than once.
 
-**So don't call `fetch` directly — use `web/src/lib/api.js`.** It applies both,
+**So don't call `fetch` directly — use `src/lib/api.js`.** It applies both,
 and takes server-relative paths:
 
 ```js
@@ -104,7 +105,7 @@ const info = await getJSON(`/session/${id}`);         // parsed, or null on fail
 The one legitimate exception is `pty.js`'s WebSocket URL, which can't go through
 a fetch wrapper and says so in a comment.
 
-Persisted UI state goes through `web/src/lib/storage.js` (`readJSON`/`writeJSON`/
+Persisted UI state goes through `src/lib/storage.js` (`readJSON`/`writeJSON`/
 `readArray`/`readNumber`/`readString`/`writeString`) rather than `localStorage`
 directly — they never throw, which matters because a quota error in private mode
 would otherwise take down whatever was mid-write.
@@ -143,7 +144,7 @@ Recurring shape traps, all documented in full in `docs/opencode-api.md`:
 
 ## Architecture
 
-`web/src/stores/*.js` are plain `reactive()` singletons (no Pinia). Components
+`src/stores/*.js` are plain `reactive()` singletons (no Pinia). Components
 import them directly.
 
 **Core session flow — `stores/opencode/`**
@@ -231,7 +232,7 @@ cards, find bar), `components/dialogs/` (connect, permission, question,
 sub-agents, providers, command palette), `components/popovers/`,
 `components/sidebar/`.
 
-**Composables** — `web/src/composables/` holds the composer's parts:
+**Composables** — `src/composables/` holds the composer's parts:
 `useAttachments` (paste/drop/picker, thumbnails, image markup), `useAutosize`,
 `useSlashCommands` (the `/query` menu), `useFileMentions` (the `@path` menu),
 `useModelPicker` (agent/model/reasoning selects and their Ctrl/Cmd+arrow
@@ -245,8 +246,8 @@ the template auto-unwraps (`attachments`, not `files.attachments.value`).
 (every persisted preference), plus the dependency-free `markdown.js`, `diff.js`,
 `fuzzy.js`.
 
-**Styles** — `web/src/style.css` is an ordered list of `@import`s; the rules
-live in `web/src/styles/*.css`, one partial per feature, named after the
+**Styles** — `src/style.css` is an ordered list of `@import`s; the rules
+live in `src/styles/*.css`, one partial per feature, named after the
 component it styles. **The import order is load-bearing**: these are flat
 global rules with many equal-specificity selectors, so ties resolve by source
 order. Edit the partial that owns the component; a genuinely new component gets
