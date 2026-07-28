@@ -157,5 +157,6 @@ client, and a few files survived the cut without being wired up:
 | `docs/opencode-api.md` | The API reference. Start here. |
 | `docs/subagents-alfuat.md` | Sub-agent ground truth for the real deployment target, claims marked [observed] vs [spec]. |
 | `docs/subagents-v2.md` | A *different* build, explicitly **not** the target. Kept only as a record of how far builds diverge. |
+| `docs/truefoundry.md` | TrueFoundry gateway integration research + phased plan. Desk research only — everything in it is `[spec]` until Phase 0 verifies it. |
 | `docs/handover.md` | General project status (snapshot as of an older `main`). |
 | `docs/handover-subagents.md` | Pickup point for the inline sub-agent rendering work. |
