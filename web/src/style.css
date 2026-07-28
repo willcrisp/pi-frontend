@@ -2265,6 +2265,17 @@ textarea {
   outline: none;
 }
 
+/* The composer textarea is sized by autosize(), which writes an explicit inline
+   height as the prompt gains lines. `flex: 1` above would hand the main axis to
+   flex-basis: 0 inside the column-flex .composer-field and that height would be
+   ignored — the field stayed one line tall no matter how much was typed. Sizing
+   from its own height instead lets it grow, and it scrolls once it hits the
+   max-height cap. */
+.composer-field textarea {
+  flex: 0 0 auto;
+  overflow-y: auto;
+}
+
 textarea::placeholder {
   color: var(--dim);
 }

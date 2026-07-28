@@ -184,7 +184,6 @@ function submit() {
   }
   attachments.value = [];
   input.value = "";
-  nextTick(autosize);
 }
 
 function onKeydown(e) {
@@ -206,7 +205,9 @@ function onKeydown(e) {
       return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Shift+Enter falls through to the browser and inserts a newline. `isComposing`
+  // keeps an IME's confirmation Enter from sending a half-typed prompt.
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     submit();
   }
@@ -255,10 +256,7 @@ function chooseSlashCommand(cmd) {
     return;
   }
   input.value = `/${cmd.name} `;
-  nextTick(() => {
-    textareaEl.value?.focus();
-    autosize();
-  });
+  nextTick(() => textareaEl.value?.focus());
 }
 
 // Builtins run against the harness itself instead of going to the server.
@@ -268,12 +266,27 @@ function runBuiltinCommand(name) {
   }
 }
 
+// Grow the textarea to fit its content (capped by the CSS max-height, past which
+// it scrolls). Measuring needs the height released first, hence the "auto" pass.
 function autosize() {
   const el = textareaEl.value;
   if (!el) return;
+  // An empty textarea measures its placeholder, and the quotes wrap to several
+  // lines — drop back to the one-row height from `rows` rather than fitting one.
+  if (!el.value) {
+    el.style.height = "";
+    return;
+  }
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
 }
+
+// Keeps the height in step with the text on the paths that change it without an
+// input event — sending (which clears), Escape, picking a slash command.
+// `flush: "post"` so the textarea has already been patched when we measure it.
+// The template's @input stays as well: v-model holds updates back during IME
+// composition, and the box should still grow while a long phrase is composed.
+watch(input, autosize, { flush: "post" });
 
 const selectedModelKey = computed(() =>
   store.selectedModel ? `${store.selectedModel.providerID}:${store.selectedModel.modelID}` : ""
@@ -451,8 +464,17 @@ function onSelectShortcut(e) {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onSelectShortcut));
-onBeforeUnmount(() => window.removeEventListener("keydown", onSelectShortcut));
+onMounted(() => {
+  autosize();
+  window.addEventListener("keydown", onSelectShortcut);
+  // A narrower composer re-wraps the text into more lines, so the fitted height
+  // has to be recomputed.
+  window.addEventListener("resize", autosize);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onSelectShortcut);
+  window.removeEventListener("resize", autosize);
+});
 </script>
 
 <template>
