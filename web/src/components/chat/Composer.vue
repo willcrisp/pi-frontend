@@ -13,6 +13,13 @@
   steps the model (over the same filtered list the picker shows). The selects
   are themed SelectMenu popovers that open upward. The textarea placeholder
   cycles a random sci-fi/fantasy quote per mount (SCI_FI_QUOTES).
+  "/" at the start of an empty box and "@" anywhere in it both open a fuzzy
+  menu above the composer (slash commands/skills, and file paths from
+  filesearch.js respectively) — see slashMatches/mentionMatches. A chosen
+  "@path" is inserted as plain text; the server has no in-text mention
+  resolution in this build (confirmed inert for `@agent`, see
+  docs/subagents-v2.md), so it's a typing convenience only — the agent reads
+  the path with its own tools same as if the user had typed it by hand.
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -27,6 +34,8 @@ import {
   runCommand,
 } from "../../stores/opencode.js";
 import { startNewChat, activeSessionDirectory } from "../../stores/projects.js";
+import { filesFor, refreshFiles } from "../../stores/filesearch.js";
+import { fuzzyScore } from "../../lib/fuzzy.js";
 import { hiddenModels, modelKey } from "../../stores/modelfilter.js";
 import D20Die from "./D20Die.vue";
 import SelectMenu from "./SelectMenu.vue";
@@ -211,6 +220,25 @@ function submit() {
 }
 
 function onKeydown(e) {
+  if (mentionOpen.value) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = mentionMatches.value.length;
+      mentionIndex.value =
+        e.key === "ArrowDown" ? (mentionIndex.value + 1) % n : (mentionIndex.value - 1 + n) % n;
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      chooseMention(mentionMatches.value[mentionIndex.value]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      mentionQuery.value = null;
+      return;
+    }
+  }
   if (slashOpen.value) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -288,6 +316,91 @@ function runBuiltinCommand(name) {
   if (name === "new") {
     startNewChat(activeSessionDirectory() || undefined).catch(() => {});
   }
+}
+
+// @-file mention autocomplete: sourced from the same recursive, cached file
+// list the Ctrl/Cmd+K palette uses (filesearch.js — PTY-based fdfind/fd/git
+// ls-files, since GET /api/fs/list is single-level only). Unlike the slash menu
+// (only ever "/query" from an empty box), a mention can start anywhere in the
+// message, so it's tracked from the live caret position rather than derived
+// straight from `input`.
+const mentionQuery = ref(null); // { query, start, end } char offsets into the textarea value, or null
+const mentionIndex = ref(0);
+
+function updateMentionState(el) {
+  el = el || textareaEl.value;
+  if (!el || el.selectionStart == null || el.selectionStart !== el.selectionEnd) {
+    mentionQuery.value = null;
+    return;
+  }
+  const before = el.value.slice(0, el.selectionStart);
+  // Preceded by start-of-text/whitespace/open-paren so "user@example.com" doesn't trigger.
+  const m = /(?:^|[\s(])@([^\s@]*)$/.exec(before);
+  if (!m) {
+    mentionQuery.value = null;
+    return;
+  }
+  if (!mentionQuery.value) {
+    // Just opened: kick a background refresh, same as the palette on open —
+    // the cached list (if any) shows immediately via filesFor below.
+    const dir = activeSessionDirectory();
+    if (dir) refreshFiles(dir);
+  }
+  mentionQuery.value = { query: m[1], start: el.selectionStart - m[1].length - 1, end: el.selectionStart };
+}
+
+const mentionMatches = computed(() => {
+  const mq = mentionQuery.value;
+  if (!mq) return [];
+  const dir = activeSessionDirectory();
+  if (!dir) return [];
+  const files = filesFor(dir).files;
+  const q = mq.query.toLowerCase();
+  if (!q) return files.slice(0, 20);
+  const scored = [];
+  for (const f of files) {
+    const score = fuzzyScore(q, f.toLowerCase());
+    if (score !== null) scored.push({ f, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.f)
+    .slice(0, 20);
+});
+
+const mentionOpen = computed(() => !!mentionQuery.value && mentionMatches.value.length > 0);
+
+watch(mentionMatches, () => {
+  mentionIndex.value = 0;
+});
+
+// Replace the "@query" span under the caret with "@path " and land the caret
+// right after it, same shape as chooseSlashCommand's refocus.
+function chooseMention(path) {
+  const mq = mentionQuery.value;
+  if (!path || !mq) return;
+  const before = input.value.slice(0, mq.start);
+  const after = input.value.slice(mq.end);
+  const inserted = `@${path} `;
+  input.value = before + inserted + after;
+  mentionQuery.value = null;
+  nextTick(() => {
+    const el = textareaEl.value;
+    if (!el) return;
+    el.focus();
+    const cursor = before.length + inserted.length;
+    el.setSelectionRange(cursor, cursor);
+    autosize();
+  });
+}
+
+// Combined @input handler: autosize still needs to run on every keystroke,
+// and the mention state needs the caret position `e.target` carries (v-model
+// updates `input` from the same event, so reading it back off `input` here
+// would race the order the two listeners run in).
+function onComposerInput(e) {
+  autosize();
+  updateMentionState(e.target);
 }
 
 // Grow the textarea to fit its content (capped by the CSS max-height, past which
@@ -503,7 +616,18 @@ onBeforeUnmount(() => {
 
 <template>
   <footer>
-    <ul v-if="slashOpen" class="slash-menu">
+    <ul v-if="mentionOpen" class="slash-menu">
+      <li
+        v-for="(path, i) in mentionMatches"
+        :key="path"
+        :class="{ active: i === mentionIndex }"
+        @mousedown.prevent="chooseMention(path)"
+        @mouseenter="mentionIndex = i"
+      >
+        <span class="slash-name">@{{ path }}</span>
+      </li>
+    </ul>
+    <ul v-else-if="slashOpen" class="slash-menu">
       <li
         v-for="(cmd, i) in slashMatches"
         :key="`${cmd.source}:${cmd.name}`"
@@ -565,7 +689,9 @@ onBeforeUnmount(() => {
               : 'Enter to send, Shift+Enter for newline'
           "
           @keydown="onKeydown"
-          @input="autosize"
+          @input="onComposerInput"
+          @keyup="updateMentionState()"
+          @click="updateMentionState()"
           @paste="onPaste"
         ></textarea>
 

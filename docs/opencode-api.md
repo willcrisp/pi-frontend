@@ -225,6 +225,9 @@ Connection shape (from a real integration `.connections[]` after connect):
 single-level. The palette needs a recursive file tree, which only the
 PTY-based `fdfind` / `fd` / `git ls-files` path in `filesearch.js`
 delivers today. If a recursive endpoint lands, replace the loop there.
+The composer's `@`-mention autocomplete (`Composer.vue`) is the second
+consumer of this same store — still no server-side query involved, `fs/find`
+remains unverified against the live target (see above).
 
 ## Confirmed schemas
 

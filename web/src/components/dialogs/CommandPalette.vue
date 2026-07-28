@@ -11,6 +11,7 @@ import {
   startNewChat,
 } from "../../stores/projects.js";
 import { filesFor, refreshFiles } from "../../stores/filesearch.js";
+import { fuzzyScore } from "../../lib/fuzzy.js";
 
 const open = ref(false);
 const query = ref("");
@@ -42,23 +43,6 @@ function onGlobalKey(e) {
 
 onMounted(() => window.addEventListener("keydown", onGlobalKey));
 onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
-
-// Subsequence fuzzy match; higher score = better.
-function fuzzyScore(q, s) {
-  let score = 0;
-  let si = 0;
-  let prevHit = -2;
-  for (const ch of q) {
-    const hit = s.indexOf(ch, si);
-    if (hit === -1) return null;
-    score += 1;
-    if (hit === prevHit + 1) score += 2;
-    if (hit === 0 || " /\\-_.:".includes(s[hit - 1])) score += 3;
-    prevHit = hit;
-    si = hit + 1;
-  }
-  return score - s.length / 100;
-}
 
 const items = computed(() => {
   const out = [];
