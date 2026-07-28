@@ -166,13 +166,22 @@ replaced.
   them, so they were deliberately left in place to keep the build green
   through Phases 1–3. This is the only intentional loose end.
 
-### Phase 5 — `AgentsDialog.vue` (lowest value)
+### Phase 5 — `AgentsDialog.vue` — **done**, as a manager rather than a roster
 
-Orphaned; targeted a `/api/agents` CRUD route V2 does not have (only
-read-only `GET /api/agent`). Either reduce to a read-only roster of the
-`mode: "subagent"` agents (`general`, `explore`) or delete it. Note
-`loadAgents()` filters subagent-mode agents out of the composer picker —
-keep that, but retain them in a separate list if the dialog stays.
+Replaced by `SubagentsDialog.vue` + `stores/subagents.js`. The dialog was
+right that there is no `/api/agents` CRUD route, but wrong that this makes
+management impossible: agents are **files**, and the PTY runner can write
+files. So the dialog now creates, edits and deletes sub-agent definitions —
+model and reasoning variant included — in `.opencode/agent/*.md` and
+`~/.config/opencode/agent/*.md`. Format and caveats (notably: config is not
+hot-reloaded, so a save needs a server restart) are documented in
+`docs/opencode-api.md`.
+
+Primary agents are deliberately *not* listed: they're picked per session from
+the composer, and the dialog manages sub-agents only. `loadAgents()` still
+keeps subagent-mode agents out of the composer picker; `subagentRoster` is
+their home and now includes `hidden` ones, since for a subagent that flag only
+hides it from the `@` menu.
 
 ## Reproducing a dispatch for testing
 

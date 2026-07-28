@@ -19,10 +19,13 @@ export const opencodeStore = reactive({
   selectedModel: null, // { providerID, modelID }
   thinkingLevel: "", // selected model variant name ("" only while no variant-capable model is selected)
   availableAgents: [],
-  // Agents with `mode: "subagent"` (general, explore). Kept out of
-  // availableAgents so they never show in the composer's picker — they're
-  // dispatched by the `subagent` tool, not selected as the session agent —
-  // but retained here so AgentsDialog can show the roster.
+  // Agents with `mode: "subagent"` (general, explore, plus anything defined in
+  // .opencode/agent). Kept out of availableAgents so they never show in the
+  // composer's picker — they're dispatched by the `subagent` tool, not selected
+  // as the session agent — but retained here as the live roster the sub-agent
+  // manager (subagents.js) joins its definition files against. `hidden` ones are
+  // included: for a subagent that flag only hides it from the `@` menu, and
+  // dropping them here would make them unmanageable.
   subagentRoster: [],
   selectedAgent: "build",
   draft: "",
@@ -270,7 +273,7 @@ export async function loadAgents() {
     if (res.ok) {
       const agents = unwrap(await res.json());
       opencodeStore.availableAgents = agents.filter((a) => a.mode !== "subagent" && !a.hidden);
-      opencodeStore.subagentRoster = agents.filter((a) => a.mode === "subagent" && !a.hidden);
+      opencodeStore.subagentRoster = agents.filter((a) => a.mode === "subagent");
 
       // Agents are addressed by `id` ("build"); `name` is the display label ("Build").
       // Sending the name yields `Agent not found: "Build"` on the server.

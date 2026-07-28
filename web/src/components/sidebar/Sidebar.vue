@@ -24,14 +24,14 @@ import {
 import { listDirectories } from "../../stores/filesearch.js";
 import { confirmDialog } from "../../stores/confirm.js";
 import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
-import AgentsDialog from "../dialogs/AgentsDialog.vue";
+import SubagentsDialog from "../dialogs/SubagentsDialog.vue";
 import SavedPermissionsDialog from "../dialogs/SavedPermissionsDialog.vue";
 
 const activeSessionId = computed(() => opencodeStore.activeSessionId);
 
 const showArchived = ref(false);
 const showProviders = ref(false);
-const showAgents = ref(false);
+const showSubagents = ref(false);
 const showSavedPermissions = ref(false);
 
 const groups = computed(() =>
@@ -210,7 +210,7 @@ async function newSessionIn(directory) {
           🗄
         </button>
         <button class="icon-btn" title="Refresh sessions" @click="fetchSessions">⟳</button>
-        <button class="icon-btn" title="Agents" @click="showAgents = true">🤖</button>
+        <button class="icon-btn" title="Sub-agents" @click="showSubagents = true">🤖</button>
         <button
           class="icon-btn"
           title="Saved permissions"
@@ -224,7 +224,7 @@ async function newSessionIn(directory) {
     </div>
 
     <ProvidersDialog v-if="showProviders" @close="showProviders = false" />
-    <AgentsDialog v-if="showAgents" @close="showAgents = false" />
+    <SubagentsDialog v-if="showSubagents" @close="showSubagents = false" />
     <SavedPermissionsDialog
       v-if="showSavedPermissions"
       @close="showSavedPermissions = false"

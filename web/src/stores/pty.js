@@ -1,5 +1,6 @@
 // One-shot remote command execution via the OpenCode V2 PTY API.
-// Callers get back the captured output of one command; the PTY is torn down after.
+// Callers get back the captured output of one command (`runCommand`) or of a
+// whole shell script (`runScript`); the PTY is torn down after.
 //
 // Verified against a live server's openapi.json + the upstream handler source:
 //   POST /api/pty                     -> { location, data: { id, status, pid, ... } }
@@ -39,7 +40,7 @@ export function cleanPtyOutput(text) {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-function shellQuote(token) {
+export function shellQuote(token) {
   return `'${String(token).replace(/'/g, `'\\''`)}'`;
 }
 
@@ -47,6 +48,23 @@ function shellQuote(token) {
 // default location, and connect must address that same instance for the ticket
 // scope to match. The process's working directory comes from `cwd`.
 export async function runCommand(cwd, command, args = [], { timeoutMs = 15000 } = {}) {
+  const script = [command, ...args].map(shellQuote).join(" ");
+  return runScript(cwd, script, {
+    timeoutMs,
+    title: `harness: ${command} ${args.join(" ")}`.trim(),
+  });
+}
+
+// Run an arbitrary shell script (one or more newline-separated lines) and return
+// its captured output. Callers that just need one command should use
+// `runCommand`, which quotes its arguments; a caller reaching for this one is
+// responsible for its own quoting.
+//
+// ⚠️ Keep every line under ~1000 characters. The PTY is in canonical mode, where
+// the terminal driver's per-line input limit (MAX_CANON, typically 4096 bytes)
+// silently truncates longer lines. Chunk long payloads across several lines —
+// see `writeTextFile` in remotefs.js.
+export async function runScript(cwd, script, { timeoutMs = 15000, title } = {}) {
   const createRes = await fetch(`${apiBase()}/pty`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -54,24 +72,24 @@ export async function runCommand(cwd, command, args = [], { timeoutMs = 15000 } 
       command: "sh",
       args: [],
       cwd,
-      title: `harness: ${command} ${args.join(" ")}`.trim(),
+      title: title || "harness: script",
     }),
   });
   if (!createRes.ok) {
-    throw new Error(`pty create failed (${createRes.status}): ${command} ${args.join(" ")}`);
+    throw new Error(`pty create failed (${createRes.status})`);
   }
   const created = await createRes.json();
   const ptyId = created?.data?.id ?? created?.id;
   if (!ptyId) throw new Error("pty create response had no id");
 
   try {
-    return await runInShell(ptyId, command, args, timeoutMs);
+    return await runInShell(ptyId, script, timeoutMs);
   } finally {
     fetch(`${apiBase()}/pty/${ptyId}`, { method: "DELETE", headers: authHeaders() }).catch(() => {});
   }
 }
 
-async function runInShell(ptyId, command, args, timeoutMs) {
+async function runInShell(ptyId, script, timeoutMs) {
   const tokenRes = await fetch(`${apiBase()}/pty/${ptyId}/connect-token`, {
     method: "POST",
     headers: { ...authHeaders(), [TICKET_HEADER]: "1" },
@@ -86,12 +104,14 @@ async function runInShell(ptyId, command, args, timeoutMs) {
   const nonce = Math.random().toString(36).slice(2, 10);
   const startMarker = `__OC_S${nonce}__`;
   const endMarker = `__OC_E${nonce}__`;
-  const cmdLine = [command, ...args].map(shellQuote).join(" ");
   // `stty -echo` and the empty prompts keep the shell's own echo and PS1/PS2 out of
   // the captured region; without them the output carries stray prompt characters.
+  // The markers are on their own lines so a multi-line script drops in verbatim.
   const input =
-    `stty -echo 2>/dev/null; PS1=''; PS2=''; ` +
-    `printf '\\n__OC%sS${nonce}__\\n' _; ${cmdLine}; printf '\\n__OC%sE${nonce}__\\n' _\n`;
+    `stty -echo 2>/dev/null; PS1=''; PS2=''\n` +
+    `printf '\\n__OC%sS${nonce}__\\n' _\n` +
+    `${script}\n` +
+    `printf '\\n__OC%sE${nonce}__\\n' _\n`;
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl(`/pty/${ptyId}/connect?ticket=${encodeURIComponent(ticket)}`));

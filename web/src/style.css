@@ -2973,8 +2973,15 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   color: var(--fg);
   font-size: 12px;
+}
+
+/* The section's action button must not be squeezed into a three-line stack by
+   a long label next to it. */
+.agents-section-head > span {
+  min-width: 0;
 }
 
 .agents-add {
@@ -2984,6 +2991,8 @@ button:hover {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 3px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .agents-add:hover {
@@ -3075,6 +3084,9 @@ button:hover {
   flex-direction: column;
   gap: 4px;
   flex: 1;
+  /* Without this a wide <select> (model names are long) refuses to shrink and
+     pushes the rest of the row out of the panel. */
+  min-width: 0;
 }
 
 .agents-field-label {

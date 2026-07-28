@@ -30,3 +30,5 @@ of what's already wired up and a known gotcha to re-verify against `/doc`.
 - `opencode.js`: Reactive store for OpenCode V2 API surface (`/api/session`, `/api/prompt`, `/api/event`, `/api/model`, `/api/agent`).
 - `projects.js`: Reactive store managing OpenCode sessions and active selection.
 - `coder.js`: Integration for managing Coder cloud workspaces.
+- `subagents.js`: Create/edit/delete sub-agent definitions. V2 exposes agents read-only, so these are markdown files under `.opencode/agent/` — see "Agent definitions live on disk" in `docs/opencode-api.md`.
+- `pty.js` / `remotefs.js`: One-shot remote commands, and file read/write on the server built on them. The only write path there is — V2 has no fs-write or config route.

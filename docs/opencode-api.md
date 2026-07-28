@@ -103,7 +103,7 @@ this frontend or flagged as a known gap.
 | GET | `/api/health` | Wired: `initOpenCode` |
 | GET | `/api/location` | Not wired. Returns current server's `{directory, project: {id, directory}}` — the closest thing to project metadata (no listing endpoint) |
 | GET | `/api/model` | Wired: `loadModels`. Returns `Model.Info[]` |
-| GET | `/api/agent` | Wired: `loadAgents`. Filter `mode !== "subagent"` and `!hidden` |
+| GET | `/api/agent` | Wired: `loadAgents`. Read-only — see "Agent definitions live on disk" below |
 | GET | `/api/command` | Wired: `loadCommands` |
 | GET | `/api/skill` | Wired: `loadSkills` |
 | GET | `/api/reference` | Not wired |
@@ -182,6 +182,52 @@ Envelope: `{id: "evt_...", type: string, data: object, metadata?, durable?, loca
 - `file.edited` / `file.watcher.updated` — not wired
 - `integration.updated` / `integration.connection.updated` — not wired; would let the providers dialog auto-refresh
 - `plugin.added`, `catalog.updated`, `project.directories.updated`, `models-dev.refreshed` — not wired
+
+## Agent definitions live on disk, not behind an API
+
+`GET /api/agent` is the *only* agent route: there is no create/update/delete,
+and — unlike V1, which has `GET`/`PATCH /config` — the V2 surface has no
+`/api/config` either. So a sub-agent can only be **defined** by writing the file
+opencode's config loader reads. That is what `stores/subagents.js` does, through
+the PTY runner (`stores/remotefs.js`), since there is no fs-write route.
+
+Verified against a live `opencode2 serve` (agent file written, server restarted,
+`GET /api/agent` re-read):
+
+| Scope | Path |
+|---|---|
+| Project | `<directory>/.opencode/agent/<name>.md` (or `.opencode/agents/`) |
+| Global | `~/.config/opencode/agent/<name>.md` (or `agent**s**/`) |
+
+```markdown
+---
+description: Reviews PRs for style violations.
+mode: subagent
+model: anthropic/claude-sonnet-4-6
+variant: high
+temperature: 0.2
+tools:
+  write: false
+---
+You are a strict PR reviewer…
+```
+
+- **The body is the prompt.** It surfaces as `AgentV2.Info.system`. Never also
+  put a `prompt:` key in the frontmatter.
+- **Allowed frontmatter keys** are exactly `name, model, variant, description,
+  mode, hidden, color, steps, options, permission, disable, temperature,
+  top_p`. Any other key is silently swallowed into `options`.
+- **`model` is a `providerID/modelID` string** and **`variant` is the
+  reasoning-effort preset** — the pair comes back as
+  `model: {id, providerID, variant}`. Variant names are per-model; the catalog
+  reports them in `Model.Info.variants` (as `{id, headers, body}` objects on
+  some builds, bare strings on others).
+- `temperature` lands in `request.body.temperature`; `tools: {name: false}`
+  lands in `permissions` as a deny rule.
+- **Config is read once at startup and is NOT hot-reloaded.** A file written
+  while the server is up does not become a live agent until it restarts —
+  confirmed by adding a file and re-reading `/api/agent`. The sub-agents dialog
+  says so, and marks definitions the roster hasn't loaded as "restart to apply".
 
 ## Known gotchas
 
