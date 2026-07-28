@@ -33,11 +33,9 @@
 @import "./styles/connect-dialog.css"; /* ConnectDialog and its sidebar trigger */
 @import "./styles/subagents-dialog.css"; /* SubagentsDialog: agent definition editor */
 @import "./styles/steer.css"; /* Queued steering/follow-up pills in the composer */
-@import "./styles/extension-ui.css"; /* Notify toasts and extension dialogs */
-@import "./styles/message-actions.css"; /* MessageView hover actions and the markdown code-copy button */
+@import "./styles/code-copy.css"; /* The copy button in rendered markdown code blocks */
 @import "./styles/diff.css"; /* edit/write tool calls rendered as diffs */
 @import "./styles/command-palette.css"; /* CommandPalette */
 @import "./styles/confirm-dialog.css"; /* ConfirmDialog (reuses the connect-dialog chrome above) */
-@import "./styles/sidebar-filter.css"; /* Sidebar chat-history filter input */
-@import "./styles/find-bar.css"; /* FindBar, its highlight registration, and palette content-search rows */
+@import "./styles/find-bar.css"; /* FindBar and its ::highlight() registration */
 @import "./styles/git-branch-badge.css"; /* Git branch badge in ChatHeader */

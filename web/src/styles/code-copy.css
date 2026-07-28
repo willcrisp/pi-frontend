@@ -1,0 +1,58 @@
+/* --- markdown code-block copy button ------------------------------------- */
+
+/* Was `message-actions.css`, which also carried a `.msg-actions` hover
+   toolbar, a `.msg-compaction` divider and a `.handover-continue` button.
+   None of those had a component behind them — MessageView renders its own
+   scoped `.msg-revert` instead — so they were removed and the file renamed to
+   what it actually styles. */
+
+/* The containing block for anything a message positions against itself. */
+.msg {
+  position: relative;
+}
+
+/* The button renderMarkdown() injects into every fenced code block; the click
+   is delegated from MessageView/SubagentView via lib/codeCopy.js. Both labels
+   are pure CSS, so the handler only has to toggle `.copied`. */
+.markdown pre {
+  position: relative;
+}
+
+.markdown pre .code-copy {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 1;
+}
+
+.markdown pre:hover .code-copy {
+  opacity: 1;
+}
+
+.markdown pre .code-copy::before {
+  content: "copy";
+}
+
+.markdown pre .code-copy.copied {
+  color: #4ade80;
+}
+
+.markdown pre .code-copy.copied::before {
+  content: "copied";
+}
+
+/* the data-lang label sits where the copy button appears — nudge it left
+   (base rule in messages.css) */
+.markdown pre[data-lang]::before {
+  right: 52px;
+}

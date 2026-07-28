@@ -62,6 +62,34 @@ test.describe("FindBar", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator(".find-bar")).toHaveCount(0);
   });
+
+  // The highlight names in find-bar.css drifted from the ones FindBar.vue
+  // registers (`pi-` vs `oc-`) and nothing caught it: an unmatched highlight
+  // name throws no error and logs no warning — the matches simply never get
+  // coloured, while the count keeps working. Assert the two agree.
+  test("registers highlights under names the stylesheet actually targets", async ({ page }) => {
+    await page.keyboard.press("Control+Shift+F");
+    await page.locator(".find-input").fill("const");
+    await expect(page.locator(".find-count")).toContainText("/");
+
+    const { registered, styled } = await page.evaluate(() => ({
+      registered: [...CSS.highlights.keys()],
+      styled: [...document.styleSheets]
+        .flatMap((sheet) => {
+          try {
+            return [...sheet.cssRules];
+          } catch {
+            return []; // cross-origin sheet
+          }
+        })
+        .map((rule) => (rule.selectorText || "").match(/::highlight\(([^)]+)\)/))
+        .filter(Boolean)
+        .map((m) => m[1].trim()),
+    }));
+
+    expect(registered.length).toBeGreaterThan(0);
+    for (const name of registered) expect(styled).toContain(name);
+  });
 });
 
 test.describe("ShortcutsDialog", () => {

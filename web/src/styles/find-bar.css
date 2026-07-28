@@ -103,44 +103,19 @@
    built with a TreeWalker, deliberately not injected DOM wrapper nodes (the
    message column contains v-html markdown regions Vue rewrites on every
    streaming update, which would clobber wrapper elements). Same blue as
-   --accent, tinted for the full match set and solid for the current one. */
-::highlight(pi-find) {
+   --accent, tinted for the full match set and solid for the current one.
+
+   ⚠️ These names must match HL_ALL / HL_CURRENT in FindBar.vue exactly. They
+   didn't for a while — the CSS kept the pre-rename `pi-` prefix while the
+   component registered `oc-`, so matches were counted and scrolled to but
+   never actually highlighted. A highlight name matching nothing fails
+   silently; there is no warning to notice. */
+::highlight(oc-find) {
   background-color: rgba(122, 162, 247, 0.28);
   color: inherit;
 }
 
-::highlight(pi-find-current) {
+::highlight(oc-find-current) {
   background-color: rgba(122, 162, 247, 0.75);
   color: var(--bg);
-}
-
-/* Command palette: content-search ("message" kind) result rows.
-   Appended below the existing .palette-kind / .palette-label / .palette-hint
-   rules in style.css (~line 3033-3130). Reuses those classes as-is for the
-   title row; adds a stacked layout + a second line for the match snippet. */
-
-.palette-list li.message {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.palette-message-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.palette-kind.message {
-  color: var(--dim);
-}
-
-.palette-snippet {
-  color: var(--dim);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-left: 34px; /* roughly align under the label, past the kind badge */
 }
