@@ -1,0 +1,171 @@
+/* header */
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+header .wordmark {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+}
+
+.header-title > span {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.header-title-content {
+  display: inline-flex !important;
+  align-items: center;
+}
+
+/* Trail back out of a sub-agent's session. Sub-agent sessions are absent from
+   the sidebar by design, so this is the only way back to the parent chat —
+   it sits next to the token counters, sharing the centre of the header. */
+.session-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.breadcrumb-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.breadcrumb-link:hover {
+  color: var(--fg);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.breadcrumb-sep {
+  color: var(--dim);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* The leaf is where you already are — named, but not offered as a link. */
+.breadcrumb-current {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--msg-subagent);
+}
+
+.dumb-zone-brain {
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  animation: dumb-zone-flicker 0.8s steps(2, end) infinite alternate;
+}
+
+@keyframes dumb-zone-flicker {
+  from {
+    transform: translateY(1px) rotate(-3deg);
+  }
+  to {
+    transform: translateY(-1px) rotate(3deg);
+  }
+}
+
+/* Replace the changing token value from below, making it roll upward rather
+   than snap to the next reading. */
+.token-roll-enter-active,
+.token-roll-leave-active {
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+
+.token-roll-enter-from {
+  opacity: 0;
+  transform: translateY(75%);
+}
+
+.token-roll-leave-to {
+  opacity: 0;
+  transform: translateY(-75%);
+}
+
+.header-title:hover > span {
+  color: var(--fg);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex-shrink: 0;
+}
+
+.dot.connected {
+  background: #4ade80;
+}
+
+.dot.streaming {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}

@@ -3,6 +3,7 @@
 // palette has results instantly; refresh runs in the background on demand.
 import { reactive } from "vue";
 import { runCommand } from "./pty.js";
+import { readJSON } from "../lib/storage.js";
 
 const CACHE_KEY = "opencode-web:files-cache"; // { [directory]: { files, fetchedAt } }
 const MAX_CACHED_FILES = 20000;
@@ -12,19 +13,15 @@ export const fileSearchStore = reactive({
   byDirectory: {},
 });
 
-function loadCache() {
-  try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
+const loadCache = () => readJSON(CACHE_KEY, {}) || {};
 
+// Not lib/storage.js#writeJSON: a file list for a large tree is the one thing
+// here big enough to blow the quota, and this recovers by dropping the whole
+// cache rather than silently keeping a stale one.
 function saveCache(cache) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
   } catch {
-    // quota exceeded on a huge tree — drop other directories and retry once
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify({}));
     } catch {}

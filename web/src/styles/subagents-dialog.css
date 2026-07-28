@@ -1,0 +1,271 @@
+/* agent definitions: dialog */
+.agents-panel {
+  width: 560px;
+}
+
+.agents-head-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agents-back {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.agents-back:hover {
+  color: var(--fg);
+}
+
+.agents-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agents-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+/* The section's action button must not be squeezed into a three-line stack by
+   a long label next to it. */
+.agents-section-head > span {
+  min-width: 0;
+}
+
+.agents-add {
+  font-size: 11px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.agents-add:hover {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.agents-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agents-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.agents-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agents-empty {
+  color: var(--dim);
+  cursor: default;
+}
+
+.agents-empty:hover {
+  background: transparent;
+}
+
+.agents-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.agents-name {
+  color: var(--msg-subagent);
+}
+
+.agents-desc {
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.agents-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.agents-chip {
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.agents-warn {
+  font-size: 10.5px;
+  color: var(--error);
+  white-space: nowrap;
+}
+
+.agents-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agents-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  /* Without this a wide <select> (model names are long) refuses to shrink and
+     pushes the rest of the row out of the panel. */
+  min-width: 0;
+}
+
+.agents-field-label {
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agents-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.agents-field input,
+.agents-field select,
+.agents-field textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  padding: 7px 9px;
+  outline: none;
+  resize: vertical;
+}
+
+.agents-field input:focus,
+.agents-field select:focus,
+.agents-field textarea:focus {
+  border-color: #2c3540;
+}
+
+.agents-field select:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
+.agents-field-error {
+  color: var(--error);
+  font-size: 11px;
+  margin-top: -6px;
+}
+
+.agents-hint {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.agents-tools-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+
+.agents-tools-input:focus-within {
+  border-color: #2c3540;
+}
+
+.agents-tools-input input {
+  flex: 1;
+  min-width: 80px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  padding: 2px;
+  outline: none;
+}
+
+.agents-tool-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--fg);
+  background: var(--bg-alt, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 4px 2px 9px;
+  white-space: nowrap;
+}
+
+.agents-tool-chip button {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.agents-tool-chip button:hover {
+  color: var(--fg);
+}
+
+.agents-textarea {
+  min-height: 56px;
+}
+
+.agents-mono {
+  font-family: var(--mono);
+}
+
+.agents-raw {
+  min-height: 220px;
+}
+
+.agents-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.agents-danger {
+  color: var(--error);
+}

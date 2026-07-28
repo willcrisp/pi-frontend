@@ -5,7 +5,7 @@
 // POST /api/integration/{id}/connect/key. There is no list-of-credentials
 // endpoint — connection status lives inline on each integration.
 import { reactive } from "vue";
-import { apiBase, authHeaders } from "./ssh.js";
+import { apiGet, apiPost, apiDelete, unwrap } from "../lib/api.js";
 
 export const providersStore = reactive({
   integrations: [], // [{ id, name, methods, connections }]
@@ -18,17 +18,11 @@ export const providersStore = reactive({
   oauthAttempt: null, // { id, integrationID, url, userCode, instructions, busy }
 });
 
-function unwrap(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && Array.isArray(payload.data)) return payload.data;
-  return [];
-}
-
 export async function loadIntegrations() {
   providersStore.loading = true;
   providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/integration`, { headers: authHeaders() });
+    const res = await apiGet("/integration");
     if (res.ok) {
       providersStore.integrations = unwrap(await res.json());
     } else {
@@ -49,11 +43,7 @@ export async function connectKey(integrationID, key, label) {
   try {
     const body = { key };
     if (label) body.label = label;
-    const res = await fetch(`${apiBase()}/integration/${integrationID}/connect/key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
-    });
+    const res = await apiPost(`/integration/${integrationID}/connect/key`, body);
     if (!res.ok) {
       providersStore.error = `Failed to add credential (${res.status})`;
       return false;
@@ -93,11 +83,7 @@ function readAttempt(payload, integrationID) {
 export async function startOAuth(integrationID) {
   providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/integration/${integrationID}/connect/oauth`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: "{}",
-    });
+    const res = await apiPost(`/integration/${integrationID}/connect/oauth`, {});
     if (!res.ok) {
       providersStore.error = `Failed to start OAuth (${res.status})`;
       return false;
@@ -122,11 +108,7 @@ export async function completeOAuth(code) {
   attempt.busy = true;
   providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/integration/attempt/${attempt.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(code ? { code } : {}),
-    });
+    const res = await apiPost(`/integration/attempt/${attempt.id}/complete`, code ? { code } : {});
     if (!res.ok) {
       providersStore.error = `Failed to complete OAuth (${res.status})`;
       return false;
@@ -150,10 +132,7 @@ export async function cancelOAuth() {
   providersStore.oauthAttempt = null;
   if (!attempt) return;
   try {
-    await fetch(`${apiBase()}/integration/attempt/${attempt.id}`, {
-      method: "DELETE",
-      headers: authHeaders(),
-    });
+    await apiDelete(`/integration/attempt/${attempt.id}`);
   } catch {
     /* best-effort */
   }
@@ -164,10 +143,7 @@ export async function cancelOAuth() {
 export async function removeCredential(credentialID) {
   providersStore.error = null;
   try {
-    const res = await fetch(`${apiBase()}/credential/${credentialID}`, {
-      method: "DELETE",
-      headers: authHeaders(),
-    });
+    const res = await apiDelete(`/credential/${credentialID}`);
     if (!res.ok) {
       providersStore.error = `Failed to remove credential (${res.status})`;
       return;

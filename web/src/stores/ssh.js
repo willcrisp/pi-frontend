@@ -1,5 +1,6 @@
 // OpenCode V2 Connection Store
 import { reactive } from "vue";
+import { readNumber, readString, writeString } from "../lib/storage.js";
 
 const PORT_KEY = "opencode-web:port";
 const MODE_KEY = "opencode-web:mode";
@@ -7,14 +8,14 @@ const USERNAME_KEY = "opencode-web:username";
 const PASSWORD_KEY = "opencode-web:password";
 
 export const connectionStore = reactive({
-  port: Number(localStorage.getItem(PORT_KEY)) || 4096,
-  mode: localStorage.getItem(MODE_KEY) || "local", // "local" | "remote"
+  port: readNumber(PORT_KEY, 4096),
+  mode: readString(MODE_KEY, "local"), // "local" | "remote"
   status: "unknown", // "unknown" | "connecting" | "connected" | "failed"
   testing: false,
   testResult: null, // { ok, message } | null
   error: "",
-  username: localStorage.getItem(USERNAME_KEY) || "opencode",
-  password: localStorage.getItem(PASSWORD_KEY) || "",
+  username: readString(USERNAME_KEY, "opencode"),
+  password: readString(PASSWORD_KEY, ""),
 });
 
 export function apiBase() {
@@ -37,10 +38,15 @@ export function authHeaders() {
 export function setCredentials(username, password) {
   connectionStore.username = username || "opencode";
   connectionStore.password = password || "";
-  localStorage.setItem(USERNAME_KEY, connectionStore.username);
-  localStorage.setItem(PASSWORD_KEY, connectionStore.password);
+  writeString(USERNAME_KEY, connectionStore.username);
+  writeString(PASSWORD_KEY, connectionStore.password);
 }
 
+// Probe a target BEFORE committing to it — the connect dialog calls this with a
+// port and credentials the user has typed but not saved. That is why it builds
+// the URL and headers by hand instead of going through lib/api.js: apiBase() and
+// authHeaders() read the *current* connection, which is precisely not what is
+// being tested here.
 export async function testConnection(port, username, password) {
   connectionStore.testing = true;
   connectionStore.testResult = null;
@@ -69,11 +75,6 @@ export async function testConnection(port, username, password) {
 export function setConnection(port, mode) {
   connectionStore.port = Number(port) || 4096;
   if (mode) connectionStore.mode = mode;
-  localStorage.setItem(PORT_KEY, String(connectionStore.port));
-  localStorage.setItem(MODE_KEY, connectionStore.mode);
+  writeString(PORT_KEY, connectionStore.port);
+  writeString(MODE_KEY, connectionStore.mode);
 }
-
-// --- Back-compat aliases for SshPopover.vue (Phase B rewires it and drops these) ---
-export const sshStore = connectionStore; // alias (targetUrl no longer used)
-export const testTargetUrl = (url) => testConnection(url); // legacy shim
-export const setTargetUrl = (url) => setConnection(url);

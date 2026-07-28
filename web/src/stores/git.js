@@ -8,6 +8,7 @@
 // a header badge is enough to do it — so no checkout helper lives here.
 import { reactive } from "vue";
 import { runCommand } from "./pty.js";
+import { readJSON, writeJSON } from "../lib/storage.js";
 
 const CACHE_KEY = "opencode-web:git-cache"; // { [directory]: { current, branches, fetchedAt } }
 
@@ -16,17 +17,7 @@ export const gitStore = reactive({
   byDirectory: {},
 });
 
-function loadCache() {
-  try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveCache(cache) {
-  localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-}
+const loadCache = () => readJSON(CACHE_KEY, {}) || {};
 
 function entry(directory) {
   if (!gitStore.byDirectory[directory]) {
@@ -77,7 +68,7 @@ export function fetchBranches(directory) {
 
       const cache = loadCache();
       cache[directory] = { current: state.current, branches: state.branches, fetchedAt: Date.now() };
-      saveCache(cache);
+      writeJSON(CACHE_KEY, cache);
     })
     .catch((err) => {
       state.loading = false;

@@ -1,0 +1,42 @@
+/* tool calls */
+.tool {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.tool summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  color: var(--dim);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool summary .tool-name {
+  color: var(--msg-tool);
+}
+
+.tool.error summary .tool-name {
+  color: var(--msg-tool-error);
+}
+
+.tool pre {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.tool .running {
+  color: var(--accent);
+}

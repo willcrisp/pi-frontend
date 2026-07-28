@@ -2,19 +2,11 @@
 // (ModelFilterPopover.vue) and the composer's model picker: hidden models are
 // dropped from the picker and persisted in localStorage.
 import { ref } from "vue";
+import { readArray, writeJSON } from "../lib/storage.js";
 
 const HIDDEN_MODELS_KEY = "opencode-web:hiddenModels";
 
-function loadHiddenModels() {
-  try {
-    const list = JSON.parse(localStorage.getItem(HIDDEN_MODELS_KEY));
-    return new Set(Array.isArray(list) ? list : []);
-  } catch {
-    return new Set();
-  }
-}
-
-export const hiddenModels = ref(loadHiddenModels());
+export const hiddenModels = ref(new Set(readArray(HIDDEN_MODELS_KEY)));
 
 export function modelKey(m) {
   return `${m.providerID}:${m.modelID}`;
@@ -26,7 +18,5 @@ export function toggleModelHidden(m) {
   if (next.has(key)) next.delete(key);
   else next.add(key);
   hiddenModels.value = next;
-  try {
-    localStorage.setItem(HIDDEN_MODELS_KEY, JSON.stringify([...next]));
-  } catch {}
+  writeJSON(HIDDEN_MODELS_KEY, [...next]);
 }

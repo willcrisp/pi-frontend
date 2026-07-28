@@ -1,0 +1,353 @@
+/* sidebar */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--dim);
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+  /* SVG children are flat line icons; flex keeps them optically centred the
+     same way the text glyphs (+, ⟳) already are. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn svg {
+  display: block;
+}
+
+.icon-btn:hover {
+  color: var(--fg);
+  border-color: #2c3540;
+}
+
+.add-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.add-project-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.add-project-form input:focus {
+  border-color: #2c3540;
+}
+
+.add-project-form button {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.add-project-error {
+  color: var(--error);
+  font-size: 11.5px;
+}
+
+.path-input-wrap {
+  position: relative;
+}
+
+.path-input-wrap input {
+  width: 100%;
+}
+
+.path-suggestions {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.path-suggestions li {
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.path-suggestions li.active,
+.path-suggestions li:hover {
+  background: var(--border);
+}
+
+.project-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--dim);
+  border-left: 2px solid transparent;
+}
+
+.project-row:hover {
+  color: var(--fg);
+}
+
+.project-row.active {
+  color: var(--fg);
+  background: rgba(122, 162, 247, 0.08);
+  border-left-color: var(--accent);
+}
+
+.project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-collapse-icon {
+  flex: none;
+  width: 10px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.new-chat-btn {
+  flex: none;
+  background: none;
+  border: 0;
+  color: #4ade80;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.new-chat-btn:hover {
+  color: #86efac;
+}
+
+.refresh-chats-btn {
+  flex: none;
+  background: none;
+  border: 0;
+  color: #7aa2f7;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 1px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.project-row:hover .refresh-chats-btn {
+  opacity: 1;
+}
+
+.refresh-chats-btn:hover {
+  color: #e0c068;
+}
+
+.remove-btn {
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.project-row:hover .remove-btn {
+  opacity: 1;
+}
+
+.chat-history {
+  padding-bottom: 4px;
+}
+
+.chat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px 5px 24px;
+  color: var(--dim);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.chat-row:hover {
+  color: var(--fg);
+}
+
+.chat-row.active {
+  color: var(--accent);
+}
+
+.chat-row.new-chat {
+  color: var(--dim);
+  font-style: italic;
+}
+
+.chat-row.dim {
+  cursor: default;
+  color: var(--dim);
+  font-style: italic;
+}
+
+.chat-row.load-more {
+  color: var(--accent);
+  justify-content: flex-start;
+}
+
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-time {
+  flex-shrink: 0;
+  /* The title takes all the slack, so every timestamp lands on the same
+     right-hand edge instead of trailing its own title. */
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* Per-chat agent status in the sidebar (driven by sessionStatus() in
+   opencode.js): amber pulse = agent working, green = the turn ended while the
+   user was in another chat and the reply hasn't been read. Same colors as the
+   favicon working/ready states. */
+.status-dot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.status-dot.working {
+  background: #fbbf24;
+  animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.status-dot.unread {
+  background: #22c55e;
+}
+
+@keyframes status-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.archive-toggle {
+  font-size: 11px;
+}
+
+.archive-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.archive-btn {
+  opacity: 0;
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.chat-row:hover .archive-btn,
+.project-row:hover .archive-btn {
+  opacity: 1;
+}
+
+/* "show N more…" / "show less" expander under a project's recent chats */
+.chat-row.show-more {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  font-style: italic;
+}
+
+.chat-row.show-more:hover {
+  color: var(--fg);
+}
+
+.sidebar-empty {
+  padding: 16px 12px;
+  color: var(--dim);
+  font-style: italic;
+}

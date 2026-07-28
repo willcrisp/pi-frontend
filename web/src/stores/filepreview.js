@@ -2,7 +2,7 @@
 // grep…), and following one up meant leaving the app. GET /api/fs/read/*
 // returns the contents, so a path in a tool call can open inline instead.
 import { reactive } from "vue";
-import { apiBase, authHeaders } from "./ssh.js";
+import { apiGet } from "../lib/api.js";
 import { activeSessionDirectory } from "./projects.js";
 
 export const previewStore = reactive({
@@ -38,12 +38,12 @@ export async function openPreview(path) {
   const params = new URLSearchParams();
   if (directory) params.set("location[directory]", directory);
   const rel = relativeTo(directory, path);
-  const url = `${apiBase()}/fs/read/${rel.split("/").map(encodeURIComponent).join("/")}${
+  const path_ = `/fs/read/${rel.split("/").map(encodeURIComponent).join("/")}${
     params.toString() ? `?${params}` : ""
   }`;
 
   try {
-    const res = await fetch(url, { headers: authHeaders() });
+    const res = await apiGet(path_);
     if (!res.ok) {
       previewStore.error = `Could not read file (${res.status})`;
       return;

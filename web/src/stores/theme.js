@@ -12,6 +12,7 @@
 //   contentWidth / setContentWidth(px) / CONTENT_WIDTH_MIN / _MAX — max-width of
 //     the message list / composer column
 import { reactive, watch } from "vue";
+import { readJSON, writeJSON, readNumber, writeString } from "../lib/storage.js";
 
 // Color profile: a user-editable color for each type of message/content block
 // that can appear in the chat. Each entry maps to a CSS custom property that
@@ -60,22 +61,13 @@ export const COLOR_FIELDS = [
 
 const STORAGE_KEY = "pi-web:color-profile";
 
-function loadStored() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
 function defaults() {
   return Object.fromEntries(COLOR_FIELDS.map((f) => [f.key, f.default]));
 }
 
 // Reactive palette: defaults overlaid with any persisted overrides. Unknown
 // keys in storage are ignored; missing keys fall back to their default.
-const stored = loadStored();
+const stored = readJSON(STORAGE_KEY, {}) || {};
 export const colorProfile = reactive({ ...defaults(), ...pick(stored) });
 
 function pick(obj) {
@@ -107,130 +99,78 @@ watch(
   colorProfile,
   (p) => {
     apply(p);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...p }));
-    } catch {
-      // storage unavailable (private mode / quota) — in-memory only
-    }
+    writeJSON(STORAGE_KEY, { ...p });
   },
   { deep: true }
 );
 
-// Message font size (px), same persistence pattern as the color profile.
-const FONT_SIZE_KEY = "pi-web:font-size";
-const FONT_SIZE_DEFAULT = 14;
-const FONT_SIZE_MIN = 11;
-const FONT_SIZE_MAX = 22;
+// --- Numeric preferences -----------------------------------------------------
+// Font size, thinking-text scale and content width are the same thing three
+// times over: a clamped number, restored from localStorage, written to a CSS
+// custom property, and persisted on change. They are built from one factory so
+// the behaviour can't drift between them — and so adding a fourth is a single
+// entry below rather than another thirty-line copy.
+//
+// `prop` is the key on the returned reactive object, kept per-preference
+// because the popover binds `fontSize.px` and `thinkingSize.percent` by name.
+// `toCss` maps the stored number to the custom property's value.
+function numericPreference({ key, min, max, fallback, prop, cssVar, toCss }) {
+  const clamp = (value) => Math.min(max, Math.max(min, Math.round(value)));
 
-function loadStoredFontSize() {
-  const raw = Number(localStorage.getItem(FONT_SIZE_KEY));
-  return Number.isFinite(raw) && raw >= FONT_SIZE_MIN && raw <= FONT_SIZE_MAX
-    ? raw
-    : FONT_SIZE_DEFAULT;
+  const stored = readNumber(key, NaN);
+  const state = reactive({
+    [prop]: Number.isFinite(stored) && stored >= min && stored <= max ? stored : fallback,
+  });
+
+  const apply = (value) =>
+    document.documentElement.style.setProperty(cssVar, toCss ? toCss(value) : `${value}px`);
+
+  apply(state[prop]);
+  watch(
+    () => state[prop],
+    (value) => {
+      apply(value);
+      writeString(key, value);
+    }
+  );
+
+  return [state, (value) => (state[prop] = clamp(value))];
 }
 
-export const fontSize = reactive({ px: loadStoredFontSize() });
-
-function applyFontSize(px) {
-  document.documentElement.style.setProperty("--msg-font-size", `${px}px`);
-}
+// Message font size (px).
+export const [fontSize, setFontSize] = numericPreference({
+  key: "pi-web:font-size",
+  min: 11,
+  max: 22,
+  fallback: 14,
+  prop: "px",
+  cssVar: "--msg-font-size",
+});
 
 // Thinking text size as a percentage of the regular message size.
-const THINKING_SIZE_KEY = "pi-web:thinking-size";
 export const THINKING_SIZE_MIN = 60;
 export const THINKING_SIZE_MAX = 100;
-const THINKING_SIZE_DEFAULT = 85;
+export const [thinkingSize, setThinkingSize] = numericPreference({
+  key: "pi-web:thinking-size",
+  min: THINKING_SIZE_MIN,
+  max: THINKING_SIZE_MAX,
+  fallback: 85,
+  prop: "percent",
+  cssVar: "--thinking-font-scale",
+  toCss: (percent) => `${percent / 100}`,
+});
 
-function loadStoredThinkingSize() {
-  const raw = Number(localStorage.getItem(THINKING_SIZE_KEY));
-  return Number.isFinite(raw) && raw >= THINKING_SIZE_MIN && raw <= THINKING_SIZE_MAX
-    ? raw
-    : THINKING_SIZE_DEFAULT;
-}
-
-export const thinkingSize = reactive({ percent: loadStoredThinkingSize() });
-
-function applyThinkingSize(percent) {
-  document.documentElement.style.setProperty("--thinking-font-scale", `${percent / 100}`);
-}
-
-export function setThinkingSize(percent) {
-  thinkingSize.percent = Math.min(
-    THINKING_SIZE_MAX,
-    Math.max(THINKING_SIZE_MIN, Math.round(percent))
-  );
-}
-
-applyThinkingSize(thinkingSize.percent);
-watch(
-  () => thinkingSize.percent,
-  (percent) => {
-    applyThinkingSize(percent);
-    try {
-      localStorage.setItem(THINKING_SIZE_KEY, String(percent));
-    } catch {
-      // storage unavailable — in-memory only
-    }
-  }
-);
-
-export function setFontSize(px) {
-  fontSize.px = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, px));
-}
-
-applyFontSize(fontSize.px);
-watch(
-  () => fontSize.px,
-  (px) => {
-    applyFontSize(px);
-    try {
-      localStorage.setItem(FONT_SIZE_KEY, String(px));
-    } catch {
-      // storage unavailable — in-memory only
-    }
-  }
-);
-
-// Content width (px), same persistence pattern as font size. This is a
-// max-width applied to the message list / composer column — it only widens
-// the content, never forces it wider than the viewport, since max-width
-// still lets the (unset-width) block shrink to fit a narrow window.
-const CONTENT_WIDTH_KEY = "pi-web:content-width";
-const CONTENT_WIDTH_DEFAULT = 760;
+// Content width (px). This is a max-width applied to the message list /
+// composer column — it only widens the content, never forces it wider than the
+// viewport, since max-width still lets the (unset-width) block shrink to fit a
+// narrow window.
 export const CONTENT_WIDTH_MIN = 480;
 export const CONTENT_WIDTH_MAX = 1400;
-
-function loadStoredContentWidth() {
-  const raw = Number(localStorage.getItem(CONTENT_WIDTH_KEY));
-  return Number.isFinite(raw) &&
-    raw >= CONTENT_WIDTH_MIN &&
-    raw <= CONTENT_WIDTH_MAX
-    ? raw
-    : CONTENT_WIDTH_DEFAULT;
-}
-
-export const contentWidth = reactive({ px: loadStoredContentWidth() });
-
-function applyContentWidth(px) {
-  document.documentElement.style.setProperty("--content-width", `${px}px`);
-}
-
-export function setContentWidth(px) {
-  contentWidth.px = Math.min(
-    CONTENT_WIDTH_MAX,
-    Math.max(CONTENT_WIDTH_MIN, Math.round(px))
-  );
-}
-
-applyContentWidth(contentWidth.px);
-watch(
-  () => contentWidth.px,
-  (px) => {
-    applyContentWidth(px);
-    try {
-      localStorage.setItem(CONTENT_WIDTH_KEY, String(px));
-    } catch {
-      // storage unavailable — in-memory only
-    }
-  }
-);
+export const [contentWidth, setContentWidth] = numericPreference({
+  key: "pi-web:content-width",
+  min: CONTENT_WIDTH_MIN,
+  max: CONTENT_WIDTH_MAX,
+  fallback: 760,
+  prop: "px",
+  cssVar: "--content-width",
+});

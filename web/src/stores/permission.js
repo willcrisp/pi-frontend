@@ -3,7 +3,7 @@
 // queue here until the user responds. Without this, a tool call needing
 // approval hangs the UI indefinitely with no prompt.
 import { reactive } from "vue";
-import { apiBase, authHeaders } from "./ssh.js";
+import { apiGet, apiPost, apiDelete, unwrap } from "../lib/api.js";
 
 export const permissionStore = reactive({
   queue: [], // [{ id, sessionID, action, resources, save, metadata, source, receivedAt, error }]
@@ -42,13 +42,12 @@ export async function loadSavedPermissions() {
   permissionStore.savedLoading = true;
   permissionStore.savedError = null;
   try {
-    const res = await fetch(`${apiBase()}/permission/saved`, { headers: authHeaders() });
+    const res = await apiGet("/permission/saved");
     if (!res.ok) {
       permissionStore.savedError = `Failed to load saved rules (${res.status})`;
       return;
     }
-    const payload = await res.json();
-    permissionStore.saved = Array.isArray(payload) ? payload : payload?.data || [];
+    permissionStore.saved = unwrap(await res.json());
   } catch (err) {
     permissionStore.savedError = err.message || "Failed to load saved rules";
   } finally {
@@ -60,10 +59,7 @@ export async function loadSavedPermissions() {
 export async function revokeSavedPermission(id) {
   permissionStore.savedError = null;
   try {
-    const res = await fetch(`${apiBase()}/permission/saved/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      headers: authHeaders(),
-    });
+    const res = await apiDelete(`/permission/saved/${encodeURIComponent(id)}`);
     if (!res.ok) {
       permissionStore.savedError = `Failed to revoke rule (${res.status})`;
       return;
@@ -80,13 +76,9 @@ export async function respond(permissionID, reply) {
   if (!entry) return;
   entry.error = null;
   try {
-    const res = await fetch(
-      `${apiBase()}/session/${entry.sessionID}/permission/${permissionID}/reply`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ reply }),
-      }
+    const res = await apiPost(
+      `/session/${entry.sessionID}/permission/${permissionID}/reply`,
+      { reply }
     );
     if (res.ok) {
       permissionStore.queue = permissionStore.queue.filter((p) => p.id !== permissionID);

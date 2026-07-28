@@ -1,0 +1,77 @@
+/* --- edit/write tool calls as diffs (MessageView.vue) --------------------- */
+
+.tool-diff summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-path {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.diff-stat {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.diff-stat-add {
+  color: #4ade80;
+}
+
+.diff-stat-del {
+  color: var(--msg-tool-error, #f7768e);
+}
+
+.diff {
+  border-top: 1px solid var(--border);
+  max-height: 420px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.diff-line {
+  display: flex;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+}
+
+.diff-sign {
+  flex-shrink: 0;
+  width: 14px;
+  user-select: none;
+  color: var(--dim);
+}
+
+.diff-line.add {
+  background: rgba(74, 222, 128, 0.09);
+  color: #86efac;
+}
+
+.diff-line.add .diff-sign {
+  color: #4ade80;
+}
+
+.diff-line.del {
+  background: rgba(247, 118, 142, 0.09);
+  color: #fca5b4;
+}
+
+.diff-line.del .diff-sign {
+  color: var(--msg-tool-error, #f7768e);
+}
+
+.diff-skip {
+  padding: 2px 10px;
+  color: var(--dim);
+  font-style: italic;
+  user-select: none;
+}

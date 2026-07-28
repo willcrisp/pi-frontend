@@ -13,7 +13,23 @@ This file provides guidance when working with code in this repository.
   authenticated SSE stream). Markdown rendering and diffing are hand-rolled in
   `web/src/lib/` rather than pulled in — keep it that way unless there's a reason.
 - No test runner, linter, or formatter is configured. `npm run build` is the only
-  check there is.
+  check there is. Run it before you call a change done — a broken import or a
+  bad template is otherwise a runtime-only failure.
+
+## Where to make a change
+
+Files are kept small and single-purpose so a change lands in one of them. Start
+here rather than grepping the whole tree:
+
+| To change… | Edit |
+|---|---|
+| an SSE event's effect | one entry in `HANDLERS`, `stores/opencode/events.js` |
+| the request/response shape of a server call | the store that owns the route; the transport is `lib/api.js` |
+| how a prompt is sent, or its body shape | `stores/opencode/transport.js` |
+| a component's appearance | its partial in `web/src/styles/`, or its `<style scoped>` |
+| what the sidebar dot shows | `stores/opencode/activity.js` |
+| sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
+| a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands
 
@@ -42,14 +58,31 @@ rule: `/api/<port>/<rest>` is forwarded to `http://127.0.0.1:<port>/<rest>`, and
 WebSocket upgrades (the PTY connect stream) are forwarded too. The port is
 user-selectable at runtime and persisted in localStorage, defaulting to 4096.
 
-Consequently **every** call must be built from `web/src/stores/ssh.js`:
+Consequently every call needs the proxy prefix (`apiBase()` →`/api/<port>/api`)
+and the `Authorization: Basic …` header (`authHeaders()`) — the OpenAPI declares
+`security: []` on every operation, but an unauthenticated request still 401s. A
+fetch that hardcodes `/api/...` or omits the header fails at runtime only, and
+that was the source of real bugs more than once.
 
-- `apiBase()` → `/api/<port>/api`, the proxy prefix plus the server's own `/api`.
-- `authHeaders()` → the `Authorization: Basic …` header. The OpenAPI declares
-  `security: []` on every operation, but an unauthenticated request still 401s.
+**So don't call `fetch` directly — use `web/src/lib/api.js`.** It applies both,
+and takes server-relative paths:
 
-A fetch that hardcodes `/api/...` or omits `authHeaders()` will fail at runtime
-only — this has been the source of real bugs more than once.
+```js
+import { apiGet, apiPost, getJSON, unwrap, errorMessage } from "../lib/api.js";
+
+const res = await apiGet(`/session/${id}/message`);   // Response; you check .ok
+const list = unwrap(await res.json());                // {data:[…]} envelope off
+await apiPost(`/session/${id}/agent`, { agent });     // JSON body + headers
+const info = await getJSON(`/session/${id}`);         // parsed, or null on failure
+```
+
+The one legitimate exception is `pty.js`'s WebSocket URL, which can't go through
+a fetch wrapper and says so in a comment.
+
+Persisted UI state goes through `web/src/lib/storage.js` (`readJSON`/`writeJSON`/
+`readArray`/`readNumber`/`readString`/`writeString`) rather than `localStorage`
+directly — they never throw, which matters because a quota error in private mode
+would otherwise take down whatever was mid-write.
 
 ## API ground truth
 
@@ -73,7 +106,9 @@ Recurring shape traps, all documented in full in `docs/opencode-api.md`:
 
 - `POST /session/{id}/prompt` takes a `delivery: "steer" | "queue"` (defaults to
   `steer`) — that's the steering mechanism. Its body is flat on some builds and
-  wrapped under `prompt` on others; `postPrompt()` detects which.
+  wrapped under `prompt` on others; `postPrompt()` in
+  `stores/opencode/transport.js` detects which, and that file is the only place
+  this route is called from.
 - Agents are addressed by `id`, never display `name`.
 - A `question.v2.asked` is a *batch*: `{questions: [...]}`, answered with
   `{answers: string[][]}` keyed by option **label** (options carry no id).
@@ -86,25 +121,52 @@ Recurring shape traps, all documented in full in `docs/opencode-api.md`:
 `web/src/stores/*.js` are plain `reactive()` singletons (no Pinia). Components
 import them directly.
 
-**Core session flow**
+**Core session flow — `stores/opencode/`**
 
-- `opencode.js` (largest module): the OpenCode V2 client — session connect,
-  prompts, the SSE stream, model/agent/command/skill catalogs, message and token
-  accounting. Also owns two things worth knowing about:
-  - *Sub-agent child sessions.* A `subagent` tool call dispatches a child
-    session; `childForCall()` / `upsertChild()` stitch the child's transcript to
-    the dispatching call across three arrival paths (tool metadata, the child's
-    own `session.created`, history backfill), because no single signal is
-    reliable on every build.
-  - *Steering.* `sendSteer()` posts a prompt with `delivery: "steer"` into a run
-    that is already going; the agent reads it at its next turn. The server keeps
-    an admitted input out of the message list until it promotes it, so
-    `pendingSteers` tracks the gap and the composer's steer pill counts it.
-    `postPrompt()` also absorbs the flat-vs-wrapped prompt body divergence
-    between builds — don't collapse it to one shape.
-  - *Per-session activity.* `sessionStatus(id)` drives the sidebar's live dot
-    ("working" / "unread"), tracked for every session the stream mentions — not
-    just the one on screen — with unread persisted across reloads.
+The OpenCode V2 client. `stores/opencode.js` is a **facade** that re-exports the
+public surface; components import from there, so the internals can move without
+touching 20 call sites. Another store module should import the specific file it
+needs. Modules, in dependency order (they run strictly downward — there are no
+cycles, and introducing one is a design error, not a detail; if two modules need
+each other, the shared part belongs lower down):
+
+| Module | Owns |
+|---|---|
+| `state.js` | the `reactive()` store; imports no sibling, so anything may use it |
+| `transport.js` | `POST /session/:id/prompt` — delivery modes, flat-vs-wrapped body |
+| `children.js` | linking a `subagent` call to the child session it dispatched |
+| `models.js` | model + reasoning-effort selection and its persistence |
+| `context.js` | token/context accounting (local estimate vs server truth) |
+| `steer.js` | prompts admitted into a run already in flight |
+| `activity.js` | per-session running/unread — the sidebar dot |
+| `messages.js` | transcript load, REST→view normalization, sub-agent backfill |
+| `prompt.js` | sending a prompt that starts a turn |
+| `catalog.js` | model/agent/command/skill lists |
+| `session.js` | revert, interrupt, agent switch, compact |
+| `events.js` | the SSE reducer — one handler per event type |
+| `stream.js` | the SSE subscription and `initOpenCode()` |
+
+Three behaviours are worth knowing before changing any of them:
+
+- *Sub-agent child sessions* (`children.js`). A `subagent` tool call dispatches a
+  child session; the link between call and child arrives by up to three routes
+  (tool metadata, the child's own `session.created`, history backfill) because no
+  single signal is reliable on every build. All three feed `upsertChild()`.
+- *Steering* (`steer.js`). `sendSteer()` posts with `delivery: "steer"` into a run
+  that is already going; the agent reads it at its next turn. The server keeps an
+  admitted input out of the message list until it promotes it, so `pendingSteers`
+  tracks the gap and the composer's steer pill counts it.
+- *Per-session activity* (`activity.js`). `sessionStatus(id)` drives the sidebar's
+  live dot ("working" / "unread"), tracked for every session the stream mentions
+  — not just the one on screen — with unread persisted across reloads.
+
+**Adding or changing an SSE event** is a single entry in the `HANDLERS` table in
+`events.js`, keyed by event type. Each handler gets
+`{ type, props, child, messages, sessionID }`; **check `child`** — a non-null
+`child` means the event belongs to a sub-agent and must not touch session-wide
+state (streaming flag, model selection, usage), and write to `messages` rather
+than `opencodeStore.messages` so a child's transcript lands on the child.
+
 - `projects.js`: session list, active selection, and sidebar grouping by project
   directory. Archiving is client-side only (the server has no project entity).
 - `ssh.js`: connection settings, `apiBase()`, `authHeaders()` — see above.
@@ -142,21 +204,19 @@ applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
 **Components** — `components/chat/` (composer, message list/view, sub-agent
 cards, find bar), `components/dialogs/` (connect, permission, question,
 sub-agents, providers, command palette), `components/popovers/`,
-`components/sidebar/`. Most styling lives in the single global
-`web/src/style.css`; newer components add a small `<style scoped>` block on top.
-`lib/` holds the dependency-free `markdown.js`, `diff.js`.
+`components/sidebar/`.
 
-## Vestigial from the Pi era — don't treat as live
+**Shared helpers** — `lib/api.js` (every server call; see above), `lib/storage.js`
+(every persisted preference), plus the dependency-free `markdown.js`, `diff.js`,
+`fuzzy.js`.
 
-The repo pivoted from a Rust-server "pi" frontend to a direct OpenCode V2
-client, and a few files survived the cut without being wired up:
-
-- `stores/coder.js` + `components/popovers/CoderMenu.vue` — call `/api/coder/*`,
-  a route on the deleted Rust server. `CoderMenu.vue` is not mounted anywhere.
-- `lib/pageTitle.js` — imports `stores/pi.js`, which no longer exists, and
-  nothing imports it (its own comment claims `main.js` wires it; `main.js` does
-  not).
-- `docs/subagents.md` — a cookbook for pi-mono's sub-agent extension.
+**Styles** — `web/src/style.css` is now just an ordered list of `@import`s;
+the rules live in `web/src/styles/*.css`, one partial per feature, named after
+the component it styles. **The import order is load-bearing**: these are flat
+global rules with many equal-specificity selectors, so ties resolve by source
+order. Edit the partial that owns the component; a genuinely new component gets
+a new partial imported at the *end* of the list. Self-contained components are
+better off with a `<style scoped>` block, which wins over all of it.
 
 ## Docs map
 

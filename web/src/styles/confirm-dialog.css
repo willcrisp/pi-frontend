@@ -1,0 +1,25 @@
+/* --- Confirm/alert dialog (ConfirmDialog.vue) ---------------------------- */
+/* Reuses .connect-backdrop/.connect-panel/.connect-head/.connect-close/
+   .connect-actions/.connect-secondary from the connect-model dialog above —
+   only the bits unique to this dialog are defined here. */
+
+.confirm-panel {
+  width: 380px;
+}
+
+.confirm-message {
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.confirm-danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.confirm-danger:hover {
+  background: var(--error);
+  color: var(--bg);
+}

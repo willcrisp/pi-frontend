@@ -1,0 +1,44 @@
+:root {
+  --bg: #0c0e10;
+  --bg-raised: #121517;
+  --border: #1e2328;
+  --fg: #d7dade;
+  --dim: #7c848c;
+  --accent: #7aa2f7;
+  --error: #f7768e;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* color profile: per-message-type colors, overridden at runtime by theme.js
+     from the header color picker (persisted to localStorage). Defaults here
+     match the pre-existing hardcoded colors. */
+  --msg-user: var(--accent);
+  --msg-assistant: var(--fg);
+  --msg-thinking: var(--dim);
+  --msg-tool: var(--accent);
+  --msg-tool-error: var(--error);
+  --msg-subagent: #bb9af7;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+}

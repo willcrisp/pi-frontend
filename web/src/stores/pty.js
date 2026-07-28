@@ -19,10 +19,13 @@
 // create -> token -> upgrade round-trip, so it is never attachable. Instead the PTY
 // runs an interactive `sh`, which stays alive, and the command is written to its
 // stdin bracketed by sentinel markers that delimit the real output.
-import { apiBase, authHeaders } from "./ssh.js";
+import { apiBase } from "./ssh.js";
+import { apiPost, apiDelete } from "../lib/api.js";
 
 const TICKET_HEADER = "x-opencode-ticket";
 
+// The WebSocket upgrade can't go through lib/api.js (that layer is fetch-only),
+// so this is the one place that builds a URL from apiBase() by hand.
 function wsUrl(path) {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${apiBase()}${path}`;
@@ -65,15 +68,11 @@ export async function runCommand(cwd, command, args = [], { timeoutMs = 15000 } 
 // silently truncates longer lines. Chunk long payloads across several lines —
 // see `writeTextFile` in remotefs.js.
 export async function runScript(cwd, script, { timeoutMs = 15000, title } = {}) {
-  const createRes = await fetch(`${apiBase()}/pty`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({
-      command: "sh",
-      args: [],
-      cwd,
-      title: title || "harness: script",
-    }),
+  const createRes = await apiPost("/pty", {
+    command: "sh",
+    args: [],
+    cwd,
+    title: title || "harness: script",
   });
   if (!createRes.ok) {
     throw new Error(`pty create failed (${createRes.status})`);
@@ -85,14 +84,13 @@ export async function runScript(cwd, script, { timeoutMs = 15000, title } = {}) 
   try {
     return await runInShell(ptyId, script, timeoutMs);
   } finally {
-    fetch(`${apiBase()}/pty/${ptyId}`, { method: "DELETE", headers: authHeaders() }).catch(() => {});
+    apiDelete(`/pty/${ptyId}`).catch(() => {});
   }
 }
 
 async function runInShell(ptyId, script, timeoutMs) {
-  const tokenRes = await fetch(`${apiBase()}/pty/${ptyId}/connect-token`, {
-    method: "POST",
-    headers: { ...authHeaders(), [TICKET_HEADER]: "1" },
+  const tokenRes = await apiPost(`/pty/${ptyId}/connect-token`, undefined, {
+    headers: { [TICKET_HEADER]: "1" },
   });
   if (!tokenRes.ok) throw new Error(`pty connect-token failed (${tokenRes.status})`);
   const tokenBody = await tokenRes.json();

@@ -16,7 +16,7 @@
 // question in `questions` order, each entry a list of chosen labels (a list
 // because `multiple` questions accept several).
 import { reactive } from "vue";
-import { apiBase, authHeaders } from "./ssh.js";
+import { apiGet, apiPost, unwrap } from "../lib/api.js";
 
 export const questionStore = reactive({
   queue: [], // [{ id, sessionID, questions, tool, receivedAt, error, busy }]
@@ -105,11 +105,9 @@ export function handleQuestionEvent(event) {
 // shows, so reconcile against the server rather than trusting the stream.
 export async function loadPendingQuestions() {
   try {
-    const res = await fetch(`${apiBase()}/question/request`, { headers: authHeaders() });
+    const res = await apiGet("/question/request");
     if (!res.ok) return;
-    const payload = await res.json();
-    const pending = Array.isArray(payload) ? payload : payload?.data || [];
-    for (const request of pending) enqueue(request);
+    for (const request of unwrap(await res.json())) enqueue(request);
   } catch {
     // Best-effort reconciliation — the SSE stream is the primary path.
   }
@@ -135,14 +133,11 @@ async function send(requestID, path, body) {
   entry.busy = true;
   entry.error = null;
   try {
-    const init = { method: "POST", headers: { ...authHeaders() } };
-    if (body) {
-      init.headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-    const res = await fetch(
-      `${apiBase()}/session/${entry.sessionID}/question/${requestID}/${path}`,
-      init
+    // `reject` takes no body at all, so pass undefined rather than null —
+    // apiPost only sets a Content-Type when there is something to send.
+    const res = await apiPost(
+      `/session/${entry.sessionID}/question/${requestID}/${path}`,
+      body ?? undefined
     );
     if (res.ok) {
       dequeue(requestID);

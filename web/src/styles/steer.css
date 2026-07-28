@@ -1,0 +1,26 @@
+/* --- Queued steering/follow-up messages (Composer.vue) ------------------- */
+
+.queue-chips {
+  max-width: var(--content-width, 760px);
+  margin: 0 auto 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.queue-chip {
+  padding: 3px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-chip.follow-up {
+  border-style: dashed;
+}

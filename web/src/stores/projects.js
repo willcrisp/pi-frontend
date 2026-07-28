@@ -1,34 +1,19 @@
 // OpenCode V2 Projects & Sessions Store
 import { reactive } from "vue";
 import { connectToSession, opencodeStore, selectedModelRef } from "./opencode.js";
-import { apiBase, authHeaders } from "./ssh.js";
 import { fetchBranches } from "./git.js";
-
-// Unwrap the opencode2 `{ data: [...] }` list envelope.
-function unwrap(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && Array.isArray(payload.data)) return payload.data;
-  return [];
-}
+import { apiGet, apiPost, unwrap } from "../lib/api.js";
+import { readArray, writeJSON, readString, writeString } from "../lib/storage.js";
 
 const LAST_SESSION_KEY = "opencode-web:lastSessionId";
 const ARCHIVED_KEY = "opencode-web:archivedProjects"; // string[] of directories
-
-function loadArchived() {
-  try {
-    const list = JSON.parse(localStorage.getItem(ARCHIVED_KEY));
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
-}
 
 export const projectsStore = reactive({
   sessions: [], // [{ id, title, updatedAt, directory, parentID }]
   loadingSessions: false,
   // Client-only project archiving (by root directory) — the server has no
   // project entity to archive, so this just hides groups in the sidebar.
-  archivedDirectories: loadArchived(),
+  archivedDirectories: readArray(ARCHIVED_KEY),
   // child sessionID -> parent sessionID, recorded when the user drills into a
   // sub-agent from its card. The server reports the same link as `parentID`,
   // but only once the session list has caught up with a child it may have
@@ -44,15 +29,13 @@ export function setProjectArchived(directory, archived) {
   const list = projectsStore.archivedDirectories.filter((d) => d !== directory);
   if (archived) list.push(directory);
   projectsStore.archivedDirectories = list;
-  try {
-    localStorage.setItem(ARCHIVED_KEY, JSON.stringify(list));
-  } catch {}
+  writeJSON(ARCHIVED_KEY, list);
 }
 
 export async function fetchSessions() {
   projectsStore.loadingSessions = true;
   try {
-    const res = await fetch(`${apiBase()}/session`, { headers: authHeaders() });
+    const res = await apiGet("/session");
     if (res.ok) {
       const list = unwrap(await res.json());
       projectsStore.sessions = list
@@ -152,11 +135,7 @@ export async function startNewChat(directory) {
     if (modelRef) body.model = modelRef;
     if (directory) body.location = { directory };
 
-    const res = await fetch(`${apiBase()}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
-    });
+    const res = await apiPost("/session", body);
 
     if (!res.ok) {
       throw new Error(`session create failed (${res.status})`);
@@ -192,7 +171,7 @@ export async function removeSession(sessionID) {
 
 export function openSession(sessionID) {
   if (!sessionID) return;
-  localStorage.setItem(LAST_SESSION_KEY, sessionID);
+  writeString(LAST_SESSION_KEY, sessionID);
   connectToSession(sessionID);
   const session = projectsStore.sessions.find((s) => s.id === sessionID);
   if (session?.directory) fetchBranches(session.directory);
@@ -219,7 +198,7 @@ export function activeSessionDirectory() {
 export async function initProjects() {
   await fetchSessions();
 
-  const lastId = localStorage.getItem(LAST_SESSION_KEY);
+  const lastId = readString(LAST_SESSION_KEY);
   // A sub-agent session is a legitimate thing to have been looking at, so it is
   // still restorable by id — the breadcrumb gets you back out. Only the blind
   // "just open something" fallback is restricted to real chats.
