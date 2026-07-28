@@ -90,6 +90,12 @@ function upsertChild(childID, patch) {
     };
     opencodeStore.childSessions[childID] = child;
   }
+  // A guessed callID (attachToPendingCall) must give way to an authoritative
+  // one without leaving the guess pointing here — that would show this child's
+  // transcript under someone else's dispatch.
+  if (patch && patch.callID && child.callID && patch.callID !== child.callID) {
+    delete opencodeStore.callChildIndex[child.callID];
+  }
   if (patch) Object.assign(child, patch);
   if (child.callID) opencodeStore.callChildIndex[child.callID] = childID;
   return child;
@@ -97,18 +103,62 @@ function upsertChild(childID, patch) {
 
 // A child announces itself with `session.created` carrying info.parentID, which
 // may arrive before the session.tool.progress that links it to a callID. Adopt
-// it on sight so its stream has somewhere to land; the callID is filled in when
-// the progress event turns up.
+// it on sight so its stream has somewhere to land, then attach it to the call
+// that must have dispatched it — waiting for `progress` alone leaves the card
+// stuck on "starting" for the whole run on a server that doesn't emit it.
 function adoptChild(type, props, sessionID) {
   if (type !== "session.created") return null;
   const info = props.info || {};
   if (!info.parentID || info.parentID !== opencodeStore.activeSessionId) return null;
-  return upsertChild(sessionID, {
+  const child = upsertChild(sessionID, {
     parentSessionID: info.parentID,
     agent: info.agent || null,
     model: info.model || null,
     title: info.title || null,
   });
+  if (!child.callID) attachToPendingCall(child);
+  return child;
+}
+
+// The `subagent` calls in the transcript that no child has claimed yet, oldest
+// first.
+function unclaimedCallIDs() {
+  const ids = [];
+  for (const msg of opencodeStore.messages) {
+    for (const part of msg.parts || []) {
+      if (!isSubagentPart(part) || !part.callID) continue;
+      if (opencodeStore.callChildIndex[part.callID]) continue;
+      ids.push(part.callID);
+    }
+  }
+  return ids;
+}
+
+// Attach a freshly announced child to the most recent unclaimed dispatch. The
+// authoritative link is `metadata.sessionID` on the tool call, and it wins
+// wherever it turns up (see linkFromToolMetadata) — this is the fallback for
+// when it never does. A child is created by the dispatch that is in flight, so
+// the newest unclaimed call is the right guess; only concurrent dispatches
+// could reorder, and mislabelling which of two live cards is which beats
+// showing neither.
+function attachToPendingCall(child) {
+  const pending = unclaimedCallIDs();
+  const callID = pending[pending.length - 1];
+  if (!callID) return;
+  child.callID = callID;
+  opencodeStore.callChildIndex[callID] = child.sessionID;
+}
+
+// Pull the child session id out of a tool event's metadata, if it's there.
+// Note the doubled nesting: the event's own `metadata` wraps the tool's.
+// Observed on `session.tool.progress`; handled on every tool event because a
+// build that reports it elsewhere (or only once, on success) should still link.
+function linkFromToolMetadata(props) {
+  const meta = props.metadata && props.metadata.metadata;
+  if (!meta || !meta.sessionID || !props.callID) return;
+  const patch = { callID: props.callID, parentSessionID: props.sessionID };
+  if (meta.status) patch.status = meta.status;
+  upsertChild(meta.sessionID, patch);
 }
 
 // --- Model / reasoning-effort persistence -----------------------------------
@@ -528,6 +578,9 @@ function applyUsageUpdate(props) {
 }
 
 // Process real-time events. Envelope is { id, type, data }; payload lives on `data`.
+// Exported as the reducer for the event stream — the SSE subscription above is
+// its only caller today, but it is also the seam to drive the store from a
+// session-scoped stream or a replay.
 //
 // Event vocabulary verified by tapping GET /api/event on a live server. This build
 // does NOT emit the classic Part model (message.updated / message.part.updated /
@@ -540,7 +593,7 @@ function applyUsageUpdate(props) {
 //      -> session.tool.called -> [.progress] -> .success
 //      -> session.text.started / .delta / .ended          (ordinal-keyed)
 //   -> session.step.ended -> session.usage.updated -> session.execution.succeeded
-function handleServerEvent(event) {
+export function handleServerEvent(event) {
   if (!event || !event.type) return;
   const { type, data } = event;
   const props = data || {};
@@ -696,38 +749,40 @@ function handleServerEvent(event) {
 
     case "session.tool.called": {
       const msg = assistantMessageFor(messages, props);
-      upsertPart(msg, `tool:${props.callID}`, {
-        type: "tool",
-        callID: props.callID,
-        input: props.input,
-        state: { status: "running" },
-      });
+      const patch = { type: "tool", callID: props.callID, state: { status: "running" } };
+      // Don't clobber the arguments `session.tool.input.ended` already parsed:
+      // they're the same call's input, and a build that abbreviates them here
+      // would otherwise erase the sub-agent's task text from its card.
+      const existing = msg.parts.find((p) => p.id === `tool:${props.callID}`);
+      if (props.input !== undefined && !(existing && existing.input !== undefined)) {
+        patch.input = props.input;
+      }
+      upsertPart(msg, `tool:${props.callID}`, patch);
+      linkFromToolMetadata(props);
       break;
     }
 
     case "session.tool.progress": {
       const msg = assistantMessageFor(messages, props);
       upsertPart(msg, `tool:${props.callID}`, { state: { status: "running" } });
-      // For a `subagent` call this is the live link between the dispatching
-      // tool call and the child session it spawned — the only place it arrives
-      // while the run is in flight. Note the doubled nesting: the event's own
-      // `metadata` wraps the tool's `metadata`.
-      const meta = props.metadata && props.metadata.metadata;
-      if (meta && meta.sessionID) {
-        upsertChild(meta.sessionID, {
-          callID: props.callID,
-          parentSessionID: props.sessionID,
-          status: meta.status || "running",
-        });
-      }
+      // For a `subagent` call this is where the live link between the
+      // dispatching tool call and its child session usually arrives.
+      linkFromToolMetadata(props);
       break;
     }
 
     case "session.tool.success": {
       const msg = assistantMessageFor(messages, props);
       upsertPart(msg, `tool:${props.callID}`, {
-        state: { status: "completed", output: toolContentText(props.content) },
+        state: {
+          status: "completed",
+          output: toolContentText(props.content),
+          // Keep the linkage on the part itself: the card reads it, and a
+          // later history refresh reconciles against the same field.
+          metadata: (props.metadata && props.metadata.metadata) || undefined,
+        },
       });
+      linkFromToolMetadata(props);
       // The child's own execution.succeeded may never arrive if we connected
       // mid-run, so settle it from the parent's side too.
       const settled = opencodeStore.callChildIndex[props.callID];
@@ -933,27 +988,43 @@ export async function connectToSession(sessionID) {
   restoreSessionModel(sessionID);
 
   await refreshActiveMessages();
-  await Promise.all([backfillChildSessions(), refreshSessionContext(sessionID)]);
+  await refreshSessionContext(sessionID);
 }
 
-// Rebuild sub-agent cards for a restored transcript. Every stored `subagent`
-// tool part carries its child session id on state.metadata, so this needs no
-// parentID scan over the session list — each call points straight at its child.
+// Rebuild sub-agent cards from the transcript. Runs after every message
+// refresh, not just on session switch: a dispatch whose live linkage never
+// arrived is only recoverable from the stored tool part, and until this ran
+// again its card sat on "starting" forever — the turn was over, the answer was
+// on screen, and the card still claimed the sub-agent was starting up.
 async function backfillChildSessions() {
   const parentID = opencodeStore.activeSessionId;
   const dispatches = [];
   for (const msg of opencodeStore.messages) {
     for (const part of msg.parts || []) {
-      if (!isSubagentPart(part)) continue;
-      const meta = part.state && part.state.metadata;
-      if (meta && meta.sessionID) {
-        dispatches.push({ childID: meta.sessionID, callID: part.callID, meta, part });
-      }
+      if (!isSubagentPart(part) || !part.callID) continue;
+      const meta = (part.state && part.state.metadata) || null;
+      dispatches.push({
+        childID: (meta && meta.sessionID) || opencodeStore.callChildIndex[part.callID] || null,
+        callID: part.callID,
+        meta: meta || {},
+        part,
+      });
     }
   }
+  if (!dispatches.length) return;
+
+  await resolveUnlinkedDispatches(dispatches, parentID);
 
   await Promise.all(
     dispatches.map(async ({ childID, callID, meta, part }) => {
+      if (!childID) return;
+      // A finished child whose transcript is already loaded needs no refetch —
+      // this now runs on every message refresh, so it has to stay cheap.
+      const loaded = opencodeStore.childSessions[childID];
+      if (loaded && loaded.status !== "running" && loaded.messages.length) {
+        upsertChild(childID, { callID });
+        return;
+      }
       const child = upsertChild(childID, {
         callID,
         parentSessionID: parentID,
@@ -986,6 +1057,30 @@ async function backfillChildSessions() {
   );
 }
 
+// Last resort for dispatches that never got a child session id from anywhere:
+// list the sessions and take this one's children. `GET /api/session` has no
+// parentID filter, so it's a client-side scan, and there is no field anywhere
+// that says which child came from which call — so this only matches when the
+// counts line up exactly, pairing them in order (dispatch order in the
+// transcript against child creation order). Ambiguous by construction
+// otherwise, and a wrong pairing is worse than none.
+async function resolveUnlinkedDispatches(dispatches, parentID) {
+  const unlinked = dispatches.filter((d) => !d.childID);
+  if (!unlinked.length || !parentID) return;
+
+  const payload = await fetchJSON(`${apiBase()}/session`);
+  if (!payload) return;
+  const claimed = new Set(dispatches.map((d) => d.childID).filter(Boolean));
+  const candidates = unwrap(payload)
+    .filter((s) => s.parentID === parentID && !claimed.has(s.id))
+    .sort((a, b) => ((a.time && a.time.created) || 0) - ((b.time && b.time.created) || 0));
+
+  if (candidates.length !== unlinked.length) return;
+  unlinked.forEach((d, i) => {
+    d.childID = candidates[i].id;
+  });
+}
+
 // GET helper that yields null instead of throwing — a sub-agent whose session
 // has been pruned server-side must not break the whole transcript load.
 async function fetchJSON(url) {
@@ -1015,6 +1110,12 @@ export async function refreshActiveMessages() {
       opencodeStore.forkMessages = opencodeStore.messages
         .filter((m) => m.role === "user")
         .map((m, idx) => ({ entryId: m.id || idx, text: m.text }));
+
+      // Server truth just landed, and it carries the sub-agent linkage each
+      // dispatch needs. Awaited so a caller that refreshes and then reads
+      // childForCall sees the result. A late return for a session the user has
+      // navigated away from is dropped inside.
+      if (sessionID === opencodeStore.activeSessionId) await backfillChildSessions();
     }
   } catch (err) {
     console.error(`Failed to fetch messages for session ${sessionID}:`, err);

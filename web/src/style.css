@@ -1776,6 +1776,25 @@ main {
   user-select: none;
   white-space: nowrap;
   overflow: hidden;
+  list-style: none;
+}
+
+/* `display: flex` on a <summary> drops the native disclosure triangle, which
+   left the card looking like a static row nobody would think to click. */
+.subagent-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-card summary::before {
+  content: "▸";
+  width: 8px;
+  font-size: 10px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+.subagent-card[open] summary::before {
+  content: "▾";
 }
 
 .subagent-step {
@@ -1925,18 +1944,11 @@ main {
   overflow-wrap: break-word;
 }
 
-.subagent-placeholder {
-  padding: 6px 10px;
-}
-
-.subagent-placeholder-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Shown inside the card when no child session is linked to the dispatch —
+   explains the gap rather than leaving an empty body. */
+.subagent-note {
   color: var(--dim);
-}
-
-.subagent-starting {
+  font-size: 11.5px;
   font-style: italic;
 }
 

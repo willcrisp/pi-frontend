@@ -5,9 +5,14 @@
   A dispatch spawns a CHILD SESSION whose turn streams over the same
   /api/event connection under its own sessionID; opencode.js routes those
   events into a child record and exposes it by callID. So this component is
-  a pure render of childForCall(callID) — no local accumulation. Before the
-  first linkage event arrives there is no child yet, and the card falls back
-  to a placeholder derived from the dispatch arguments.
+  a pure render of childForCall(callID) — no local accumulation.
+
+  It renders from TWO sources, because the child is the richer one but not
+  the reliable one: the child session when it has been linked, and always the
+  dispatching tool call's own `state` (status, output, error). A server that
+  never reports the child's session id still produces a card that tracks the
+  call, shows its result, and opens. The card is always a <details> for that
+  reason — there is no state in which there is nothing to look at.
 
   One card per call: V2 has no chain/parallel dispatch primitive, so
   parallelism is just several concurrent calls, one card each.
@@ -23,6 +28,8 @@ import { renderMarkdown } from "../../lib/markdown.js";
 const props = defineProps({
   callID: { type: String, required: true },
   args: { type: [Object, String], default: null },
+  // The dispatching tool part's own state: {status, output?, error?}.
+  state: { type: Object, default: null },
 });
 
 const child = computed(() => childForCall(props.callID));
@@ -44,13 +51,44 @@ const modelLabel = computed(() => {
   return m.variant && m.variant !== "default" ? `${m.id} (${m.variant})` : m.id || "";
 });
 
-const status = computed(() => child.value?.status || "starting");
+// Status comes from whichever source knows more. The tool call is
+// authoritative once it has finished — a child whose own `execution.succeeded`
+// we never saw must not leave the card spinning after the dispatch returned —
+// and the child drives it while the call is still in flight.
+const toolStatus = computed(() => (props.state && props.state.status) || "pending");
+const status = computed(() => {
+  const childStatus = child.value?.status;
+  if (toolStatus.value === "error" || childStatus === "error") return "error";
+  if (toolStatus.value === "completed") return "completed";
+  if (childStatus === "completed") return "completed";
+  if (childStatus === "running" || toolStatus.value === "running") return "running";
+  return "starting";
+});
 
 // The pre-existing `.subagent-dot` / `.subagent-status` CSS is keyed on
-// running/done/error, so map the child's status vocabulary onto it.
+// running/done/error, so map the status vocabulary onto it.
 const statusClass = computed(() =>
   ({ completed: "done", starting: "running" })[status.value] || status.value
 );
+
+// Open while the sub-agent is working, then leave it as the user left it —
+// auto-collapsing on completion would snatch away the result they were
+// waiting for.
+const open = ref(false);
+let userToggled = false;
+watch(
+  status,
+  (s) => {
+    if (!userToggled && (s === "running" || s === "starting")) open.value = true;
+  },
+  { immediate: true }
+);
+function onToggle(e) {
+  userToggled = true;
+  open.value = e.target.open;
+}
+
+const errorText = computed(() => child.value?.error || (props.state && props.state.error) || "");
 
 const totalTokens = computed(() => {
   const t = child.value?.tokens;
@@ -106,10 +144,14 @@ function partsText(m) {
     .join("");
 }
 
+// The sub-agent's answer: its own last message when the transcript is here,
+// otherwise what the dispatching tool call returned — which is the same text,
+// and the only copy of it when the child was never linked.
 const finalOutputText = computed(() => {
   const messages = child.value?.messages || [];
   const i = finalMessageIndex(messages);
-  return i === -1 ? "" : partsText(messages[i]);
+  if (i !== -1) return partsText(messages[i]);
+  return (props.state && props.state.output) || "";
 });
 
 // Flatten the child's transcript into a display list: its narration (as
@@ -199,12 +241,12 @@ function parseArgs(args) {
       <span v-if="durationMs != null" class="subagent-duration">{{ formatDuration(durationMs) }}</span>
     </div>
 
-    <details v-if="child" class="subagent-card" :open="status === 'running'">
+    <details class="subagent-card" :open="open" @toggle="onToggle">
       <summary title="Click to expand/collapse">
         <span class="subagent-dot" :class="statusClass"></span>
         <span class="subagent-agent">{{ agentName || "agent" }}</span>
         <span class="subagent-model">{{ modelLabel }}</span>
-        <span class="subagent-usage">{{ formatTokens(totalTokens) }} tokens</span>
+        <span v-if="totalTokens != null" class="subagent-usage">{{ formatTokens(totalTokens) }} tokens</span>
       </summary>
       <div class="subagent-body">
         <section v-if="taskText" class="subagent-section">
@@ -231,19 +273,25 @@ function parseArgs(args) {
           <div class="subagent-output markdown" v-html="renderMarkdown(finalOutputText)"></div>
         </section>
 
-        <div v-if="child.error" class="subagent-error-msg">{{ child.error }}</div>
+        <div v-if="errorText" class="subagent-error-msg">{{ errorText }}</div>
+
+        <!-- No child session linked to this call. Say which of the two cases
+             it is instead of leaving the card looking broken. -->
+        <p v-if="!child" class="subagent-note">
+          <template v-if="status === 'running' || status === 'starting'">
+            Waiting for the sub-agent's session to report in — its live transcript
+            appears here once it does.
+          </template>
+          <template v-else-if="!finalOutputText">
+            This server didn't report a session for the dispatch, so there's no
+            transcript to show.
+          </template>
+          <template v-else>
+            Result only — this server didn't report a session for the dispatch, so
+            the step-by-step activity isn't available.
+          </template>
+        </p>
       </div>
     </details>
-
-    <!-- No child record yet: the window between the tool call appearing and
-         the first session.tool.progress that links it to its child session. -->
-    <div v-else class="subagent-card subagent-placeholder">
-      <div class="subagent-placeholder-row">
-        <span class="subagent-dot running"></span>
-        <span v-if="agentName" class="subagent-agent">{{ agentName }}</span>
-        <span class="subagent-starting">starting…</span>
-      </div>
-      <div v-if="taskText" class="subagent-task markdown" v-html="renderMarkdown(taskText)"></div>
-    </div>
   </div>
 </template>

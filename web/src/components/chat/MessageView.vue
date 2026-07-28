@@ -74,10 +74,15 @@ function revertToHere() {
 
         <!-- subagent dispatch: rendered as a rich card driven by the child
              session the call spawned, not as a generic tool row -->
+        <!-- `:callID`, not `:call-id`: kebab-case camelizes to `callId`, which
+             does not match the declared `callID` prop, so the card silently
+             received undefined — and with no callID it could never find its
+             child session, leaving every dispatch stuck on "starting". -->
         <SubagentView
           v-else-if="isSubagentPart(part)"
-          :call-id="part.callID"
+          :callID="part.callID"
           :args="part.input"
+          :state="part.state"
         />
 
         <!-- tool -->
