@@ -23,7 +23,9 @@ import UsagePopover from "../popovers/UsagePopover.vue";
 const PLACEHOLDER_TITLE = /^new session\b/i;
 
 const sessionTitle = computed(() => {
-  if (!store.activeSessionId) return "OpenCode Harness";
+  // Nothing selected: the wordmark on the left already says "radius", so leave
+  // the centre empty rather than repeating it.
+  if (!store.activeSessionId) return null;
   const s = projectsStore.sessions.find((x) => x.id === store.activeSessionId);
   const t = (s?.title || "").trim();
   if (!t || PLACEHOLDER_TITLE.test(t)) return null;
@@ -93,7 +95,7 @@ function scrollToRunningSubagent() {
   <header>
     <div class="header-left">
       <SshPopover />
-      <span class="wordmark" title="OpenCode V2 AI Harness">opencode</span>
+      <span class="wordmark" title="radius — OpenCode V2 AI harness">radius</span>
 
       <span v-if="git && (git.current || git.loading)" class="git-branch">
         <button

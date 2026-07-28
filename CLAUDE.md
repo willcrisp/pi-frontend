@@ -4,7 +4,7 @@ This file provides guidance when working with code in this repository.
 
 ## What this is
 
-`opencodeharness`: A minimal dark-themed Vue 3 frontend harness for **OpenCode V2**.
+`radius`: A minimal dark-themed Vue 3 frontend harness for **OpenCode V2**.
 
 - `web/` — Vue 3 + Vite frontend (plain JS, no TypeScript). Communicates directly with OpenCode V2 HTTP REST & Event (SSE) API (`/api/*`).
 

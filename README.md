@@ -1,4 +1,4 @@
-# OpenCode V2 Web Harness
+# radius
 
 A sleek, minimal Vue 3 web frontend harness for **OpenCode V2** (`opencode`).
 

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- radius: a circle with its radius drawn from centre to circumference.
+       Tile uses the app background so the mark stays legible in light and
+       dark browser chrome alike. -->
+  <rect width="32" height="32" rx="7" fill="#0c0e10"/>
+  <circle cx="16" cy="16" r="10" fill="none" stroke="#7aa2f7" stroke-opacity="0.55" stroke-width="2.2"/>
+  <path d="M16 16 L23.1 8.9" stroke="#7aa2f7" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="16" cy="16" r="2" fill="#7aa2f7"/>
+</svg>
