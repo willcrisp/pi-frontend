@@ -51,6 +51,13 @@ export const opencodeStore = reactive({
   // See docs/subagents-alfuat.md.
   childSessions: {},
   callChildIndex: {},
+  // Per-session agent activity, keyed by session id:
+  //   { running: bool, unread: bool, updatedAt: ms }
+  // The event stream carries EVERY session, not just the one in view, so this
+  // is maintained for all of them and outlives navigating away — that is the
+  // whole point of the sidebar dot (amber pulse = working, green = it finished
+  // while you were looking at another chat). See trackSessionActivity.
+  sessionActivity: {},
 });
 
 // Name of the tool whose calls dispatch a sub-agent (verified live on the
@@ -242,12 +249,123 @@ export function restoreSessionModel(sessionID) {
   applyStoredSelection(readJSON(MODEL_KEY, null));
 }
 
+// --- Per-session agent activity ---------------------------------------------
+// The sidebar's live status dot. Two states worth showing:
+//   running  — a turn is in flight for that session (amber pulse)
+//   unread   — the turn ended while the user was somewhere else (green)
+// Both are tracked for every session the event stream mentions, because the
+// interesting case is precisely the session you are NOT looking at. `unread`
+// is persisted so a page reload doesn't quietly drop "this one answered you".
+const UNREAD_KEY = "oc.unreadSessions";
+
+// Events that mean "this session's agent is doing something right now". Deltas
+// count, not just `.started`: connecting (or reconnecting) mid-run is the
+// common case, and by then the lifecycle-start event is long gone.
+const RUN_ACTIVE_EVENTS = new Set([
+  "session.execution.started",
+  "session.step.started",
+  "session.reasoning.started",
+  "session.reasoning.delta",
+  "session.text.started",
+  "session.text.delta",
+  "session.tool.input.started",
+  "session.tool.input.delta",
+  "session.tool.called",
+  "session.tool.progress",
+  "message.part.updated",
+]);
+
+// Every way a turn can stop. The three execution.* spellings and session.idle
+// are all handled in the switch below for the same reason — different builds
+// settle a turn with different ones.
+const RUN_ENDED_EVENTS = new Set([
+  "session.execution.succeeded",
+  "session.execution.completed",
+  "session.execution.failed",
+  "session.error",
+  "session.idle",
+]);
+
+function activityRecord(sessionID) {
+  let rec = opencodeStore.sessionActivity[sessionID];
+  if (!rec) {
+    rec = { running: false, unread: false, updatedAt: 0 };
+    opencodeStore.sessionActivity[sessionID] = rec;
+  }
+  return rec;
+}
+
+// The status a view should render for a session: "working" | "unread" | "".
+export function sessionStatus(sessionID) {
+  const rec = sessionID && opencodeStore.sessionActivity[sessionID];
+  if (!rec) return "";
+  if (rec.running) return "working";
+  if (rec.unread) return "unread";
+  return "";
+}
+
+function setUnread(sessionID, unread) {
+  const rec = activityRecord(sessionID);
+  if (rec.unread === unread) return;
+  rec.unread = unread;
+  writeJSON(
+    UNREAD_KEY,
+    Object.keys(opencodeStore.sessionActivity).filter((id) => opencodeStore.sessionActivity[id].unread)
+  );
+}
+
+function restoreUnread() {
+  const ids = readJSON(UNREAD_KEY, []);
+  if (!Array.isArray(ids)) return;
+  for (const id of ids) activityRecord(id).unread = true;
+}
+
+// Mark a session as running from our own side, for the window between the
+// POST and the first event coming back.
+function markRunning(sessionID) {
+  if (!sessionID) return;
+  const rec = activityRecord(sessionID);
+  rec.running = true;
+  rec.updatedAt = Date.now();
+}
+
+// Fold one raw event into the activity map. Called for every event, BEFORE the
+// active-session/child routing in handleServerEvent — that routing drops
+// events for sessions that aren't in view, which is exactly the traffic this
+// needs to see.
+function trackSessionActivity(type, sessionID) {
+  if (RUN_ACTIVE_EVENTS.has(type)) {
+    markRunning(sessionID);
+    // Amber outranks green: a session that started working again has nothing
+    // stale left to read.
+    setUnread(sessionID, false);
+    return;
+  }
+  if (!RUN_ENDED_EVENTS.has(type)) return;
+
+  const rec = activityRecord(sessionID);
+  const wasRunning = rec.running;
+  rec.running = false;
+  rec.updatedAt = Date.now();
+  // Green means "it finished while you were elsewhere". Finishing in the chat
+  // you're actually reading is just finishing — and a sub-agent finishing is
+  // reported on its card inside the parent turn, not as mail waiting for you.
+  const isChild = !!opencodeStore.childSessions[sessionID];
+  if (wasRunning && !isChild && sessionID !== opencodeStore.activeSessionId) {
+    setUnread(sessionID, true);
+  }
+}
+
 // Unwrap the opencode2 `{ data: [...] }` list envelope (tolerates a bare array/object too).
 function unwrap(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.data)) return payload.data;
   return [];
 }
+
+// Unread dots survive a reload; running state does not (nothing to ask the
+// server for — the stream re-establishes it within a turn's first event).
+restoreUnread();
 
 // Initialize connection & metadata from the opencode2 server
 export async function initOpenCode() {
@@ -621,6 +739,11 @@ export function handleServerEvent(event) {
     (props.info && props.info.sessionID) ||
     props.sessionID;
 
+  // Sidebar status first: every session's dot is driven from here, so this has
+  // to happen before the routing below drops events for sessions that aren't
+  // the one on screen.
+  if (eventSessionId) trackSessionActivity(type, eventSessionId);
+
   // A sub-agent's child session emits the SAME event vocabulary under its own
   // sessionID, so events are routed rather than filtered: the active session
   // drives the main transcript, a known child drives its own, and anything
@@ -977,7 +1100,10 @@ export function handleServerEvent(event) {
 export async function connectToSession(sessionID) {
   if (!sessionID) return;
   opencodeStore.activeSessionId = sessionID;
-  opencodeStore.isStreaming = false;
+  // Opening a chat reads it — and if its agent is still mid-turn, come back up
+  // streaming rather than pretending the run ended when we navigated away.
+  setUnread(sessionID, false);
+  opencodeStore.isStreaming = !!(opencodeStore.sessionActivity[sessionID] || {}).running;
   // Sub-agent state belongs to the session being left, not the one being opened.
   opencodeStore.childSessions = {};
   opencodeStore.callChildIndex = {};
@@ -1248,6 +1374,7 @@ export async function sendPrompt(text, files) {
 
   opencodeStore.forkMessages.push({ entryId: userMsgId, text: promptText });
   opencodeStore.isStreaming = true;
+  markRunning(sessionID);
 
   try {
     const res = await fetch(`${apiBase()}/session/${sessionID}/prompt`, {
@@ -1269,6 +1396,7 @@ export async function sendPrompt(text, files) {
     // Do NOT append assistant text here — the SSE stream drives assistant rendering.
   } catch (err) {
     opencodeStore.isStreaming = false;
+    activityRecord(sessionID).running = false;
     opencodeStore.error = err.message;
     console.error("Error sending prompt to opencode:", err);
   }
@@ -1347,6 +1475,7 @@ export async function abortSession() {
     console.error("Failed to interrupt session:", err);
   } finally {
     opencodeStore.isStreaming = false;
+    activityRecord(sessionID).running = false;
   }
 }
 

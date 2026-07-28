@@ -308,9 +308,9 @@ body {
   color: var(--dim);
 }
 
-/* Per-chat agent status in the sidebar (see chatIndicator/projectIndicator
-   in pi.js): amber pulse = agent working, green = finished (or blocked on a
-   dialog) with a response the user hasn't looked at yet. Same colors as the
+/* Per-chat agent status in the sidebar (driven by sessionStatus() in
+   opencode.js): amber pulse = agent working, green = the turn ended while the
+   user was in another chat and the reply hasn't been read. Same colors as the
    favicon working/ready states. */
 .status-dot {
   flex: none;
@@ -320,20 +320,12 @@ body {
   border-radius: 50%;
 }
 
-.status-dot.active {
-  background: #22c55e;
-}
-
-.status-dot.offline {
-  background: #6b7280;
-}
-
 .status-dot.working {
   background: #fbbf24;
   animation: status-dot-pulse 1.2s ease-in-out infinite;
 }
 
-.status-dot.attention {
+.status-dot.unread {
   background: #22c55e;
 }
 
