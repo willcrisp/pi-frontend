@@ -54,7 +54,7 @@ this frontend or flagged as a known gap.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/session/{sessionID}/prompt` | Wired: `sendPrompt`. **Body must wrap under `prompt`**: `{prompt: {text, files?, agents?}, id?, delivery?, resume?}`. A flat `{text}` 400s |
+| POST | `/api/session/{sessionID}/prompt` | Wired: `sendPrompt` / `sendSteer`. **Body shape differs by build** — see "Steering" below. Carries the `delivery` mode |
 | POST | `/api/session/{sessionID}/interrupt` | Wired: `abortSession` |
 | POST | `/api/session/{sessionID}/wait` | Not wired. Sync wait for completion |
 | GET | `/api/session/{sessionID}/message` | Wired: `refreshActiveMessages` |
@@ -75,6 +75,56 @@ this frontend or flagged as a known gap.
 | ❌ | ~~POST `/api/session/{sessionID}/fork`~~ | **Not exposed.** Use `revert/*` instead |
 | ❌ | ~~POST `/api/session/{sessionID}/share`~~ | **Not exposed at all** in this build |
 | ❌ | ~~POST `/api/session/{sessionID}/command`~~ | **Not exposed.** Slash commands are sent as raw prompt text |
+
+### Steering: sending a prompt into a run that is already going
+
+The prompt route is not "start a turn" — it **durably admits one session input**
+and then schedules the agent loop. That admission is what makes steering
+possible, and it is a server feature, not something the client has to fake with
+a local queue.
+
+```
+POST /api/session/{id}/prompt
+  {prompt: {text}, delivery: "steer" | "queue", resume?: bool, id?: "msg_…"}
+→ 200 {data: SessionInput.Admitted}
+
+SessionInput.Admitted =
+  {admittedSeq, id: "msg_…", sessionID, prompt, delivery, timeCreated, promotedSeq?}
+```
+
+- **`delivery: "steer"`** — admitted into the run that is already going; the
+  agent reads it at its **next turn**, without the run being interrupted or the
+  tool it is mid-way through being lost.
+- **`delivery: "queue"`** — held back until the current run ends, then promoted
+  as its own turn.
+- **The server defaults to `"steer"`** when the field is absent (verified: an
+  admitted record with no `delivery` sent comes back `"delivery": "steer"`).
+- Any other value is a 400: `Expected "steer" | "queue", got "…" at ["delivery"]`.
+- Both modes are accepted on an **idle** session too, where the mode is moot —
+  the input is promoted immediately and starts a run.
+- `resume: false` admits the input **without** scheduling the agent loop. Handy
+  for probing the route without burning a turn.
+
+**An admitted input is invisible until it is promoted.** `promotedSeq` is absent
+until the agent takes it, and `GET /session/{id}/message` does not list it before
+then — verified by admitting three inputs with `resume: false` against a live
+server and getting `{"data":[]}` back. So a "sent, not yet read" prompt has no
+server-side handle a UI can poll for; `opencode.js#pendingSteers` tracks them
+client-side and retires each one on the promotion event
+(`session.input.promoted`, or `session.next.prompted` on newer builds).
+
+**The request body shape is the one real trap.** Two shapes are in the wild and
+the difference is a 400, not a warning:
+
+| Build | Body |
+|---|---|
+| ALF-UAT target (what `sendPrompt` was written against) | flat `PromptInput`: `{text, files?, agents?, delivery?, resume?}` |
+| `opencode-ai@next` 0.0.0-next-202606270058 | wrapped: `{prompt: {text, files?, agents?}, delivery?, resume?, id?}` — a flat body 400s with `Missing key at ["prompt"]` |
+
+`postPrompt` in `opencode.js` sends the flat shape first and retries once with
+the wrapper on a 400, remembering whichever the server accepted for the rest of
+the page's life. **Do not "fix" this by picking one** — that is how the same bug
+gets re-introduced on the next build bump.
 
 ### Permissions (tool-approval gating)
 

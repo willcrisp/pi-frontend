@@ -71,7 +71,9 @@ curl -s http://127.0.0.1:4096/openapi.json | jq '.paths | keys'
 
 Recurring shape traps, all documented in full in `docs/opencode-api.md`:
 
-- `POST /session/{id}/prompt` body must wrap under `prompt` — a flat `{text}` 400s.
+- `POST /session/{id}/prompt` takes a `delivery: "steer" | "queue"` (defaults to
+  `steer`) — that's the steering mechanism. Its body is flat on some builds and
+  wrapped under `prompt` on others; `postPrompt()` detects which.
 - Agents are addressed by `id`, never display `name`.
 - A `question.v2.asked` is a *batch*: `{questions: [...]}`, answered with
   `{answers: string[][]}` keyed by option **label** (options carry no id).
@@ -94,6 +96,12 @@ import them directly.
     the dispatching call across three arrival paths (tool metadata, the child's
     own `session.created`, history backfill), because no single signal is
     reliable on every build.
+  - *Steering.* `sendSteer()` posts a prompt with `delivery: "steer"` into a run
+    that is already going; the agent reads it at its next turn. The server keeps
+    an admitted input out of the message list until it promotes it, so
+    `pendingSteers` tracks the gap and the composer's steer pill counts it.
+    `postPrompt()` also absorbs the flat-vs-wrapped prompt body divergence
+    between builds — don't collapse it to one shape.
   - *Per-session activity.* `sessionStatus(id)` drives the sidebar's live dot
     ("working" / "unread"), tracked for every session the stream mentions — not
     just the one on screen — with unread persisted across reloads.
