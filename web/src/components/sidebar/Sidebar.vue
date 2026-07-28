@@ -10,7 +10,7 @@
 -->
 <script setup>
 import { computed, reactive, ref } from "vue";
-import { opencodeStore } from "../../stores/opencode.js";
+import { opencodeStore, sessionStatus } from "../../stores/opencode.js";
 import {
   openSession,
   projectsStore,
@@ -59,6 +59,28 @@ const expanded = reactive(new Set());
 
 function visibleSessions(group) {
   return expanded.has(group.directory) ? group.sessions : group.sessions.slice(0, RECENT_LIMIT);
+}
+
+const STATUS_TITLE = {
+  working: "Agent working",
+  unread: "Agent finished — unread",
+};
+
+// The status dot a project header carries: only ever summarizes sessions whose
+// own dot is currently hidden (group collapsed, or trimmed by RECENT_LIMIT),
+// so it adds information rather than repeating the row below it. Working wins
+// over unread — a live run is the more urgent thing to see.
+function groupStatus(group) {
+  const hidden = collapsed.has(group.directory)
+    ? group.sessions
+    : group.sessions.filter((s) => !visibleSessions(group).includes(s));
+  let unread = false;
+  for (const s of hidden) {
+    const status = sessionStatus(s.id);
+    if (status === "working") return "working";
+    if (status === "unread") unread = true;
+  }
+  return unread ? "unread" : "";
 }
 
 // The server exposes no DELETE for sessions, so this only hides the row
@@ -271,6 +293,12 @@ async function newSessionIn(directory) {
           >
             <span class="project-collapse-icon">{{ collapsed.has(group.directory) ? "▸" : "▾" }}</span>
             <span class="project-name">{{ group.label }}</span>
+            <span
+              v-if="groupStatus(group)"
+              class="status-dot"
+              :class="groupStatus(group)"
+              :title="STATUS_TITLE[groupStatus(group)]"
+            ></span>
             <button
               v-if="group.directory"
               class="icon-btn new-chat-btn"
@@ -298,9 +326,10 @@ async function newSessionIn(directory) {
               @click="openSession(s.id)"
             >
               <span
-                v-if="s.id === activeSessionId && opencodeStore.isStreaming"
-                class="status-dot working"
-                title="Agent working"
+                v-if="sessionStatus(s.id)"
+                class="status-dot"
+                :class="sessionStatus(s.id)"
+                :title="STATUS_TITLE[sessionStatus(s.id)]"
               ></span>
               <span class="chat-title">{{ s.title }}</span>
               <button
