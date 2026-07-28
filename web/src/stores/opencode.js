@@ -51,6 +51,14 @@ export const opencodeStore = reactive({
   // See docs/subagents-alfuat.md.
   childSessions: {},
   callChildIndex: {},
+  // Prompts admitted into a run that was already going (steer/queue delivery)
+  // and not yet picked up by the agent. Entries are
+  //   { id, sessionID, text, delivery, messageID, status, at }
+  // and exist only for the session in view — see sendSteer. The transcript
+  // can't show them: the server keeps an admitted input out of the message
+  // list until it promotes it, so this array is the only handle the UI has on
+  // "sent, waiting to be read".
+  pendingSteers: [],
   // Per-session agent activity, keyed by session id:
   //   { running: bool, unread: bool, updatedAt: ms }
   // The event stream carries EVERY session, not just the one in view, so this
@@ -347,6 +355,7 @@ function trackSessionActivity(type, sessionID) {
   const wasRunning = rec.running;
   rec.running = false;
   rec.updatedAt = Date.now();
+  clearSteers(sessionID);
   // Green means "it finished while you were elsewhere". Finishing in the chat
   // you're actually reading is just finishing — and a sub-agent finishing is
   // reported on its card inside the parent turn, not as mail waiting for you.
@@ -792,14 +801,24 @@ export function handleServerEvent(event) {
       break;
     }
 
-    // Explicitly acknowledged so a maintainer scanning this switch sees it
-    // was considered, not missed — no state change today. The user message is
-    // already appended optimistically by sendPrompt, and session.execution.succeeded
-    // reconciles against the server, so re-adding it here would duplicate it.
+    // Admission is acknowledged and dropped: the user message is already
+    // appended optimistically by sendPrompt (or tracked in pendingSteers by
+    // sendSteer), and session.execution.succeeded reconciles against the
+    // server, so re-adding it here would duplicate it.
     case "session.input.admitted":
-    case "session.input.promoted":
+    case "session.next.prompt.admitted":
     case "shell.created":
     case "shell.exited": {
+      break;
+    }
+
+    // Promotion is the moment a steered/queued input actually reaches the
+    // agent, so it's what retires the pending entry. Two spellings, because
+    // builds disagree (`session.input.promoted` on the ALF-UAT target,
+    // `session.next.prompted` on opencode-ai@next).
+    case "session.input.promoted":
+    case "session.next.prompted": {
+      resolveSteer(eventSessionId, props.messageID || props.id);
       break;
     }
 
@@ -1112,6 +1131,9 @@ export async function connectToSession(sessionID) {
   opencodeStore.childSessions = {};
   opencodeStore.callChildIndex = {};
   opencodeStore.revertStaged = null;
+  // Steers are tracked for the session in view only (sendSteer targets the
+  // active session); the ones left here belong to the chat being left.
+  opencodeStore.pendingSteers = [];
   // Context accounting is per-session; carrying the previous session's
   // server-sourced figure over would show a stale number as authoritative.
   opencodeStore.sessionStats.contextUsage = { percent: 0, used: null, limit: null, fromServer: false };
@@ -1348,10 +1370,75 @@ function toolContentText(content) {
     .join("\n");
 }
 
-// Send user prompt (POST /api/session/:id/prompt). Body is a FLAT PromptInput —
-// `{ text, files?, agents?, delivery?, resume? }` with `text` required — per the
-// live openapi.json (a wrapped `{ prompt: {...} }` 400s with "Missing key at [text]"
-// on current builds; older builds wanted the wrapper, so re-verify on upgrade).
+// --- Prompt delivery ---------------------------------------------------------
+//
+// POST /api/session/:id/prompt takes a delivery mode, which is what makes
+// steering possible at all. Verified against a live server's openapi.json
+// (build 0.0.0-next-202606270058) and by probing the route:
+//
+//   steer  — admitted into the run that is ALREADY GOING. The agent reads it at
+//            its next turn, without the run being interrupted or the tool it is
+//            mid-way through being lost.
+//   queue  — held back until the current run ends, then promoted as its own turn.
+//
+// The server DEFAULTS to "steer" when the field is absent, and both modes are
+// accepted on an idle session too (there the mode is moot — the input is
+// promoted immediately and starts a run). The UI only sends "steer"; "queue" is
+// the same call with a different hand-off point, kept as sendSteer's argument.
+//
+// A 200 answers with `SessionInput.Admitted`:
+//   {admittedSeq, id: "msg_…", sessionID, prompt, delivery, timeCreated, promotedSeq?}
+// `promotedSeq` only appears once the agent has taken the input. Until then the
+// input is invisible to GET /session/:id/message — see pendingSteers.
+
+// Two body shapes for this one route are in the wild and the difference is a
+// 400, not a warning: some builds take a FLAT PromptInput
+// (`{text, files?, agents?, delivery?, resume?}` — what the ALF-UAT target
+// wants), while the current opencode-ai@next wraps it
+// (`{prompt: {text, files?, agents?}, delivery?, resume?, id?}`) and rejects a
+// flat body with "Missing key at [\"prompt\"]". Rather than pick one and break
+// the other, the first shape that works is remembered and reused; a 400 costs
+// one retry, once per page load.
+let promptBodyShape = "flat";
+
+function promptBody(shape, prompt, extras) {
+  return shape === "wrapped" ? { prompt, ...extras } : { ...prompt, ...extras };
+}
+
+// POST a prompt, transparently falling back to the other body shape. Returns
+// the Response — the caller owns status handling, and nothing has read the body.
+async function postPrompt(sessionID, prompt, extras = {}) {
+  const send = (shape) =>
+    fetch(`${apiBase()}/session/${sessionID}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(promptBody(shape, prompt, extras)),
+    });
+
+  const res = await send(promptBodyShape);
+  // Only a shape mismatch is worth a second try, and only a 400 can be one.
+  if (res.status !== 400) return res;
+
+  const alternate = promptBodyShape === "flat" ? "wrapped" : "flat";
+  const retry = await send(alternate);
+  if (!retry.ok) return res; // both shapes rejected it — the first error is the real one
+  promptBodyShape = alternate;
+  return retry;
+}
+
+// Pull the server's own complaint out of an error response, falling back to the
+// status line. Consumes the body, so only call this on a response you're done with.
+async function promptError(res, fallback) {
+  try {
+    const payload = await res.json();
+    if (payload && payload.message) return payload.message;
+  } catch {
+    /* non-JSON error body — the status line is enough */
+  }
+  return fallback;
+}
+
+// Send user prompt (POST /api/session/:id/prompt).
 // `files` are composer attachments (paste/drop/picker), each `{ filename, mime, url }`
 // where `url` is a `data:<mime>;base64,...` URL. The wire shape is different and strict:
 // `PromptInput.FileAttachment` is `{uri, name?, description?, mention?}` with
@@ -1381,21 +1468,18 @@ export async function sendPrompt(text, files) {
   markRunning(sessionID);
 
   try {
-    const res = await fetch(`${apiBase()}/session/${sessionID}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(
-        attachments.length
-          ? {
-              text: promptText,
-              files: attachments.map((f) => ({ uri: f.url, name: f.filename })),
-            }
-          : { text: promptText }
-      ),
-    });
+    const res = await postPrompt(
+      sessionID,
+      attachments.length
+        ? {
+            text: promptText,
+            files: attachments.map((f) => ({ uri: f.url, name: f.filename })),
+          }
+        : { text: promptText }
+    );
 
     if (!res.ok) {
-      throw new Error(`Failed to send prompt (${res.status})`);
+      throw new Error(await promptError(res, `Failed to send prompt (${res.status})`));
     }
     // Do NOT append assistant text here — the SSE stream drives assistant rendering.
   } catch (err) {
@@ -1404,6 +1488,100 @@ export async function sendPrompt(text, files) {
     opencodeStore.error = err.message;
     console.error("Error sending prompt to opencode:", err);
   }
+}
+
+// --- Steering ----------------------------------------------------------------
+//
+// Send a prompt into a run that is already going, for the agent to read at its
+// next turn ("steer") or after the run finishes ("queue") — see the delivery
+// note above for what the server does with each.
+//
+// Deliberately unlike sendPrompt, this does NOT push an optimistic user message:
+// an admitted input is not part of the transcript until the server promotes it,
+// and dropping one into the middle of a streaming assistant message would put
+// it in the wrong place and then have it move when refreshActiveMessages
+// reconciles at the end of the run. It lives in pendingSteers until then, which
+// is what the composer's steer button reports.
+//
+// Returns true if the server admitted it.
+let steerSeq = 0;
+
+export async function sendSteer(text, files, delivery = "steer") {
+  const promptText = (text || "").trim();
+  const attachments = Array.isArray(files) ? files : [];
+  const sessionID = opencodeStore.activeSessionId;
+  if ((!promptText && !attachments.length) || !sessionID) return false;
+
+  const entry = {
+    id: `steer-${Date.now()}-${steerSeq++}`,
+    sessionID,
+    text: promptText,
+    delivery,
+    messageID: null,
+    status: "sending",
+    at: Date.now(),
+  };
+  opencodeStore.pendingSteers.push(entry);
+
+  try {
+    const res = await postPrompt(
+      sessionID,
+      attachments.length
+        ? { text: promptText, files: attachments.map((f) => ({ uri: f.url, name: f.filename })) }
+        : { text: promptText },
+      { delivery }
+    );
+    if (!res.ok) {
+      throw new Error(
+        await promptError(
+          res,
+          res.status === 400
+            ? "This server build doesn't accept a delivery mode — steering unavailable"
+            : `Steer failed (${res.status})`
+        )
+      );
+    }
+    const payload = await res.json().catch(() => null);
+    const admitted = (payload && payload.data) || payload || {};
+    entry.messageID = admitted.id || null;
+    entry.delivery = admitted.delivery || delivery;
+    entry.status = "waiting";
+    return true;
+  } catch (err) {
+    dropSteer(entry.id);
+    opencodeStore.error = err.message;
+    console.error("Error steering session:", err);
+    return false;
+  }
+}
+
+function dropSteer(id) {
+  const at = opencodeStore.pendingSteers.findIndex((s) => s.id === id);
+  if (at >= 0) opencodeStore.pendingSteers.splice(at, 1);
+}
+
+// Pending steers for one session, oldest first — what the steer button names in
+// its tooltip.
+export function pendingSteersFor(sessionID) {
+  return opencodeStore.pendingSteers.filter((s) => s.sessionID === sessionID);
+}
+
+// The agent has taken an input: it's a real message now, so stop tracking it.
+// Matched on messageID where the event carries one; a build that doesn't report
+// it settles for the oldest entry of that session, which is the one promotion
+// order makes correct.
+function resolveSteer(sessionID, messageID) {
+  const list = opencodeStore.pendingSteers;
+  const at = messageID
+    ? list.findIndex((s) => s.messageID === messageID)
+    : list.findIndex((s) => s.sessionID === sessionID);
+  if (at >= 0) list.splice(at, 1);
+}
+
+// Everything admitted for a session that has stopped running has either been
+// promoted or died with the run — nothing is still waiting to be read.
+function clearSteers(sessionID) {
+  opencodeStore.pendingSteers = opencodeStore.pendingSteers.filter((s) => s.sessionID !== sessionID);
 }
 
 // --- Revert -----------------------------------------------------------------
