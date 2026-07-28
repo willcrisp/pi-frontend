@@ -16,6 +16,7 @@ import {
   sessionAncestry,
 } from "../../stores/projects.js";
 import { gitStore, fetchBranches } from "../../stores/git.js";
+import { openShortcuts } from "../../stores/shortcuts.js";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
 import SshPopover from "../popovers/SshPopover.vue";
@@ -185,9 +186,39 @@ function scrollToRunningSubagent() {
       <UsagePopover class="header-usage" />
       <ModelFilterPopover />
       <ColorProfilePopover />
+      <button
+        type="button"
+        class="header-shortcuts"
+        title="Keyboard shortcuts (?)"
+        aria-label="Keyboard shortcuts"
+        @click="openShortcuts"
+      >
+        ?
+      </button>
     </div>
   </header>
 </template>
 
 <style scoped>
+/* Sits with the other header-right controls; deliberately quiet until hovered,
+   since it's a reference rather than something you reach for mid-task. */
+.header-shortcuts {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.header-shortcuts:hover {
+  color: var(--fg);
+  border-color: #2c3540;
+}
 </style>

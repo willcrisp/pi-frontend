@@ -25,6 +25,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { childForCall, opencodeStore } from "../../stores/opencode.js";
 import { openSubagentSession } from "../../stores/projects.js";
 import { renderMarkdown } from "../../lib/markdown.js";
+import { onMarkdownClick } from "../../lib/codeCopy.js";
 
 const props = defineProps({
   callID: { type: String, required: true },
@@ -242,7 +243,9 @@ function parseArgs(args) {
 </script>
 
 <template>
-  <div :id="'tc-' + callID" class="subagent">
+  <!-- Delegated so copy buttons in the card's markdown (task, activity,
+       result) work the same as in the main transcript. -->
+  <div :id="'tc-' + callID" class="subagent" @click="onMarkdownClick">
     <div class="subagent-header">
       <span class="subagent-label">sub-agent</span>
       <span v-if="label" class="subagent-mode">{{ label }}</span>

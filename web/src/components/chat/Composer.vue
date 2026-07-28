@@ -35,7 +35,16 @@ import SelectMenu from "./SelectMenu.vue";
 import SteerButton from "./SteerButton.vue";
 import ImageAnnotator from "../dialogs/ImageAnnotator.vue";
 
-const input = ref("");
+// The prompt box is backed by the store rather than a local ref, so a
+// half-typed message belongs to its session and survives switching away and
+// back (stores/opencode/drafts.js). Writable computed, so everything below —
+// including the composables — keeps treating it as a plain ref.
+const input = computed({
+  get: () => store.draft,
+  set: (value) => {
+    store.draft = value;
+  },
+});
 const textareaEl = ref(null);
 const fileInputEl = ref(null);
 

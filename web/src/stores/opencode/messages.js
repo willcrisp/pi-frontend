@@ -15,6 +15,7 @@ import { isSubagentPart, upsertChild } from "./children.js";
 import { restoreSessionModel } from "./models.js";
 import { setUnread } from "./activity.js";
 import { refreshSessionContext, resetContextUsage } from "./context.js";
+import { switchDraft } from "./drafts.js";
 
 // Find or create a message shell by id in `list` — the active session's
 // transcript, or a sub-agent child's own transcript.
@@ -39,7 +40,12 @@ export function recomputeText(msg) {
 // being left, and load its history.
 export async function connectToSession(sessionID) {
   if (!sessionID) return;
+  const previousID = opencodeStore.activeSessionId;
   opencodeStore.activeSessionId = sessionID;
+  // File the outgoing chat's half-typed prompt and bring up this one's, before
+  // any await — `draft` must never be the previous chat's text while the new
+  // session id is already active.
+  switchDraft(previousID, sessionID);
   // Opening a chat reads it — and if its agent is still mid-turn, come back up
   // streaming rather than pretending the run ended when we navigated away.
   setUnread(sessionID, false);
@@ -73,9 +79,6 @@ export async function refreshActiveMessages() {
         .map(normalizeRestMessage)
         .filter(Boolean)
         .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-      opencodeStore.forkMessages = opencodeStore.messages
-        .filter((m) => m.role === "user")
-        .map((m, idx) => ({ entryId: m.id || idx, text: m.text }));
 
       // Server truth just landed, and it carries the sub-agent linkage each
       // dispatch needs. Awaited so a caller that refreshes and then reads
@@ -101,7 +104,6 @@ export function appendLocalUserMessage(text, attachments) {
     ],
     text,
   });
-  opencodeStore.forkMessages.push({ entryId: id, text });
   return id;
 }
 

@@ -21,12 +21,22 @@ const json = (res, body) => {
 // The directory the tests seed the file-search cache against.
 const DIRECTORY = "/home/user/pi-frontend";
 
-const SESSION = {
-  id: "ses_mock1",
-  title: "Mock session",
-  time: { created: 1, updated: 2 },
-  location: { directory: DIRECTORY },
-};
+// Two sessions in one project, so the sidebar has something to switch between —
+// which is what per-session composer drafts need in order to be testable.
+const SESSIONS = [
+  {
+    id: "ses_mock1",
+    title: "Mock session",
+    time: { created: 1, updated: 2 },
+    location: { directory: DIRECTORY },
+  },
+  {
+    id: "ses_mock2",
+    title: "Second session",
+    time: { created: 1, updated: 1 },
+    location: { directory: DIRECTORY },
+  },
+];
 
 // Two models so the picker has something to rank and colour: MODEL_RANK puts
 // "sol" above "luna", and only Sol carries variants.
@@ -48,6 +58,37 @@ const AGENTS = [
   { id: "explore", name: "Explore", mode: "subagent" },
 ];
 
+// A transcript for the first session only, carrying the two things the
+// transcript tests need real components to render: a fenced code block (for the
+// markdown copy button) and an edit-shaped tool call (for the diff view). The
+// second session stays empty, so the draft test switches into a clean chat.
+const TRANSCRIPT = {
+  ses_mock1: [
+    {
+      id: "msg_a",
+      type: "assistant",
+      time: { created: 10 },
+      content: [
+        { type: "text", text: "Here is the snippet:\n\n```js\nconst x = 1;\nconst y = 2;\n```\n" },
+        {
+          type: "tool",
+          name: "edit",
+          id: "call_edit_1",
+          state: {
+            status: "completed",
+            input: {
+              file_path: `${DIRECTORY}/README.md`,
+              old_string: "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf",
+              new_string: "alpha\nbravo\nCHARLIE\ndelta\necho\nfoxtrot\ngolf",
+            },
+            content: [{ type: "text", text: "edited" }],
+          },
+        },
+      ],
+    },
+  ],
+};
+
 const server = http.createServer((req, res) => {
   const url = req.url.split("?")[0];
 
@@ -58,8 +99,9 @@ const server = http.createServer((req, res) => {
     return json(res, { data: [{ name: "compact", description: "compact the session" }] });
   if (url === "/api/skill")
     return json(res, { data: [{ id: "pdf", name: "pdf", description: "read pdfs" }] });
-  if (url === "/api/session") return json(res, { data: [SESSION] });
-  if (/^\/api\/session\/[^/]+\/message$/.test(url)) return json(res, { data: [] });
+  if (url === "/api/session") return json(res, { data: SESSIONS });
+  const messages = url.match(/^\/api\/session\/([^/]+)\/message$/);
+  if (messages) return json(res, { data: TRANSCRIPT[messages[1]] || [] });
   if (/^\/api\/session\/[^/]+\/context$/.test(url)) return json(res, { data: {} });
   if (url === "/api/question/request") return json(res, { data: [] });
   if (url === "/api/integration") return json(res, { data: [] });

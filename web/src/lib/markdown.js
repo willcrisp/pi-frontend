@@ -7,8 +7,9 @@
 // Key export:
 //   renderMarkdown(src) — markdown string -> HTML string, fed into `v-html` by
 //     MessageView.vue/SubagentView.vue. Fenced code blocks get a static copy
-//     button handled via event delegation (MessageView's onMarkdownClick),
-//     since v-html output can't carry a Vue listener directly.
+//     button handled via event delegation (onMarkdownClick in lib/codeCopy.js,
+//     bound by those two components), since v-html output can't carry a Vue
+//     listener directly.
 
 function escapeHtml(s) {
   return s
@@ -149,7 +150,7 @@ export function renderMarkdown(src) {
       i++; // skip closing fence
       const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
       // The copy button is static HTML wired up via event delegation in
-      // MessageView.vue (onMarkdownClick), since this output lands in v-html.
+      // lib/codeCopy.js (onMarkdownClick), since this output lands in v-html.
       const copyBtn = '<button class="code-copy" type="button" title="Copy code" aria-label="Copy code"></button>';
       html.push(`<pre${langAttr}>${copyBtn}<code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
       continue;

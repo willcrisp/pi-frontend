@@ -21,7 +21,6 @@
 @import "./styles/header.css"; /* ChatHeader: title, sub-agent breadcrumb, rolling token counter */
 @import "./styles/ssh-popover.css"; /* SshPopover: connection target */
 @import "./styles/error-banner.css"; /* App.vue process error banner */
-@import "./styles/git-branch-select.css"; /* GitBranchSelect in the composer controls row */
 @import "./styles/usage-popover.css"; /* UsagePopover: token/cost breakdown */
 @import "./styles/color-profile-popover.css"; /* ColorProfilePopover: palette and size controls */
 @import "./styles/messages.css"; /* Message list, prompt rail, jump-to-latest, arrival animations */

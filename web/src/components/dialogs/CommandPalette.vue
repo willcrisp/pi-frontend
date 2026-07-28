@@ -1,5 +1,6 @@
 <!--
-  Ctrl/Cmd+K command palette: fuzzy jump between OpenCode V2 sessions.
+  Ctrl/Cmd+K command palette: fuzzy jump between OpenCode V2 sessions, or open
+  a file from the active session's project into the preview pane.
   Always mounted from App.vue; owns its own global hotkey listener.
 -->
 <script setup>
@@ -11,6 +12,7 @@ import {
   startNewChat,
 } from "../../stores/projects.js";
 import { filesFor, refreshFiles } from "../../stores/filesearch.js";
+import { openPreview } from "../../stores/filepreview.js";
 import { fuzzyScore } from "../../lib/fuzzy.js";
 
 const open = ref(false);
@@ -62,11 +64,14 @@ const items = computed(() => {
 const fileItems = computed(() => {
   const dir = activeSessionDirectory();
   if (!dir) return [];
+  // Opening the preview pane is the useful thing to do with a file here.
+  // Copying the path to the clipboard (what this used to do) gave no feedback
+  // at all, so picking a file looked like it had done nothing.
   return filesFor(dir).files.map((path) => ({
     kind: "file",
     id: `file:${path}`,
     label: path,
-    run: () => navigator.clipboard?.writeText(path),
+    run: () => openPreview(path),
   }));
 });
 
@@ -119,7 +124,7 @@ function onBackdrop(e) {
         ref="inputEl"
         v-model="query"
         class="palette-input"
-        placeholder="Jump to a session…"
+        placeholder="Jump to a session, or open a file…"
         spellcheck="false"
         @keydown="onInputKeydown"
       />

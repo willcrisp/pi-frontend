@@ -21,6 +21,8 @@
 //   context.js    Token and context accounting (local estimate vs server truth).
 //   steer.js      Prompts admitted into a run already in flight.
 //   activity.js   Per-session running/unread state — the sidebar's status dot.
+//   drafts.js     Per-session composer drafts; `state.draft` is the active
+//                 one, this keeps the rest and persists them.
 //   messages.js   Transcript loading, REST->view normalization, sub-agent
 //                 backfill.
 //   prompt.js     Sending a prompt that starts a turn.

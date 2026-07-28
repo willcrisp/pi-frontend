@@ -20,6 +20,7 @@ import PermissionDialog from "./components/dialogs/PermissionDialog.vue";
 import QuestionDialog from "./components/dialogs/QuestionDialog.vue";
 import FilePreview from "./components/chat/FilePreview.vue";
 import CommandPalette from "./components/dialogs/CommandPalette.vue";
+import ShortcutsDialog from "./components/dialogs/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import { confirmStore } from "./stores/confirm.js";
 import ProvidersDialog from "./components/dialogs/ProvidersDialog.vue";
@@ -52,6 +53,8 @@ onMounted(() => {
     <FilePreview />
     <!-- Owns its own Ctrl/Cmd+K listener, so it mounts unconditionally. -->
     <CommandPalette />
+    <!-- Same: owns the "?" listener, and must work with no session open. -->
+    <ShortcutsDialog />
     <ConfirmDialog v-if="confirmStore.open" />
     <Sidebar />
 

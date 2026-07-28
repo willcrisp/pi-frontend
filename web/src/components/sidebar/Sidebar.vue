@@ -9,8 +9,10 @@
   most recently active project first.
 -->
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { opencodeStore, sessionStatus } from "../../stores/opencode.js";
+import { fuzzyScore } from "../../lib/fuzzy.js";
+import { readArray, writeJSON } from "../../lib/storage.js";
 import {
   openSession,
   projectsStore,
@@ -48,9 +50,14 @@ const archivedCount = computed(
   () => groupSessionsByDirectory(rootSessions()).filter((g) => isArchived(g.directory)).length
 );
 
-// Collapsed-by-directory state, UI-only (not persisted); a group starts expanded
-// until its directory is added here.
-const collapsed = reactive(new Set());
+// How the sidebar is folded is UI-only state, but it's state the user arranged
+// by hand — losing it on every reload meant re-tidying the sidebar each time.
+// Both sets are keyed by directory and persisted as plain string arrays.
+const COLLAPSED_KEY = "opencode-web:collapsedProjects";
+const EXPANDED_KEY = "opencode-web:expandedProjects";
+
+// A group starts expanded until its directory is added here.
+const collapsed = reactive(new Set(readArray(COLLAPSED_KEY)));
 
 function toggleGroup(directory) {
   if (collapsed.has(directory)) collapsed.delete(directory);
@@ -59,7 +66,12 @@ function toggleGroup(directory) {
 
 // Groups show their RECENT_LIMIT most recent chats until expanded here.
 const RECENT_LIMIT = 5;
-const expanded = reactive(new Set());
+const expanded = reactive(new Set(readArray(EXPANDED_KEY)));
+
+// `reactive(new Set())` tracks mutations, so watching the set itself is enough —
+// no need to route every add/delete through a setter.
+watch(collapsed, (set) => writeJSON(COLLAPSED_KEY, [...set]));
+watch(expanded, (set) => writeJSON(EXPANDED_KEY, [...set]));
 
 function visibleSessions(group) {
   return expanded.has(group.directory) ? group.sessions : group.sessions.slice(0, RECENT_LIMIT);
@@ -110,27 +122,12 @@ const adding = ref(false);
 
 // Fuzzy directory autocomplete: split the typed path into parent + partial,
 // list the parent's subdirectories on the server, subsequence-match the
-// partial against each basename.
+// partial against each basename (lib/fuzzy.js — the same scorer the palette
+// and the composer's menus use).
 const pathSuggestions = ref([]);
 const showSuggestions = ref(false);
 const activeSuggestion = ref(0);
 let browseSeq = 0;
-
-function fuzzyScore(q, s) {
-  let score = 0;
-  let si = 0;
-  let prevHit = -2;
-  for (const ch of q) {
-    const hit = s.indexOf(ch, si);
-    if (hit === -1) return null;
-    score += 1;
-    if (hit === prevHit + 1) score += 2;
-    if (hit === 0 || " /\\-_.:".includes(s[hit - 1])) score += 3;
-    prevHit = hit;
-    si = hit + 1;
-  }
-  return score - s.length / 100;
-}
 
 async function onPathInput() {
   const raw = newPath.value.trim().replace(/\\/g, "/");
@@ -373,7 +370,7 @@ async function newSessionIn(directory) {
               <span class="chat-title">{{ s.title }}</span>
               <button
                 class="icon-btn remove-btn"
-                title="Delete session"
+                title="Hide session"
                 @click.stop="onRemoveSession(s.id)"
               >
                 ×

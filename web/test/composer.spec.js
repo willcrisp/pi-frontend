@@ -78,12 +78,40 @@ test.describe("useSlashCommands", () => {
     await expect(ta).toHaveValue(/^\/\S+ $/);
   });
 
-  test("Escape clears the box, because the box is the query", async ({ page }) => {
+  test("Escape dismisses the menu without discarding what was typed", async ({ page }) => {
     const ta = page.locator("textarea");
     await ta.fill("/comp");
     await expect(page.locator(".slash-menu li")).not.toHaveCount(0);
+
     await ta.press("Escape");
+    await expect(page.locator(".slash-menu li")).toHaveCount(0);
+    await expect(ta).toHaveValue("/comp");
+
+    // Editing the query is what reopens it — "/compa" still prefix-matches
+    // "compact", and differs from the text Escape dismissed.
+    await ta.press("a");
+    await expect(page.locator(".slash-menu li")).not.toHaveCount(0);
+  });
+});
+
+test.describe("drafts", () => {
+  test("a half-typed prompt follows its own session", async ({ page }) => {
+    const ta = page.locator("textarea");
+    const rows = page.locator(".chat-history .chat-row");
+    await expect(rows).toHaveCount(2);
+
+    await ta.fill("draft for the first session");
+
+    // Switch to the other chat: the box is that chat's, so it comes up empty.
+    await rows.nth(1).click();
     await expect(ta).toHaveValue("");
+    await ta.fill("a different draft");
+
+    // ...and switching back restores the first one rather than losing it.
+    await rows.nth(0).click();
+    await expect(ta).toHaveValue("draft for the first session");
+    await rows.nth(1).click();
+    await expect(ta).toHaveValue("a different draft");
   });
 });
 

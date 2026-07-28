@@ -10,7 +10,6 @@ export const opencodeStore = reactive({
   activeSessionId: null,
   activeSession: null,
   messages: [],
-  forkMessages: [],
   isStreaming: false,
   availableModels: [], // [{ providerID, modelID, label, contextLimit, variants }]
   selectedModel: null, // { providerID, modelID }

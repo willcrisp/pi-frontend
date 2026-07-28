@@ -39,7 +39,13 @@ export function useSlashCommands(input, textareaEl) {
     return allCommands.value.filter((c) => c.name && c.name.toLowerCase().startsWith(query));
   });
 
-  const open = computed(() => matches.value.length > 0);
+  // The exact box contents Escape dismissed, or null. `open` is derived straight
+  // from `input`, so dismissal needs somewhere to live: the earlier approach —
+  // clearing the box — did close the menu, but at the cost of throwing away
+  // what the user had typed, with no undo.
+  const dismissed = ref(null);
+
+  const open = computed(() => matches.value.length > 0 && dismissed.value !== input.value);
   const index = ref(0);
 
   watch(matches, () => {
@@ -57,9 +63,11 @@ export function useSlashCommands(input, textareaEl) {
     nextTick(() => textareaEl.value?.focus());
   }
 
-  // Escape clears the whole box, because the box *is* the query here.
-  function escape() {
-    input.value = "";
+  // Escape dismisses only the menu, leaving the text alone. Typing anything
+  // further makes `input` differ from what was dismissed, which reopens it.
+  function escape(e) {
+    e.preventDefault();
+    dismissed.value = input.value;
   }
 
   return { menu: { open, matches, index, choose, escape }, allCommands, runBuiltinCommand };
