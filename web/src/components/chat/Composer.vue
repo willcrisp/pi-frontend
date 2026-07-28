@@ -6,7 +6,7 @@
   thumbnails and can be marked up with the hover pencil, see ImageAnnotator),
   send prompt & abort actions.
   While a run is streaming the send arrow is replaced by stop, and the steer
-  pill appears beside it: it sends the same box into the run that is already
+  icon appears beside it: it sends the same box into the run that is already
   going, for the agent to read at its next turn (Enter does the same thing —
   see submit()).
   Ctrl/Cmd+ArrowUp/Down steps the reasoning variant, Ctrl/Cmd+ArrowLeft/Right

@@ -1501,7 +1501,7 @@ export async function sendPrompt(text, files) {
 // and dropping one into the middle of a streaming assistant message would put
 // it in the wrong place and then have it move when refreshActiveMessages
 // reconciles at the end of the run. It lives in pendingSteers until then, which
-// is what the composer's steer button counts.
+// is what the composer's steer button reports.
 //
 // Returns true if the server admitted it.
 let steerSeq = 0;
@@ -1560,8 +1560,8 @@ function dropSteer(id) {
   if (at >= 0) opencodeStore.pendingSteers.splice(at, 1);
 }
 
-// Pending steers for one session, oldest first — what the steer pill counts and
-// names in its tooltip.
+// Pending steers for one session, oldest first — what the steer button names in
+// its tooltip.
 export function pendingSteersFor(sessionID) {
   return opencodeStore.pendingSteers.filter((s) => s.sessionID === sessionID);
 }
