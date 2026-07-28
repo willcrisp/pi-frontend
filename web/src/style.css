@@ -84,6 +84,15 @@ body {
   padding: 0;
   font-size: 13px;
   cursor: pointer;
+  /* SVG children are flat line icons; flex keeps them optically centred the
+     same way the text glyphs (+, ⟳) already are. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn svg {
+  display: block;
 }
 
 .icon-btn:hover {
@@ -2333,6 +2342,17 @@ textarea {
   padding: 9px 74px 9px 12px;
   max-height: 200px;
   outline: none;
+}
+
+/* The composer textarea is sized by autosize(), which writes an explicit inline
+   height as the prompt gains lines. `flex: 1` above would hand the main axis to
+   flex-basis: 0 inside the column-flex .composer-field and that height would be
+   ignored — the field stayed one line tall no matter how much was typed. Sizing
+   from its own height instead lets it grow, and it scrolls once it hits the
+   max-height cap. */
+.composer-field textarea {
+  flex: 0 0 auto;
+  overflow-y: auto;
 }
 
 textarea::placeholder {

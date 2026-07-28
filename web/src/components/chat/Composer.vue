@@ -5,6 +5,10 @@
   attachments (paste, drag-and-drop, or the paperclip picker — images preview as
   thumbnails and can be marked up with the hover pencil, see ImageAnnotator),
   send prompt & abort actions.
+  While a run is streaming the send arrow is replaced by stop, and the steer
+  icon appears beside it: it sends the same box into the run that is already
+  going, for the agent to read at its next turn (Enter does the same thing —
+  see submit()).
   Ctrl/Cmd+ArrowUp/Down steps the reasoning variant, Ctrl/Cmd+ArrowLeft/Right
   steps the model (over the same filtered list the picker shows). The selects
   are themed SelectMenu popovers that open upward. The textarea placeholder
@@ -15,6 +19,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   opencodeStore as store,
   sendPrompt,
+  sendSteer,
   abortSession,
   setModel,
   setAgent,
@@ -25,6 +30,7 @@ import { startNewChat, activeSessionDirectory } from "../../stores/projects.js";
 import { hiddenModels, modelKey } from "../../stores/modelfilter.js";
 import D20Die from "./D20Die.vue";
 import SelectMenu from "./SelectMenu.vue";
+import SteerButton from "./SteerButton.vue";
 import ImageAnnotator from "../dialogs/ImageAnnotator.vue";
 
 const input = ref("");
@@ -164,9 +170,27 @@ function randomPlaceholder() {
 
 const composerPlaceholder = ref(randomPlaceholder());
 
+const canSend = computed(() => !!(input.value.trim() || attachments.value.length));
+
+// Mid-run, the same box steers instead of being dead: the prompt is admitted
+// into the run that is already going and the agent reads it at its next turn.
+// Slash commands are deliberately NOT routed here — a command starts its own
+// turn, which is not what steering means.
+function steer() {
+  if (!canSend.value || !store.isStreaming) return;
+  const files = attachments.value.map(({ filename, mime, url }) => ({ filename, mime, url }));
+  sendSteer(input.value.trim(), files);
+  attachments.value = [];
+  input.value = "";
+}
+
 function submit() {
   const text = input.value.trim();
-  if ((!text && !attachments.value.length) || store.isStreaming) return;
+  if (!text && !attachments.value.length) return;
+  if (store.isStreaming) {
+    steer();
+    return;
+  }
 
   // "/name args" for a known command runs as a slash command; anything else
   // (including unknown /words) goes out as a normal prompt.
@@ -184,7 +208,6 @@ function submit() {
   }
   attachments.value = [];
   input.value = "";
-  nextTick(autosize);
 }
 
 function onKeydown(e) {
@@ -206,7 +229,9 @@ function onKeydown(e) {
       return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Shift+Enter falls through to the browser and inserts a newline. `isComposing`
+  // keeps an IME's confirmation Enter from sending a half-typed prompt.
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     submit();
   }
@@ -255,10 +280,7 @@ function chooseSlashCommand(cmd) {
     return;
   }
   input.value = `/${cmd.name} `;
-  nextTick(() => {
-    textareaEl.value?.focus();
-    autosize();
-  });
+  nextTick(() => textareaEl.value?.focus());
 }
 
 // Builtins run against the harness itself instead of going to the server.
@@ -268,12 +290,27 @@ function runBuiltinCommand(name) {
   }
 }
 
+// Grow the textarea to fit its content (capped by the CSS max-height, past which
+// it scrolls). Measuring needs the height released first, hence the "auto" pass.
 function autosize() {
   const el = textareaEl.value;
   if (!el) return;
+  // An empty textarea measures its placeholder, and the quotes wrap to several
+  // lines — drop back to the one-row height from `rows` rather than fitting one.
+  if (!el.value) {
+    el.style.height = "";
+    return;
+  }
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
 }
+
+// Keeps the height in step with the text on the paths that change it without an
+// input event — sending (which clears), Escape, picking a slash command.
+// `flush: "post"` so the textarea has already been patched when we measure it.
+// The template's @input stays as well: v-model holds updates back during IME
+// composition, and the box should still grow while a long phrase is composed.
+watch(input, autosize, { flush: "post" });
 
 const selectedModelKey = computed(() =>
   store.selectedModel ? `${store.selectedModel.providerID}:${store.selectedModel.modelID}` : ""
@@ -451,8 +488,17 @@ function onSelectShortcut(e) {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onSelectShortcut));
-onBeforeUnmount(() => window.removeEventListener("keydown", onSelectShortcut));
+onMounted(() => {
+  autosize();
+  window.addEventListener("keydown", onSelectShortcut);
+  // A narrower composer re-wraps the text into more lines, so the fitted height
+  // has to be recomputed.
+  window.addEventListener("resize", autosize);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onSelectShortcut);
+  window.removeEventListener("resize", autosize);
+});
 </script>
 
 <template>
@@ -513,7 +559,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onSelectShortcut));
           v-model="input"
           rows="1"
           :placeholder="composerPlaceholder"
-          title="Enter to send, Shift+Enter for newline"
+          :title="
+            store.isStreaming
+              ? 'Enter to steer — the agent reads it at its next turn. Shift+Enter for newline'
+              : 'Enter to send, Shift+Enter for newline'
+          "
           @keydown="onKeydown"
           @input="autosize"
           @paste="onPaste"
@@ -543,6 +593,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onSelectShortcut));
               />
             </svg>
           </button>
+          <SteerButton v-if="store.isStreaming" :disabled="!canSend" @steer="steer" />
           <button
             v-if="store.isStreaming"
             class="composer-icon-btn stop"
