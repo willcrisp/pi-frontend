@@ -22,7 +22,8 @@
 -->
 <script setup>
 import { computed, onUnmounted, ref, watch } from "vue";
-import { childForCall } from "../../stores/opencode.js";
+import { childForCall, opencodeStore } from "../../stores/opencode.js";
+import { openSubagentSession } from "../../stores/projects.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 
 const props = defineProps({
@@ -89,6 +90,17 @@ function onToggle(e) {
 }
 
 const errorText = computed(() => child.value?.error || (props.state && props.state.error) || "");
+
+// Drilling in needs the child's own session id, which only exists once the
+// dispatch has been linked — a card rendering from the tool call alone has
+// nothing to open, so the control is hidden rather than dead.
+const canOpenSession = computed(() => !!child.value?.sessionID);
+
+function openSession() {
+  const c = child.value;
+  if (!c?.sessionID) return;
+  openSubagentSession(c.sessionID, c.parentSessionID || opencodeStore.activeSessionId);
+}
 
 const totalTokens = computed(() => {
   const t = child.value?.tokens;
@@ -239,6 +251,15 @@ function parseArgs(args) {
         {{ status }}
       </span>
       <span v-if="durationMs != null" class="subagent-duration">{{ formatDuration(durationMs) }}</span>
+      <button
+        v-if="canOpenSession"
+        type="button"
+        class="subagent-open"
+        title="Open this sub-agent's own session"
+        @click="openSession"
+      >
+        open ↗
+      </button>
     </div>
 
     <details class="subagent-card" :open="open" @toggle="onToggle">

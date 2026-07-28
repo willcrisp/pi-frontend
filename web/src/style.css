@@ -452,6 +452,8 @@ header .wordmark {
   min-width: 0;
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 6px;
   background: none;
   border: none;
   font-family: inherit;
@@ -474,6 +476,53 @@ header .wordmark {
 .header-title-content {
   display: inline-flex !important;
   align-items: center;
+}
+
+/* Trail back out of a sub-agent's session. Sub-agent sessions are absent from
+   the sidebar by design, so this is the only way back to the parent chat —
+   it sits next to the token counters, sharing the centre of the header. */
+.session-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.breadcrumb-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.breadcrumb-link:hover {
+  color: var(--fg);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.breadcrumb-sep {
+  color: var(--dim);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* The leaf is where you already are — named, but not offered as a link. */
+.breadcrumb-current {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--msg-subagent);
 }
 
 .dumb-zone-brain {
@@ -1730,6 +1779,27 @@ main {
 .subagent-duration {
   margin-left: auto;
   color: var(--dim);
+}
+
+/* Also margin-left:auto so the control still sits right when a card has no
+   duration to show — the first auto margin takes the slack, and the two end up
+   adjacent at the right when both are present. */
+.subagent-open {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.subagent-open:hover {
+  color: var(--fg);
+  border-color: var(--msg-subagent);
 }
 
 .subagent-dot {

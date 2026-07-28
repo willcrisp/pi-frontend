@@ -4,7 +4,12 @@
 -->
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { activeSessionDirectory, openSession, projectsStore, startNewChat } from "../../stores/projects.js";
+import {
+  activeSessionDirectory,
+  openSession,
+  rootSessions,
+  startNewChat,
+} from "../../stores/projects.js";
 import { filesFor, refreshFiles } from "../../stores/filesearch.js";
 
 const open = ref(false);
@@ -57,7 +62,9 @@ function fuzzyScore(q, s) {
 
 const items = computed(() => {
   const out = [];
-  for (const s of projectsStore.sessions) {
+  // Root sessions only, matching the sidebar: a sub-agent's session is reached
+  // by drilling into its card, not picked from a flat list of chats.
+  for (const s of rootSessions()) {
     out.push({
       kind: "session",
       id: s.id,

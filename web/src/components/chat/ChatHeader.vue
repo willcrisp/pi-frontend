@@ -9,7 +9,12 @@
 <script setup>
 import { computed, ref } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
-import { activeSessionDirectory, projectsStore } from "../../stores/projects.js";
+import {
+  activeSessionDirectory,
+  openSession,
+  projectsStore,
+  sessionAncestry,
+} from "../../stores/projects.js";
 import { gitStore, fetchBranches } from "../../stores/git.js";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
@@ -31,6 +36,20 @@ const sessionTitle = computed(() => {
   if (!t || PLACEHOLDER_TITLE.test(t)) return null;
   return t;
 });
+
+// Ancestors of the session in view, outermost first. Non-empty only inside a
+// sub-agent's session, which is unreachable from the sidebar — this trail is
+// the way back out, so it is the one navigation affordance that must always be
+// present when it applies.
+const ancestry = computed(() => sessionAncestry(store.activeSessionId));
+
+// Sub-agent sessions are auto-titled from the dispatch and often blank early on;
+// a nameless crumb is still clickable, so label it rather than render a gap.
+const currentCrumb = computed(() => sessionTitle.value || "sub-agent");
+
+// The breadcrumb already ends with the current session's name, so the inline
+// title would just repeat it — the counters after it still belong here though.
+const showInlineTitle = computed(() => !!sessionTitle.value && !ancestry.value.length);
 
 function fmtTokens(n) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}m`;
@@ -124,15 +143,30 @@ function scrollToRunningSubagent() {
     </div>
 
     <div class="header-title" :title="titleText">
+      <nav v-if="ancestry.length" class="session-breadcrumb">
+        <template v-for="crumb in ancestry" :key="crumb.id">
+          <button
+            type="button"
+            class="breadcrumb-link"
+            :title="`Back to ${crumb.title}`"
+            @click="openSession(crumb.id)"
+          >
+            {{ crumb.title }}
+          </button>
+          <span class="breadcrumb-sep">›</span>
+        </template>
+        <span class="breadcrumb-current">{{ currentCrumb }}</span>
+      </nav>
+
       <span class="header-title-content">
-        <span v-if="sessionTitle">{{ sessionTitle }}</span>
+        <span v-if="showInlineTitle">{{ sessionTitle }}</span>
         <template v-if="tokenSummary">
-          <span v-if="sessionTitle"> · </span>
+          <span v-if="showInlineTitle"> · </span>
           <Transition name="token-roll" mode="out-in">
             <span :key="tokenSummaryKey" class="token-summary-value">{{ tokenSummary }}</span>
           </Transition>
         </template>
-        <span v-if="contextPercent">{{ sessionTitle || tokenSummary ? " · " : "" }}{{ contextPercent }}</span>
+        <span v-if="contextPercent">{{ showInlineTitle || tokenSummary ? " · " : "" }}{{ contextPercent }}</span>
         <span v-if="store.isStreaming" class="dim"> · streaming…</span>
       </span>
     </div>

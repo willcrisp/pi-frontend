@@ -20,6 +20,7 @@ import {
   groupSessionsByDirectory,
   isArchived,
   setProjectArchived,
+  rootSessions,
 } from "../../stores/projects.js";
 import { listDirectories } from "../../stores/filesearch.js";
 import { confirmDialog } from "../../stores/confirm.js";
@@ -34,14 +35,17 @@ const showProviders = ref(false);
 const showSubagents = ref(false);
 const showSavedPermissions = ref(false);
 
+// Sub-agent sessions are deliberately absent here: they live as expandable
+// cards inside their parent's transcript, and you drill into them from there.
+// See rootSessions in stores/projects.js.
 const groups = computed(() =>
-  groupSessionsByDirectory(projectsStore.sessions).filter(
+  groupSessionsByDirectory(rootSessions()).filter(
     (g) => isArchived(g.directory) === showArchived.value
   )
 );
 
 const archivedCount = computed(
-  () => groupSessionsByDirectory(projectsStore.sessions).filter((g) => isArchived(g.directory)).length
+  () => groupSessionsByDirectory(rootSessions()).filter((g) => isArchived(g.directory)).length
 );
 
 // Collapsed-by-directory state, UI-only (not persisted); a group starts expanded

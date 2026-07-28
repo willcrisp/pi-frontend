@@ -24,11 +24,16 @@ function loadArchived() {
 }
 
 export const projectsStore = reactive({
-  sessions: [], // [{ id, title, updatedAt, directory }]
+  sessions: [], // [{ id, title, updatedAt, directory, parentID }]
   loadingSessions: false,
   // Client-only project archiving (by root directory) — the server has no
   // project entity to archive, so this just hides groups in the sidebar.
   archivedDirectories: loadArchived(),
+  // child sessionID -> parent sessionID, recorded when the user drills into a
+  // sub-agent from its card. The server reports the same link as `parentID`,
+  // but only once the session list has caught up with a child it may have
+  // created seconds ago; this makes the breadcrumb correct immediately.
+  subagentParents: {},
 });
 
 export function isArchived(directory) {
@@ -59,6 +64,9 @@ export async function fetchSessions() {
           // this endpoint's SessionV2Info nests it under `location`, unlike the legacy
           // (non-V2) Session type, which has a flat top-level `directory`.
           directory: (s.location && s.location.directory) || "",
+          // Set only on a dispatched sub-agent's session. Drives both the
+          // sidebar filter and the breadcrumb — see rootSessions/sessionAncestry.
+          parentID: s.parentID || "",
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
     }
@@ -67,6 +75,42 @@ export async function fetchSessions() {
   } finally {
     projectsStore.loadingSessions = false;
   }
+}
+
+// Sessions the user actually started. A session with a `parentID` is a
+// dispatched sub-agent: it belongs to its parent's transcript (as an expandable
+// card) and to the breadcrumb, never to the sidebar, where it would read as a
+// chat of its own and bury the real ones.
+export function rootSessions() {
+  return projectsStore.sessions.filter((s) => !s.parentID);
+}
+
+// The server's `parentID` is authoritative; the locally recorded link covers a
+// child too new to be in the session list yet.
+export function parentSessionId(sessionID) {
+  if (!sessionID) return "";
+  const session = projectsStore.sessions.find((s) => s.id === sessionID);
+  return session?.parentID || projectsStore.subagentParents[sessionID] || "";
+}
+
+export function isSubagentSession(sessionID) {
+  return !!parentSessionId(sessionID);
+}
+
+// Ancestor chain for the breadcrumb, outermost session first. Walks the parent
+// links so a sub-agent that itself dispatched one shows the whole path back.
+// `seen` guards against a cycle — a malformed link must not spin forever.
+export function sessionAncestry(sessionID) {
+  const chain = [];
+  const seen = new Set([sessionID]);
+  let id = parentSessionId(sessionID);
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    const session = projectsStore.sessions.find((s) => s.id === id);
+    chain.unshift({ id, title: session?.title || "parent session" });
+    id = parentSessionId(id);
+  }
+  return chain;
 }
 
 // Basename of a session's directory, for a short group-header label (full path stays
@@ -135,8 +179,11 @@ export async function startNewChat(directory) {
 export async function removeSession(sessionID) {
   projectsStore.sessions = projectsStore.sessions.filter((s) => s.id !== sessionID);
   if (opencodeStore.activeSessionId === sessionID) {
-    if (projectsStore.sessions.length > 0) {
-      openSession(projectsStore.sessions[0].id);
+    // Fall back to a real chat, never to a sub-agent's session — landing in one
+    // with no way back would be a dead end.
+    const roots = rootSessions();
+    if (roots.length > 0) {
+      openSession(roots[0].id);
     } else {
       startNewChat().catch(() => {});
     }
@@ -151,6 +198,17 @@ export function openSession(sessionID) {
   if (session?.directory) fetchBranches(session.directory);
 }
 
+// Drill into a dispatched sub-agent's own session from its card in the parent
+// transcript. Navigation is immediate and the parent link is recorded up front
+// so the breadcrumb is right on arrival; the list refresh that follows fills in
+// the child's title and directory, which only the server knows.
+export function openSubagentSession(childID, parentID) {
+  if (!childID) return;
+  if (parentID) projectsStore.subagentParents[childID] = parentID;
+  openSession(childID);
+  fetchSessions().catch(() => {});
+}
+
 export function activeSessionDirectory() {
   const id = opencodeStore.activeSessionId;
   if (!id) return "";
@@ -162,12 +220,16 @@ export async function initProjects() {
   await fetchSessions();
 
   const lastId = localStorage.getItem(LAST_SESSION_KEY);
+  // A sub-agent session is a legitimate thing to have been looking at, so it is
+  // still restorable by id — the breadcrumb gets you back out. Only the blind
+  // "just open something" fallback is restricted to real chats.
   const found = projectsStore.sessions.find((s) => s.id === lastId);
+  const roots = rootSessions();
 
   if (found) {
     openSession(found.id);
-  } else if (projectsStore.sessions.length > 0) {
-    openSession(projectsStore.sessions[0].id);
+  } else if (roots.length > 0) {
+    openSession(roots[0].id);
   } else {
     await startNewChat().catch(() => {});
   }
