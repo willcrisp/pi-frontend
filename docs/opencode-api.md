@@ -91,10 +91,35 @@ this frontend or flagged as a known gap.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/session/{sessionID}/question` | Not wired |
-| POST | `/api/session/{sessionID}/question/{requestID}/reply` | Not wired |
-| POST | `/api/session/{sessionID}/question/{requestID}/reject` | Not wired |
-| GET | `/api/question/request` | Not wired. Global pending questions |
+| GET | `/api/session/{sessionID}/question` | Not wired. Returns `{data: QuestionV2.Request[]}` |
+| POST | `/api/session/{sessionID}/question/{requestID}/reply` | Wired: `question.js#reply`. Body **`{answers: string[][]}`** — see below. 204 on success |
+| POST | `/api/session/{sessionID}/question/{requestID}/reject` | Wired: `question.js#reject`. **No body.** 204 on success |
+| GET | `/api/question/request` | Wired: `question.js#loadPendingQuestions`. Returns `{location, data: QuestionV2.Request[]}` |
+
+**One ask carries many questions, and answers are positional by label.** This
+is the shape that used to be guessed wrong, so spelling it out:
+
+```
+QuestionV2.Request = {id: "que_...", sessionID, questions: Info[], tool?}
+QuestionV2.Info    = {question, header, options: Option[], multiple?, custom?}
+QuestionV2.Option  = {label, description}     // both required — and NO id
+QuestionV2.Reply   = {answers: string[][]}    // QuestionV2.Answer = string[]
+QuestionV2.Tool    = {messageID, callID}
+```
+
+- **Options have no `id`.** An answer names its choice by the option's `label`,
+  verbatim.
+- **`answers` is positional over `questions`** — one entry per question, in
+  order. Each entry is a *list* of labels, because a question with
+  `multiple: true` accepts several. A single-select answer is a one-element
+  list.
+- `custom: true` means free text is allowed as an answer; the label sent is
+  then the user's own text rather than one of the options.
+- Verified against a live server: `{option, text}` (or any body without
+  `answers`) is rejected **400** `InvalidRequestError: Missing key at
+  ["answers"]`, while `{answers: [["Yes"]]}` passes body validation and only
+  404s on an unknown `requestID` — body validation runs *before* the question
+  lookup, which makes that pair a clean discriminator for the shape.
 
 ### Metadata
 
@@ -177,7 +202,10 @@ Envelope: `{id: "evt_...", type: string, data: object, metadata?, durable?, loca
 - `session.input.admitted` — wired (acknowledged, no state change)
 - `permission.v2.asked` — wired, enqueues in permission store
 - `permission.v2.replied` — wired, clears queue entry
-- `question.v2.asked` / `question.v2.rejected` — **not wired**; wire up when you build the questions UI
+- `question.v2.asked` — wired, enqueues in question store (`data` is a `QuestionV2.Request`)
+- `question.v2.replied` / `question.v2.rejected` — wired, clears the queue entry. Both key the
+  question as **`data.requestID`** (`data.id` does not exist on these two; the envelope's `id` is
+  the `evt_` id). `.replied` also carries `answers`
 - `pty.created` / `.updated` / `.exited` / `.deleted` — wired (no state change today)
 - `file.edited` / `file.watcher.updated` — not wired
 - `integration.updated` / `integration.connection.updated` — not wired; would let the providers dialog auto-refresh
@@ -234,4 +262,9 @@ You are a strict PR reviewer…
 - **Agents are addressed by `id`, not `name`.** `{id: "build", name: "Build"}` — send `build`. Sending `Build` fails with `Agent not found: "Build"`.
 - **`fs/list` `path` is relative to `location.directory`.** Sending an absolute path when the location is the server's own workspace returns 500 because the server sandboxes to the project root.
 - **`compact` is stubbed server-side in this build** — the endpoint exists (POST `/api/session/{id}/compact`) but always returns 503 with `{message: "Session compact is not available yet"}`. Frontend surfaces this as an error banner.
+- **Question options are identified by `label`, not by an id** — there is no id
+  on `QuestionV2.Option`. And a single `question.v2.asked` is a *batch*: the
+  payload is `{questions: [...]}`, never a lone `question` string. Reading
+  `data.question`/`data.options` yields `undefined` and silently renders an
+  empty dialog.
 - **Auth is basic and out-of-band.** The OpenAPI declares `security: []` on every op, but a request without the `Authorization: Basic ...` header returns 401. Password comes from `opencode2 service password`.

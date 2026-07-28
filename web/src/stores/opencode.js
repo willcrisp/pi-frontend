@@ -5,7 +5,7 @@ import { reactive } from "vue";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { apiBase, authHeaders } from "./ssh.js";
 import { handlePermissionEvent } from "./permission.js";
-import { handleQuestionEvent } from "./question.js";
+import { handleQuestionEvent, loadPendingQuestions } from "./question.js";
 import { loadIntegrations } from "./providers.js";
 
 export const opencodeStore = reactive({
@@ -454,6 +454,10 @@ function setupEventStream() {
     onopen: async (res) => {
       if (res.ok) {
         opencodeStore.connected = true;
+        // Runs on every (re)connect, not just the first: an ask that landed
+        // while the stream was down would otherwise block its agent forever on
+        // a question this UI never shows.
+        loadPendingQuestions();
         return;
       }
       opencodeStore.connected = false;
