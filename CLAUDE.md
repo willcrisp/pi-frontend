@@ -27,6 +27,7 @@ here rather than grepping the whole tree:
 | the request/response shape of a server call | the store that owns the route; the transport is `lib/api.js` |
 | how a prompt is sent, or its body shape | `stores/opencode/transport.js` |
 | a component's appearance | its partial in `web/src/styles/`, or its `<style scoped>` |
+| composer input, attachments, or the `/` and `@` menus | the matching `use*` in `web/src/composables/` |
 | what the sidebar dot shows | `stores/opencode/activity.js` |
 | sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
 | a persisted preference | the owning store, via `lib/storage.js` |
@@ -205,6 +206,17 @@ applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
 cards, find bar), `components/dialogs/` (connect, permission, question,
 sub-agents, providers, command palette), `components/popovers/`,
 `components/sidebar/`.
+
+**Composables** — `web/src/composables/` holds the composer's parts, which are
+independently testable and were what made `Composer.vue` unreadable inline:
+`useAttachments` (paste/drop/picker, thumbnails, image markup), `useAutosize`,
+`useSlashCommands` (the `/query` menu), `useFileMentions` (the `@path` menu),
+`useModelPicker` (agent/model/reasoning selects and their Ctrl/Cmd+arrow
+shortcuts), and `useListMenu` — the keyboard behaviour the two autocomplete
+menus share. `Composer.vue` itself is now just wiring plus the template.
+
+Composables return refs; **destructure them at the top of `<script setup>`** so
+the template auto-unwraps (`attachments`, not `files.attachments.value`).
 
 **Shared helpers** — `lib/api.js` (every server call; see above), `lib/storage.js`
 (every persisted preference), plus the dependency-free `markdown.js`, `diff.js`,
