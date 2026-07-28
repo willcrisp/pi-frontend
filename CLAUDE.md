@@ -12,9 +12,9 @@ This file provides guidance when working with code in this repository.
 - Vue is the only runtime dependency (plus `@microsoft/fetch-event-source` for the
   authenticated SSE stream). Markdown rendering and diffing are hand-rolled in
   `web/src/lib/` rather than pulled in — keep it that way unless there's a reason.
-- No test runner, linter, or formatter is configured. `npm run build` is the only
-  check there is. Run it before you call a change done — a broken import or a
-  bad template is otherwise a runtime-only failure.
+- No linter or formatter is configured. The checks are `npm run build` (a broken
+  import or bad template is otherwise a runtime-only failure) and `npm test`, a
+  small Playwright suite over the composer. Run both before calling a change done.
 
 ## Where to make a change
 
@@ -38,6 +38,7 @@ here rather than grepping the whole tree:
 cd web && npm install
 npm run dev     # Vite dev server on http://localhost:5173
 npm run build   # Production build to web/dist/
+npm test        # Playwright composer tests (starts its own servers)
 ```
 
 You also need an OpenCode V2 server to point at:
@@ -51,6 +52,29 @@ opencode2 service password             # basic-auth password the server generate
 Remote servers are reached by tunnelling them to a local port
 (`ssh -L 5000:localhost:4096 ALF-UAT.coder`) and pointing the connect dialog at
 that port.
+
+### Testing
+
+`npm test` runs Playwright against the real UI. It needs no running OpenCode
+server and no setup: `web/playwright.config.js` starts both the Vite dev server
+and `web/test/mock-opencode.js`, a stand-in implementing just enough of the V2
+HttpApi to boot the frontend (health, the four catalogs, a session list, an
+empty transcript, an SSE stream held open).
+
+First run on a fresh machine needs a browser: `npx playwright install chromium`.
+Where a sandbox or CI image already ships a Chromium that doesn't match this
+package's build number, point at it instead — `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium npm test`.
+
+The suite covers `web/src/composables/` — the composer's autosize, attachments,
+the `/` and `@` menus, and the model picker — because that is the most stateful
+UI in the repo. It is a smoke suite, not a regression net for everything:
+
+- Prefer driving the real component to stubbing at the network layer. If a test
+  needs a route the mock lacks, add it to `mock-opencode.js`.
+- A test asserting a specific past bug should say so, so it isn't "simplified"
+  away later — see the Escape case in `test/mentions.spec.js`.
+- Anything reached over PTY (`filesearch.js`, `git.js`, `remotefs.js`) has no
+  mock; seed the store's localStorage cache instead, as `mentions.spec.js` does.
 
 ### How requests actually reach the server
 
@@ -207,13 +231,12 @@ cards, find bar), `components/dialogs/` (connect, permission, question,
 sub-agents, providers, command palette), `components/popovers/`,
 `components/sidebar/`.
 
-**Composables** — `web/src/composables/` holds the composer's parts, which are
-independently testable and were what made `Composer.vue` unreadable inline:
+**Composables** — `web/src/composables/` holds the composer's parts:
 `useAttachments` (paste/drop/picker, thumbnails, image markup), `useAutosize`,
 `useSlashCommands` (the `/query` menu), `useFileMentions` (the `@path` menu),
 `useModelPicker` (agent/model/reasoning selects and their Ctrl/Cmd+arrow
 shortcuts), and `useListMenu` — the keyboard behaviour the two autocomplete
-menus share. `Composer.vue` itself is now just wiring plus the template.
+menus share. `Composer.vue` is wiring plus the template.
 
 Composables return refs; **destructure them at the top of `<script setup>`** so
 the template auto-unwraps (`attachments`, not `files.attachments.value`).
@@ -222,9 +245,9 @@ the template auto-unwraps (`attachments`, not `files.attachments.value`).
 (every persisted preference), plus the dependency-free `markdown.js`, `diff.js`,
 `fuzzy.js`.
 
-**Styles** — `web/src/style.css` is now just an ordered list of `@import`s;
-the rules live in `web/src/styles/*.css`, one partial per feature, named after
-the component it styles. **The import order is load-bearing**: these are flat
+**Styles** — `web/src/style.css` is an ordered list of `@import`s; the rules
+live in `web/src/styles/*.css`, one partial per feature, named after the
+component it styles. **The import order is load-bearing**: these are flat
 global rules with many equal-specificity selectors, so ties resolve by source
 order. Edit the partial that owns the component; a genuinely new component gets
 a new partial imported at the *end* of the list. Self-contained components are
@@ -239,3 +262,7 @@ better off with a `<style scoped>` block, which wins over all of it.
 | `docs/subagents-v2.md` | A *different* build, explicitly **not** the target. Kept only as a record of how far builds diverge. |
 | `docs/handover.md` | General project status (snapshot as of an older `main`). |
 | `docs/handover-subagents.md` | Pickup point for the inline sub-agent rendering work. |
+
+⚠️ Both handover docs predate the store/style split, so the file paths in them
+are stale (they describe a single `stores/opencode.js` and a single
+`style.css`). Their *reasoning* still holds; treat this file as the map.
