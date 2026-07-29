@@ -11,6 +11,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
+import { randomThinkingPhrase } from "../../lib/thinkingPhrases.js";
 import MessageView from "./MessageView.vue";
 import MessageRail from "./MessageRail.vue";
 import FindBar from "./FindBar.vue";
@@ -74,12 +75,40 @@ watch(
   }
 );
 
+// The waiting indicator's label: a fresh silly phrase each time a run starts,
+// swapped every few seconds so a long wait doesn't look frozen.
+const THINKING_ROTATE_MS = 4000;
+const thinkingPhrase = ref(randomThinkingPhrase());
+let thinkingTimer = null;
+
+function stopThinkingRotation() {
+  if (thinkingTimer) {
+    clearInterval(thinkingTimer);
+    thinkingTimer = null;
+  }
+}
+
+watch(
+  () => store.isStreaming,
+  (streaming) => {
+    stopThinkingRotation();
+    if (!streaming) return;
+    thinkingPhrase.value = randomThinkingPhrase(thinkingPhrase.value);
+    thinkingTimer = setInterval(() => {
+      thinkingPhrase.value = randomThinkingPhrase(thinkingPhrase.value);
+    }, THINKING_ROTATE_MS);
+  }
+);
+
 onMounted(() => {
   mainEl.value?.addEventListener("scroll", onScroll, { passive: true });
   scrollToBottom();
 });
 
-onBeforeUnmount(() => mainEl.value?.removeEventListener("scroll", onScroll));
+onBeforeUnmount(() => {
+  mainEl.value?.removeEventListener("scroll", onScroll);
+  stopThinkingRotation();
+});
 </script>
 
 <template>
@@ -95,7 +124,7 @@ onBeforeUnmount(() => mainEl.value?.removeEventListener("scroll", onScroll));
           />
           <div v-if="store.isStreaming && (!store.messages.length || store.messages.at(-1)?.role === 'user')" key="thinking" class="thinking-indicator">
             <span class="thinking-dots"><span></span><span></span><span></span></span>
-            OpenCode is thinking…
+            {{ thinkingPhrase }}…
           </div>
         </TransitionGroup>
       </div>
