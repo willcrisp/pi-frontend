@@ -10,7 +10,7 @@
 // what MessageView renders — so a restored transcript and a live one look
 // identical to the components.
 import { opencodeStore } from "./state.js";
-import { apiGet, getJSON, unwrap } from "../../lib/api.js";
+import { getJSON, unwrap } from "../../lib/api.js";
 import { isSubagentPart, upsertChild } from "./children.js";
 import { restoreSessionModel } from "./models.js";
 import { setUnread } from "./activity.js";
@@ -64,31 +64,39 @@ export async function connectToSession(sessionID) {
   await refreshSessionContext(sessionID);
 }
 
+// One session's transcript, normalized and ordered the way the view layer wants
+// it, or null when the request failed (which is not the same as an empty chat —
+// callers must not treat a failure as "this session has no messages" and wipe
+// what they already have).
+//
+// The endpoint returns newest-first; the transcript renders top-to-bottom
+// oldest-first, so order by creation time ascending. The sort is stable, so
+// anything without a timestamp keeps its relative position.
+export async function fetchSessionMessages(sessionID) {
+  const payload = await getJSON(`/session/${sessionID}/message`);
+  if (!payload) return null;
+  return unwrap(payload)
+    .map(normalizeRestMessage)
+    .filter(Boolean)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
 export async function refreshActiveMessages() {
   const sessionID = opencodeStore.activeSessionId;
   if (!sessionID) return;
 
-  try {
-    const res = await apiGet(`/session/${sessionID}/message`);
-    if (res.ok) {
-      const list = unwrap(await res.json());
-      // This endpoint returns newest-first; the transcript renders top-to-bottom
-      // oldest-first, so order by creation time ascending (sort is stable, so
-      // anything without a timestamp keeps its relative position).
-      opencodeStore.messages = list
-        .map(normalizeRestMessage)
-        .filter(Boolean)
-        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-
-      // Server truth just landed, and it carries the sub-agent linkage each
-      // dispatch needs. Awaited so a caller that refreshes and then reads
-      // childForCall sees the result. A late return for a session the user has
-      // navigated away from is dropped inside.
-      if (sessionID === opencodeStore.activeSessionId) await backfillChildSessions();
-    }
-  } catch (err) {
-    console.error(`Failed to fetch messages for session ${sessionID}:`, err);
+  const list = await fetchSessionMessages(sessionID);
+  if (!list) {
+    console.error(`Failed to fetch messages for session ${sessionID}`);
+    return;
   }
+  opencodeStore.messages = list;
+
+  // Server truth just landed, and it carries the sub-agent linkage each
+  // dispatch needs. Awaited so a caller that refreshes and then reads
+  // childForCall sees the result. A late return for a session the user has
+  // navigated away from is dropped inside.
+  if (sessionID === opencodeStore.activeSessionId) await backfillChildSessions();
 }
 
 // Optimistically append the user's own message, so the prompt appears the
@@ -155,7 +163,7 @@ async function backfillChildSessions() {
       });
       const [info, list] = await Promise.all([
         getJSON(`/session/${childID}`),
-        getJSON(`/session/${childID}/message`),
+        fetchSessionMessages(childID),
       ]);
       if (info) {
         const d = info.data || info;
@@ -165,12 +173,7 @@ async function backfillChildSessions() {
         child.tokens = d.tokens || child.tokens;
         child.startedAt = (d.time && d.time.created) || child.startedAt;
       }
-      if (list) {
-        child.messages = unwrap(list)
-          .map(normalizeRestMessage)
-          .filter(Boolean)
-          .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-      }
+      if (list) child.messages = list;
     })
   );
 }

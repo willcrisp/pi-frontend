@@ -58,11 +58,12 @@ test.describe("useSlashCommands", () => {
   test("lists server commands, skills and builtins", async ({ page }) => {
     await page.locator("textarea").type("/");
     const items = page.locator(".slash-menu li");
-    await expect(items).toHaveCount(3);
+    await expect(items).toHaveCount(4);
     const text = (await items.allInnerTexts()).join(" ");
     expect(text).toContain("compact"); // server command
     expect(text).toContain("pdf"); // skill
     expect(text).toContain("new"); // builtin
+    expect(text).toContain("handover"); // builtin
   });
 
   test("ArrowDown moves the highlight and Tab inserts the command", async ({ page }) => {

@@ -16,13 +16,26 @@ import { onMarkdownClick } from "../../lib/codeCopy.js";
 import { collapseRows, editDiffInfo, lineDiff } from "../../lib/diff.js";
 import { isSubagentPart, stageRevert } from "../../stores/opencode.js";
 import { filePathFromToolInput, openPreview } from "../../stores/filepreview.js";
+import { handoverForMessage, isHandoverRequest } from "../../stores/handover.js";
 import SubagentView from "./SubagentView.vue";
+import HandoverChip from "./HandoverChip.vue";
 
 const props = defineProps({
   message: { type: Object, required: true },
 });
 
 const isUser = computed(() => props.message.role === "user");
+
+// Set when this message's text is a filed handover document (stores/handover.js),
+// which gets a chip carrying its id. Keyed on the server's message id, so the
+// chip comes back after a reload rather than living only in the session that
+// produced it.
+const handover = computed(() => handoverForMessage(props.message.id));
+
+// The /handover brief is a real user turn, and it is three thousand characters
+// of instructions to the agent — reproducing it in the transcript buries the
+// document it asked for. Collapsed to a marker line.
+const isHandoverBrief = computed(() => isUser.value && isHandoverRequest(props.message.text));
 
 const hasParts = computed(
   () => Array.isArray(props.message.parts) && props.message.parts.length > 0
@@ -109,7 +122,10 @@ function revertToHere() {
     >
       ↩ revert here
     </button>
-    <template v-if="hasParts">
+    <div v-if="isHandoverBrief" class="handover-brief" title="/handover — the full brief was sent to the agent">
+      ⇥ handover requested
+    </div>
+    <template v-else-if="hasParts">
       <!-- REST-normalized parts carry no `id` (only tool parts get a callID),
            so fall back to the index to keep keys distinct. -->
       <template v-for="(part, pi) in message.parts" :key="part.id || part.callID || pi">
@@ -229,10 +245,19 @@ function revertToHere() {
       <div v-if="isUser" class="user-text">{{ message.text }}</div>
       <div v-else class="markdown" v-html="renderedText"></div>
     </template>
+
+    <HandoverChip v-if="handover" :record="handover" />
   </div>
 </template>
 
 <style scoped>
+.handover-brief {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
 /* Kept out of the way until the message is hovered — it's a destructive-ish
    action sitting next to every user turn. */
 .msg-revert {

@@ -24,6 +24,8 @@ import ShortcutsDialog from "./components/dialogs/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import { confirmStore } from "./stores/confirm.js";
 import ProvidersDialog from "./components/dialogs/ProvidersDialog.vue";
+import HandoverDialog from "./components/dialogs/HandoverDialog.vue";
+import { handoverStore } from "./stores/handover.js";
 
 const showProviders = ref(false);
 
@@ -56,6 +58,9 @@ onMounted(() => {
     <!-- Same: owns the "?" listener, and must work with no session open. -->
     <ShortcutsDialog />
     <ConfirmDialog v-if="confirmStore.open" />
+    <!-- Opened by a handover chip in the transcript, and keyed by its id so it
+         mounts fresh (empty notes box) per handover. -->
+    <HandoverDialog v-if="handoverStore.openId" :key="handoverStore.openId" />
     <Sidebar />
 
     <!-- First run has no credentials and no sessions, and the only way to add

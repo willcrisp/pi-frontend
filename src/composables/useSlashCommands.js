@@ -6,13 +6,23 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { opencodeStore as store } from "../stores/opencode.js";
 import { activeSessionDirectory, startNewChat } from "../stores/projects.js";
+import { requestHandover } from "../stores/handover.js";
 
 // Builtins run against the harness itself instead of going to the server.
-const BUILTIN_SLASH_COMMANDS = [{ name: "new", description: "new session in this project" }];
+const BUILTIN_SLASH_COMMANDS = [
+  { name: "new", description: "new session in this project" },
+  { name: "handover", description: "write up this session and hand it to a new chat" },
+];
 
 function runBuiltinCommand(name) {
   if (name === "new") {
     startNewChat(activeSessionDirectory() || undefined).catch(() => {});
+  }
+  // Resolves only when the handover has been written and filed — several
+  // minutes for a long session — so it is deliberately not awaited here. Its
+  // progress is the agent's reply streaming into the transcript.
+  if (name === "handover") {
+    requestHandover().catch(() => {});
   }
 }
 

@@ -9,6 +9,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
 import { forkFromMessage, forkStore } from "../../stores/fork.js";
+import { isHandoverRequest } from "../../stores/handover.js";
 
 const props = defineProps({
   scroller: { type: Object, default: null },
@@ -18,6 +19,10 @@ const activeIndex = ref(-1);
 const atBottom = ref(true);
 
 function messageText(m) {
+  // The /handover brief is a real user turn, so it lands in the index like any
+  // other prompt — but its text is the instructions to the agent, which read as
+  // "Write a HAND…" here. Labelled to match how MessageView renders it.
+  if (isHandoverRequest(m.text)) return "handover requested";
   return m.text || "";
 }
 

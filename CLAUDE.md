@@ -36,6 +36,7 @@ here rather than grepping the whole tree:
 | composer input, attachments, or the `/` and `@` menus | the matching `use*` in `src/composables/` |
 | what the sidebar dot shows | `stores/opencode/activity.js` |
 | sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
+| the `/handover` brief, or the chat it seeds | `stores/handover.js` |
 | a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands

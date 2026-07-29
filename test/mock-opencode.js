@@ -96,15 +96,23 @@ const TRANSCRIPT = {
 };
 
 const BASE_SESSION_COUNT = SESSIONS.length;
+const BASE_TRANSCRIPT_LENGTHS = Object.fromEntries(
+  Object.entries(TRANSCRIPT).map(([id, list]) => [id, list.length])
+);
 let nextSessionSeq = 3;
 
-// Sessions a test created are dropped when the next page loads (a client
-// opening the event stream is the signal). One worker runs the suite serially,
-// so this is the cheap equivalent of a per-test server: the fork test creates a
-// session and asserts against it, and the next test still sees the two seeded
-// ones — which several of them count.
+// Sessions a test created — and turns a test sent — are dropped when the next
+// page loads (a client opening the event stream is the signal). One worker runs
+// the suite serially, so this is the cheap equivalent of a per-test server: the
+// fork test creates a session and asserts against it, and the next test still
+// sees the two seeded ones with their two seeded prompts — which several of
+// them count.
 function resetCreatedSessions() {
   SESSIONS.length = BASE_SESSION_COUNT;
+  for (const id of Object.keys(TRANSCRIPT)) {
+    if (BASE_TRANSCRIPT_LENGTHS[id] === undefined) delete TRANSCRIPT[id];
+    else TRANSCRIPT[id].length = BASE_TRANSCRIPT_LENGTHS[id];
+  }
 }
 
 // Session create. The real route takes `{agent?, model?, location?}` and answers
@@ -122,6 +130,81 @@ function createSession(res) {
   return json(res, { data: session });
 }
 
+// --- Prompting ---------------------------------------------------------------
+//
+// The one held-open SSE response, so a prompt can be answered on it. Only one
+// page is ever driving this server (a single Playwright worker), so one is
+// enough — a second connection replaces the first.
+let eventStream = null;
+let nextEventSeq = 2;
+
+function emit(type, data) {
+  if (!eventStream) return;
+  eventStream.write(`data: ${JSON.stringify({ id: `e${nextEventSeq++}`, type, data })}\n\n`);
+}
+
+// The canned agent. A real one is what the frontend is missing here, and
+// several features (steering, and the handover document /handover asks for) are
+// only exercisable against a turn that actually answers — so this replies with
+// text shaped like what the feature under test expects, and settles the run.
+//
+// Shape-of-the-answer only: the point is to drive OUR streaming, transcript and
+// capture code, not to model an agent.
+const HANDOVER_REPLY = `# Handover: mock session
+
+## 1. Summary
+A mock handover, written by test/mock-opencode.js.
+
+## 8. Remaining work
+1. **Recommended next action** — nothing; this is a test fixture.
+`;
+
+const PLAIN_REPLY = "Acknowledged.";
+
+let nextTime = 100;
+
+function answerPrompt(sessionID, text, res) {
+  const list = TRANSCRIPT[sessionID] || (TRANSCRIPT[sessionID] = []);
+  const seq = nextEventSeq;
+  const assistantMessageID = `msg_a_mock${seq}`;
+  const reply = /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
+
+  // Recorded before the run settles: settling triggers a transcript refresh, and
+  // a reply the refresh can't see would be wiped off screen the moment it landed.
+  list.push({ id: `msg_u_mock${seq}`, type: "user", time: { created: nextTime++ }, text: text || "" });
+  list.push({
+    id: assistantMessageID,
+    type: "assistant",
+    time: { created: nextTime++ },
+    content: [{ type: "text", text: reply }],
+  });
+
+  json(res, { data: { messageID: assistantMessageID } });
+
+  const props = { sessionID, assistantMessageID, ordinal: 0 };
+  emit("session.execution.started", { sessionID });
+  emit("session.text.started", props);
+  emit("session.text.delta", { ...props, delta: reply });
+  emit("session.text.ended", { ...props, text: reply });
+  emit("session.execution.succeeded", { sessionID });
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(raw || "{}"));
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url.split("?")[0];
 
@@ -136,6 +219,14 @@ const server = http.createServer((req, res) => {
     return req.method === "POST" ? createSession(res) : json(res, { data: SESSIONS });
   const messages = url.match(/^\/api\/session\/([^/]+)\/message$/);
   if (messages) return json(res, { data: TRANSCRIPT[messages[1]] || [] });
+  const prompt = url.match(/^\/api\/session\/([^/]+)\/prompt$/);
+  if (prompt && req.method === "POST") {
+    // Flat first, wrapped second — transport.js sends whichever shape it has
+    // learned works, and both are legitimate (see its header comment).
+    return readBody(req).then((body) =>
+      answerPrompt(prompt[1], body.text ?? (body.prompt && body.prompt.text), res)
+    );
+  }
   if (/^\/api\/session\/[^/]+\/context$/.test(url)) return json(res, { data: {} });
   if (url === "/api/question/request") return json(res, { data: [] });
   if (url === "/api/integration") return json(res, { data: [] });
@@ -144,6 +235,10 @@ const server = http.createServer((req, res) => {
     resetCreatedSessions();
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     res.write(`data: ${JSON.stringify({ id: "e1", type: "server.connected", data: {} })}\n\n`);
+    eventStream = res;
+    req.on("close", () => {
+      if (eventStream === res) eventStream = null;
+    });
     return; // held open for the life of the run
   }
 
