@@ -8,6 +8,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
+import { forkFromMessage, forkStore } from "../../stores/fork.js";
 
 const props = defineProps({
   scroller: { type: Object, default: null },
@@ -103,6 +104,30 @@ onBeforeUnmount(() => props.scroller?.removeEventListener("scroll", syncScroll))
           @click="scrollTo(item)"
         >
           {{ item.text }}
+        </button>
+        <!-- Hidden until the row is hovered (styles/messages.css) — it starts a
+             chat and sends a prompt, so it shouldn't sit in the index as a
+             permanent target. -->
+        <button
+          type="button"
+          class="msg-rail-fork"
+          :disabled="forkStore.forkingIndex !== -1"
+          title="Fork into a new chat from this prompt"
+          aria-label="Fork into a new chat from this prompt"
+          @click="forkFromMessage(item.index)"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M5 4.2v7.6M5 6.5c0 1.7 1.3 3 3 3h2.8"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <circle cx="5" cy="2.6" r="1.6" stroke="currentColor" stroke-width="1.4" />
+            <circle cx="12.4" cy="9.5" r="1.6" stroke="currentColor" stroke-width="1.4" />
+            <circle cx="5" cy="13.4" r="1.6" stroke="currentColor" stroke-width="1.4" />
+          </svg>
         </button>
       </li>
     </ol>

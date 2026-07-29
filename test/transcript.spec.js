@@ -50,6 +50,30 @@ test("the code-copy button copies the block it sits in", async ({ page, context 
   );
 });
 
+test.describe("prompt rail", () => {
+  test("lists the prompts in the chat", async ({ page }) => {
+    await expect(page.locator(".msg-rail li")).toHaveCount(2);
+    await expect(page.locator(".msg-rail-jump").first()).toHaveText("show me a snippet");
+  });
+
+  // V2 has no fork endpoint, so the fork is reconstructed: a new session, seeded
+  // with a prompt carrying the earlier turns as context. Assert both halves are
+  // in what gets sent — a fork that dropped the context would look identical
+  // from the outside otherwise.
+  test("the fork button starts a new chat seeded with the turns above it", async ({ page }) => {
+    const row = page.locator(".msg-rail li").nth(1);
+    await row.hover();
+    await row.locator(".msg-rail-fork").click();
+
+    const forked = page.locator(".msg-user").first();
+    await expect(forked).toContainText("forked conversation");
+    await expect(forked).toContainText("show me a snippet");
+    await expect(forked).toContainText("now rename the file");
+    // The new chat is a chat of its own: one prompt, not the two forked from.
+    await expect(page.locator(".msg-rail li")).toHaveCount(1);
+  });
+});
+
 test.describe("FindBar", () => {
   test("Ctrl+Shift+F opens it and counts matches", async ({ page }) => {
     await expect(page.locator(".find-bar")).toHaveCount(0);

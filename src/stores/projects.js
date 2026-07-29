@@ -144,8 +144,12 @@ export async function startNewChat(directory) {
     const newId = payload && payload.data ? payload.data.id : payload && payload.id;
     await fetchSessions();
     if (newId) {
-      openSession(newId);
+      // Awaited so a caller that wants to act on the new chat (forking sends it
+      // a prompt) does so after its transcript load has landed, not before —
+      // the load would overwrite anything appended in between.
+      await openSession(newId);
     }
+    return newId;
   } catch (err) {
     console.error("Failed to create new OpenCode session:", err);
     throw err;
@@ -169,12 +173,15 @@ export async function removeSession(sessionID) {
   }
 }
 
+// Returns the connect promise — awaiting it is optional (most callers just
+// navigate), but it's how a caller waits for the transcript to be loaded.
 export function openSession(sessionID) {
-  if (!sessionID) return;
+  if (!sessionID) return Promise.resolve();
   writeString(LAST_SESSION_KEY, sessionID);
-  connectToSession(sessionID);
+  const opened = connectToSession(sessionID);
   const session = projectsStore.sessions.find((s) => s.id === sessionID);
   if (session?.directory) fetchBranches(session.directory);
+  return opened;
 }
 
 // Drill into a dispatched sub-agent's own session from its card in the parent
