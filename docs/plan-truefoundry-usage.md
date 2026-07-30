@@ -15,6 +15,7 @@ a source of verified endpoint facts, not as a description of this codebase.
 |---|---|
 | Usage scope | Personal only — session/project totals plus own gateway spend. No team/org rollup. |
 | Usage UI | Keep `UsagePopover.vue` for at-a-glance stats; add a dedicated dialog for history and breakdowns. |
+| Config location | **Global** — `~/.config/opencode/opencode.json`, not a project's `.opencode/`. A gateway account belongs to the machine and the user, not to one checkout. |
 | JSONC config editing | Out of scope. Refuse with an actionable error, as the PDF proposed. |
 | Selections across rediscovery | Preserve by intersecting previous IDs with newly discovered ones. |
 
@@ -107,7 +108,7 @@ Security properties to preserve verbatim from the PDF:
 
 - PAT validated against `/^[A-Za-z0-9._~-]+$/` before it enters a curl config.
 - PAT passed via a curl config on **stdin**, never in argv.
-- PAT never written to a project file, `localStorage` or `sessionStorage`.
+- PAT never written to a config file, `localStorage` or `sessionStorage`.
 - PTY title is fixed text and carries no secret.
 - A 200 with `text/html` is not treated as authentication success.
 
@@ -233,6 +234,15 @@ call, and any metrics query all need a local machine and a freshly rotated PAT.
 Shipped across `lib/truefoundry.js`, `stores/providers.js`, `stores/usage.js`,
 `components/dialogs/ProvidersDialog.vue`, `components/dialogs/UsageDialog.vue`
 and `components/popovers/UsagePopover.vue`.
+
+The provider is written to the **global** config,
+`~/.config/opencode/opencode.json` — the same directory `subagents.js` uses for
+global agent definitions. Models imported once are then selectable from every
+session, and configuring TrueFoundry no longer requires a project to be open at
+all. OpenCode still lets `<project>/opencode.json(c)` and
+`<project>/.opencode/opencode.json(c)` override the global block, which is the
+right way round: a project can special-case itself without the global default
+needing to know.
 
 Two additions beyond the plan, both prompted by the constraint that PTY-backed
 paths can't be mocked:

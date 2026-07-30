@@ -326,8 +326,9 @@ function onBackdrop(e) {
           </template>
 
           <p class="tf-privacy">
-            The token is sent to your OpenCode host to reach the gateway. It is never written to
-            project files or browser storage.
+            Models are added to your global OpenCode config, so they're available in every project.
+            The token is sent to your OpenCode host to reach the gateway — it is never written to a
+            config file or to browser storage.
           </p>
         </section>
 

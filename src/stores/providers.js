@@ -162,17 +162,28 @@ export async function cancelOAuth() {
 // --- TrueFoundry ------------------------------------------------------------
 // A TrueFoundry gateway is not an OpenCode integration: the server has no
 // entry for it until a config file declares one, and config is read at startup.
-// So this half of the dialog writes a provider block to the project's
-// opencode.json and — once the server has picked it up — hands the PAT to the
-// normal credential endpoint.
+// So this half of the dialog writes a provider block to OpenCode's config and —
+// once the server has picked it up — hands the PAT to the normal credential
+// endpoint.
 //
 // Discovery runs on the OpenCode host over PTY + curl rather than from the
 // browser. A tenant gateway need not send CORS headers, Radius has no backend
 // of its own to proxy through, and the OpenCode host is already the trusted
 // place we run shell commands. It also means discovery works identically for a
 // remote server reached over a tunnel.
-const TRUEFOUNDRY_CONFIG = ".opencode/opencode.json";
-const TRUEFOUNDRY_CONFIG_JSONC = ".opencode/opencode.jsonc";
+//
+// The provider is written to the **global** config, not a project's. A gateway
+// account is a property of the machine and the person using it, not of one
+// checkout: models imported once should be selectable from every session. Same
+// directory subagents.js writes its global agent definitions to.
+//
+// Note the precedence this accepts: OpenCode reads global config first and lets
+// <project>/opencode.json(c) and <project>/.opencode/opencode.json(c) override
+// it, so a project that declares its own `provider.truefoundry` still wins
+// locally. That's the correct way round — a project can special-case itself
+// without the global default having to know about it.
+const TRUEFOUNDRY_CONFIG = "~/.config/opencode/opencode.json";
+const TRUEFOUNDRY_CONFIG_JSONC = "~/.config/opencode/opencode.jsonc";
 const STATUS_MARKER = "__OC_CURL_STATUS__";
 
 // Discovered catalogues are cached per gateway, the same way git.js and
@@ -371,8 +382,10 @@ export async function configureTrueFoundry(gateway, pat, models) {
   try {
     if (!models || !models.length) throw new Error("Select at least one model");
     const base = gatewayURL(gateway);
-    const cwd = activeSessionDirectory();
-    if (!cwd) throw new Error("Open a project before configuring TrueFoundry");
+    // Only the shell's working directory, not the config's location — the path
+    // is anchored to $HOME by remotefs#quotePath. Writing global config needs no
+    // project open, so an empty session directory is fine here.
+    const cwd = activeSessionDirectory() || undefined;
 
     // JSONC is refused rather than rewritten. `JSON.parse` can't read it, and
     // stripping comments with a regex corrupts strings that merely look like
@@ -380,7 +393,7 @@ export async function configureTrueFoundry(gateway, pat, models) {
     const jsonc = await readTextFile(cwd, TRUEFOUNDRY_CONFIG_JSONC);
     if (jsonc !== null) {
       throw new Error(
-        `This project uses ${TRUEFOUNDRY_CONFIG_JSONC}; add the TrueFoundry provider there manually`
+        `Your OpenCode config is ${TRUEFOUNDRY_CONFIG_JSONC}; add the TrueFoundry provider there manually`
       );
     }
 
@@ -404,9 +417,13 @@ export async function configureTrueFoundry(gateway, pat, models) {
     const loaded = providersStore.integrations.some((i) => i.id === TRUEFOUNDRY_PROVIDER_ID);
     const count = `${models.length} model${models.length === 1 ? "" : "s"}`;
     if (loaded && (await connectKey(TRUEFOUNDRY_PROVIDER_ID, pat, "TrueFoundry PAT"))) {
-      state.notice = `Saved ${count} and the PAT. Restart OpenCode to refresh the model catalog.`;
+      state.notice =
+        `Saved ${count} globally and stored the PAT. ` +
+        `Restart OpenCode and reload this page to pick them up.`;
     } else {
-      state.notice = `Saved ${count} to ${TRUEFOUNDRY_CONFIG}. Restart OpenCode, then reconnect the PAT.`;
+      state.notice =
+        `Saved ${count} to ${TRUEFOUNDRY_CONFIG} (all projects). ` +
+        `Restart OpenCode, reload this page, then reconnect the PAT.`;
     }
     return true;
   } catch (err) {
