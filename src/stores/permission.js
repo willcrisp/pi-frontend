@@ -6,7 +6,7 @@ import { reactive } from "vue";
 import { apiGet, apiPost, apiDelete, unwrap } from "../lib/api.js";
 
 export const permissionStore = reactive({
-  queue: [], // [{ id, sessionID, action, resources, save, metadata, source, receivedAt, error }]
+  queue: [], // [{ id, sessionID, action, resources, save, metadata, source, receivedAt, error, busy }]
   // "Allow always" rules the server has persisted. Without a way to list and
   // revoke these, a single mis-click grants a tool forever with no route back.
   saved: [],
@@ -31,6 +31,10 @@ export function handlePermissionEvent(event) {
       source: data.source || null,
       receivedAt: Date.now(),
       error: null,
+      // A reply is in flight. The dialog disables on it, so a double-click (or a
+      // held-down number key) can't send the same decision twice — which on
+      // "always" would mean two saved rules.
+      busy: false,
     });
   } else if (type === "permission.v2.replied") {
     permissionStore.queue = permissionStore.queue.filter((p) => p.id !== data.requestID);
@@ -73,8 +77,9 @@ export async function revokeSavedPermission(id) {
 // PermissionV2.Reply is an enum: "once" | "always" | "reject".
 export async function respond(permissionID, reply) {
   const entry = permissionStore.queue.find((p) => p.id === permissionID);
-  if (!entry) return;
+  if (!entry || entry.busy) return;
   entry.error = null;
+  entry.busy = true;
   try {
     const res = await apiPost(
       `/session/${entry.sessionID}/permission/${permissionID}/reply`,
@@ -87,5 +92,10 @@ export async function respond(permissionID, reply) {
     entry.error = `Failed to respond (${res.status})`;
   } catch (err) {
     entry.error = err.message || "Failed to respond to permission request";
+  } finally {
+    // Only matters on the failure paths — a success removed the entry — but it
+    // must be cleared there or the dialog stays disabled with an error and no
+    // way to retry.
+    entry.busy = false;
   }
 }

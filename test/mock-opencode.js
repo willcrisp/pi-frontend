@@ -417,6 +417,28 @@ const server = http.createServer((req, res) => {
       data: Object.fromEntries([...running].map((id) => [id, { type: "running" }])),
     });
   }
+  // Not part of the API either: push an arbitrary event onto the held-open
+  // stream. The gating surfaces (permission.v2.asked, question.v2.asked) are
+  // driven by the server rather than by anything a spec can click, so without
+  // this they could only be tested by stubbing the network — which is the thing
+  // this file exists to avoid. Body is the event itself: {type, data}.
+  if (url === "/api/mock/emit" && req.method === "POST") {
+    return readBody(req).then((body) => {
+      if (body.type) emit(body.type, body.data || {});
+      json(res, { data: { emitted: body.type || null } });
+    });
+  }
+  // Replying to a permission ask. The reply is echoed back on the stream as
+  // `permission.v2.replied`, which is how the real server closes the loop — the
+  // frontend drops the queue entry on its own POST, but a second client watching
+  // the same session learns about it this way.
+  const permissionReply = url.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/);
+  if (permissionReply && req.method === "POST") {
+    return readBody(req).then((body) => {
+      emit("permission.v2.replied", { requestID: permissionReply[2], reply: body.reply });
+      json(res, { data: { id: permissionReply[2], reply: body.reply } });
+    });
+  }
   // Not part of the API: how a spec picks the event vocabulary or asks for a run
   // whose ending is never announced.
   if (url === "/api/mock/control" && req.method === "POST") {

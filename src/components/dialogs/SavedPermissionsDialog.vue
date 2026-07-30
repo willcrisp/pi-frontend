@@ -14,8 +14,11 @@ import {
   loadSavedPermissions,
   revokeSavedPermission,
 } from "../../stores/permission.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
-defineEmits(["close"]);
+const emit = defineEmits(["close"]);
+
+const { onBackdrop } = useDialogEscape(() => emit("close"));
 
 onMounted(loadSavedPermissions);
 
@@ -42,7 +45,7 @@ function detail(rule) {
 </script>
 
 <template>
-  <div class="connect-backdrop" @mousedown="(e) => e.target === e.currentTarget && $emit('close')">
+  <div class="connect-backdrop" @mousedown="onBackdrop">
     <div class="connect-panel agents-panel">
       <div class="connect-head">
         <span>Saved permissions</span>

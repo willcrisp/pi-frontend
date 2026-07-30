@@ -20,9 +20,15 @@ import {
   loadEnvPAT,
 } from "../../stores/providers.js";
 import { opencodeStore } from "../../stores/opencode.js";
-import { groupByAccount, TRUEFOUNDRY_PROVIDER_ID } from "../../lib/truefoundry.js";
+import {
+  DEFAULT_TRUEFOUNDRY_GATEWAY,
+  groupByAccount,
+  TRUEFOUNDRY_GATEWAY_KEY,
+  TRUEFOUNDRY_PROVIDER_ID,
+} from "../../lib/truefoundry.js";
 import { fuzzyScore } from "../../lib/fuzzy.js";
 import { readString, writeString } from "../../lib/storage.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const emit = defineEmits(["close"]);
 
@@ -51,10 +57,9 @@ const tfHasPAT = computed(() => Boolean(tfPAT.value.trim() || tf.value.envPATSou
 // --- TrueFoundry -----------------------------------------------------------
 // The gateway URL is a durable preference and survives reloads; the PAT never
 // touches storage in any form.
-const TF_GATEWAY_KEY = "truefoundry.gateway";
 
 const tf = computed(() => providersStore.trueFoundry);
-const tfGateway = ref(readString(TF_GATEWAY_KEY, "https://gateway.ai.fortescue.com"));
+const tfGateway = ref(readString(TRUEFOUNDRY_GATEWAY_KEY, DEFAULT_TRUEFOUNDRY_GATEWAY));
 const tfPAT = ref("");
 const tfQuery = ref("");
 const tfSelected = ref([]); // model ids
@@ -131,7 +136,7 @@ function tfClear() {
 }
 
 async function onDiscoverTrueFoundry() {
-  writeString(TF_GATEWAY_KEY, tfGateway.value);
+  writeString(TRUEFOUNDRY_GATEWAY_KEY, tfGateway.value);
   const models = await discoverTrueFoundry(tfGateway.value, tfPAT.value.trim());
   if (!models) return;
   // Keep whatever was already chosen if it still exists, and otherwise start
@@ -204,16 +209,14 @@ async function onAdd() {
   }
 }
 
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) emit("close");
-}
+const { onBackdrop } = useDialogEscape(() => emit("close"));
 </script>
 
 <template>
   <div class="connect-backdrop" @mousedown="onBackdrop">
     <div class="connect-panel agents-panel">
       <div class="connect-head">
-        <span>Integrations</span>
+        <span>Providers</span>
         <button class="connect-close" title="Close" @click="$emit('close')">✕</button>
       </div>
 

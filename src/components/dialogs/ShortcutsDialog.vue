@@ -30,6 +30,15 @@ const GROUPS = [
     ],
   },
   {
+    title: "The run",
+    items: [
+      // Escape is listed twice on purpose: it does whichever of these applies,
+      // and "close the dialog" is the one that wins. Saying only the first left
+      // the app with no keyboard way to stop an agent at all.
+      { keys: ["Esc"], description: "Stop the agent — when nothing else is open" },
+    ],
+  },
+  {
     title: "Composer",
     items: [
       { keys: ["Enter"], description: "Send — or steer, while a run is going" },
@@ -45,6 +54,14 @@ const GROUPS = [
     items: [
       { keys: [`${mod}+←`, `${mod}+→`], description: "Previous / next model" },
       { keys: [`${mod}+↑`, `${mod}+↓`], description: "More / less reasoning effort" },
+    ],
+  },
+  {
+    title: "When the agent asks",
+    items: [
+      { keys: ["1", "2", "3"], description: "Pick a permission reply, or a question's option" },
+      { keys: ["Enter"], description: "Take the highlighted choice" },
+      { keys: ["Esc"], description: "Deny a permission, or skip a question" },
     ],
   },
 ];

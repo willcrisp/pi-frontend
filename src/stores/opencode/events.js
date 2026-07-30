@@ -64,6 +64,7 @@ import { loadModels } from "./catalog.js";
 import { handlePermissionEvent } from "../permission.js";
 import { handleQuestionEvent } from "../question.js";
 import { loadIntegrations } from "../providers.js";
+import { scheduleSessionsRefresh } from "../projects.js";
 
 // --- Part helpers ------------------------------------------------------------
 
@@ -169,6 +170,17 @@ const failRun = (readMessage) => ({ props, child }) => {
 };
 
 const ignore = () => {};
+
+// Events after which the server has rewritten a session's record. Checked by the
+// dispatcher rather than the HANDLERS table — see the note there for why. A step
+// ending is the load-bearing one: it is when a session's title, cost and tokens
+// have all been written, and no build seen so far emits a `session.updated` for
+// it. The other two are here for a session created or renamed somewhere else.
+const RECORD_CHANGED_EVENTS = new Set([
+  "session.step.ended",
+  "session.created",
+  "session.updated",
+]);
 
 // --- The table ---------------------------------------------------------------
 
@@ -462,6 +474,17 @@ export function handleServerEvent(event) {
     trackSessionActivity(type, sessionID);
     if (isRunEndEvent(type, props)) runMayHaveEnded(sessionID);
   }
+
+  // The session LIST is also session-agnostic state, so it belongs up here with
+  // the other two rather than in HANDLERS: the routing below drops any event
+  // whose session isn't the one on screen and isn't a known sub-agent, so a
+  // `session.created` in another project would never reach the table at all.
+  //
+  // These are the events after which the server has rewritten a session record —
+  // its title (from the chat's first prompt), its cost, its tokens. Nothing else
+  // refetches the list, which is why a new chat used to sit in the sidebar as
+  // "New session - <iso>" until you pressed ⟳. Debounced in projects.js.
+  if (RECORD_CHANGED_EVENTS.has(type)) scheduleSessionsRefresh();
 
   // A sub-agent's child session emits the SAME event vocabulary under its own
   // sessionID, so events are routed rather than filtered: the active session

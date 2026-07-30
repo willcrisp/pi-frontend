@@ -3,7 +3,7 @@
 import { opencodeStore } from "./state.js";
 import { apiPost, errorMessage } from "../../lib/api.js";
 import { refreshActiveMessages } from "./messages.js";
-import { markStopped } from "./activity.js";
+import { runMayHaveEnded } from "./run.js";
 
 // --- Revert ------------------------------------------------------------------
 // V2 has no session fork, and `revert/*` is the closest thing to "go back to
@@ -56,32 +56,60 @@ async function postRevert(sessionID, action, body) {
 
 // --- Other session actions ---------------------------------------------------
 
-// Interrupt active running execution (POST /api/session/:id/interrupt).
+// Interrupt the running agent loop (POST /api/session/:id/interrupt).
+//
+// Deliberately does NOT clear the streaming flag itself. An accepted interrupt is
+// a *candidate* for "the run is over" in exactly the sense run.js means it, and
+// run.js is the only thing that decides — by asking GET /session/active.
+//
+// This used to assert the run had stopped in a `finally`, without ever reading
+// `res.ok`. Two bugs in one: a rejected interrupt looked identical to an accepted
+// one, and the optimistic flag turned the stop square into a send arrow while the
+// agent was still working, until the next poll flipped it back — the
+// stop→send→stop flap run.js was written to eliminate.
+//
+// `interrupting` covers the honest gap in between: the server has taken the
+// request but the loop hasn't drained yet, so the button says "stopping…" rather
+// than either lying or looking dead. run.js#settleRun clears it.
 export async function abortSession() {
   const sessionID = opencodeStore.activeSessionId;
-  if (!sessionID) return;
+  if (!sessionID || opencodeStore.interrupting) return;
 
+  opencodeStore.interrupting = true;
   try {
-    await apiPost(`/session/${sessionID}/interrupt`);
+    const res = await apiPost(`/session/${sessionID}/interrupt`);
+    if (!res.ok) {
+      opencodeStore.interrupting = false;
+      opencodeStore.error = await errorMessage(res, `Couldn't stop the agent (${res.status})`);
+      return;
+    }
   } catch (err) {
-    console.error("Failed to interrupt session:", err);
-  } finally {
-    opencodeStore.isStreaming = false;
-    markStopped(sessionID);
+    opencodeStore.interrupting = false;
+    opencodeStore.error = err.message || "Couldn't stop the agent";
+    return;
   }
+  runMayHaveEnded(sessionID);
 }
 
 // Select the agent. Switched on the active session via POST /api/session/:id/agent { agent }.
+//
+// The picker is rolled back when the server refuses: showing an agent the session
+// isn't actually using is worse than not switching, because the next prompt then
+// runs as something other than what the composer says.
 export async function setAgent(agentName) {
+  const previous = opencodeStore.selectedAgent;
   opencodeStore.selectedAgent = agentName;
   const sessionID = opencodeStore.activeSessionId;
-  if (sessionID && agentName) {
-    try {
-      await apiPost(`/session/${sessionID}/agent`, { agent: agentName });
-    } catch (e) {
-      console.warn("Failed to switch session agent:", e);
-    }
+  if (!sessionID || !agentName) return;
+
+  try {
+    const res = await apiPost(`/session/${sessionID}/agent`, { agent: agentName });
+    if (res.ok) return;
+    opencodeStore.error = await errorMessage(res, `Couldn't switch to ${agentName} (${res.status})`);
+  } catch (err) {
+    opencodeStore.error = err.message || `Couldn't switch to ${agentName}`;
   }
+  opencodeStore.selectedAgent = previous;
 }
 
 // Compact the active session's context (POST /api/session/:id/compact),

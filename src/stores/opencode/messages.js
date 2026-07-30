@@ -50,6 +50,8 @@ export async function connectToSession(sessionID) {
   // streaming rather than pretending the run ended when we navigated away.
   setUnread(sessionID, false);
   opencodeStore.isStreaming = !!(opencodeStore.sessionActivity[sessionID] || {}).running;
+  // "stopping…" belonged to the run in the chat being left.
+  opencodeStore.interrupting = false;
   // Sub-agent state belongs to the session being left, not the one being opened.
   opencodeStore.childSessions = {};
   opencodeStore.callChildIndex = {};
@@ -60,7 +62,7 @@ export async function connectToSession(sessionID) {
   resetContextUsage();
   restoreSessionModel(sessionID);
 
-  await refreshActiveMessages();
+  await loadSessionTranscript(sessionID);
   await refreshSessionContext(sessionID);
 }
 
@@ -81,15 +83,52 @@ export async function fetchSessionMessages(sessionID) {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 
+// Load the transcript of a session being *opened*. Deliberately separate from
+// refreshActiveMessages() because the two want opposite things on failure, and
+// sharing one function is what produced the bug:
+//
+//   opening    — the messages on screen belong to the session being LEFT, so they
+//                must go, and a failure has to say so. Anything else shows one
+//                chat's transcript under another chat's title.
+//   refreshing — the messages on screen belong to THIS session and are often
+//                fresher than the server (a reply that just streamed). A failure
+//                keeps them and adds a notice.
+export async function loadSessionTranscript(sessionID) {
+  if (!sessionID) return;
+  opencodeStore.messages = [];
+  opencodeStore.messagesError = null;
+  opencodeStore.messagesLoading = true;
+
+  const list = await fetchSessionMessages(sessionID);
+  // A slow load for a chat the user has since navigated away from must not land
+  // on top of the one they are looking at now.
+  if (sessionID !== opencodeStore.activeSessionId) return;
+
+  opencodeStore.messagesLoading = false;
+  if (!list) {
+    opencodeStore.messagesError = "Couldn't load this chat's messages.";
+    return;
+  }
+  opencodeStore.messages = list;
+  await backfillChildSessions();
+}
+
+// Re-ask for the transcript of the chat already in view. Never destructive: see
+// loadSessionTranscript above.
 export async function refreshActiveMessages() {
   const sessionID = opencodeStore.activeSessionId;
   if (!sessionID) return;
 
   const list = await fetchSessionMessages(sessionID);
   if (!list) {
-    console.error(`Failed to fetch messages for session ${sessionID}`);
+    // Nothing on screen to preserve — this is the same dead end as a failed
+    // open, so report it the same way.
+    opencodeStore.messagesError = opencodeStore.messages.length
+      ? "Couldn't refresh from the server — showing what streamed."
+      : "Couldn't load this chat's messages.";
     return;
   }
+  opencodeStore.messagesError = null;
   opencodeStore.messages = list;
 
   // Server truth just landed, and it carries the sub-agent linkage each

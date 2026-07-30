@@ -1,0 +1,110 @@
+/* Narrow-window behaviour for the shell: the sidebar, the header and the
+   transcript column.
+
+   Imported last on purpose. The partials before it are flat global rules that
+   resolve ties by source order (see the note in src/style.css), so these
+   overrides have to come after everything they override. Component-local
+   responsive rules stay in their own <style scoped> block; this file is only for
+   the parts of the shell that no single component owns.
+
+   The breakpoint matches NARROW_PX in stores/layout.js — if one moves, both do. */
+
+/* --- Docked → drawer ------------------------------------------------------ */
+
+@media (max-width: 899px) {
+  /* Out of the flex row and over the chat, so the chat column gets the whole
+     width instead of whatever 260px leaves it. Translated rather than
+     display:none so it slides, and so it isn't in the tab order while hidden —
+     `visibility` is what takes it out, the transform only moves it. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: min(300px, 84vw);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.18s ease, visibility 0.18s;
+  }
+
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
+    box-shadow: 0 0 40px rgb(0 0 0 / 0.5);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(0 0 0 / 0.45);
+    border: 0;
+    padding: 0;
+  }
+
+  /* The one control that must exist at this width: with the sidebar off-screen
+     there is otherwise no way to reach another session. */
+  .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  /* Counters are the first thing to go — the title itself is the useful part,
+     and the numbers are all in the usage popover anyway. */
+  .header-title-content {
+    display: none;
+  }
+
+  header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  /* The prompt rail lives in a gutter that no longer exists. */
+  .msg-rail {
+    display: none;
+  }
+}
+
+/* --- Docked ---------------------------------------------------------------- */
+
+@media (min-width: 900px) {
+  /* Nothing to toggle while the sidebar is beside the chat. */
+  .sidebar-toggle,
+  .sidebar-backdrop {
+    display: none;
+  }
+}
+
+/* --- Very narrow ---------------------------------------------------------- */
+
+@media (max-width: 600px) {
+  /* Let the three selects stack rather than overflow the composer. */
+  .controls {
+    flex-wrap: wrap;
+  }
+
+  /* A quote as long as "The ships hung in the sky in much the same way that
+     bricks don't." can't be read in a one-row textarea at this width, and a
+     clipped half-sentence looks like a rendering bug. */
+  footer textarea::placeholder {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  main {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+/* --- Never scroll the page sideways -------------------------------------- */
+
+/* The shell is a fixed-height two-pane layout; anything wide enough to overflow
+   (a long code block, a diff, a wide table) has its own scroll container. Before
+   this, the header's controls at 420px sat past the viewport edge and took the
+   whole document with them — 569px of scrollWidth in a 420px window. */
+#app {
+  overflow-x: hidden;
+}

@@ -1,3 +1,24 @@
+/* A failed session fetch, offering the way out of it. */
+.sidebar-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--error);
+  white-space: normal;
+}
+
+.sidebar-error button {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 /* sidebar */
 .sidebar {
   width: 260px;

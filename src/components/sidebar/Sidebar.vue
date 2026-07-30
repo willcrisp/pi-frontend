@@ -26,6 +26,7 @@ import {
 } from "../../stores/projects.js";
 import { listDirectories } from "../../stores/filesearch.js";
 import { confirmDialog } from "../../stores/confirm.js";
+import { closeSidebar, closeSidebarIfDrawer, layoutStore } from "../../stores/layout.js";
 import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
 import SubagentsDialog from "../dialogs/SubagentsDialog.vue";
 import SavedPermissionsDialog from "../dialogs/SavedPermissionsDialog.vue";
@@ -209,6 +210,14 @@ async function submitAdd() {
   }
 }
 
+// Below stores/layout.js's breakpoint the sidebar is an overlay drawer, so
+// picking a session is also the gesture that dismisses it. Docked, this is a
+// no-op and openSession behaves exactly as it always did.
+function onOpenSession(id) {
+  openSession(id);
+  closeSidebarIfDrawer();
+}
+
 async function newSessionIn(directory) {
   try {
     await startNewChat(directory);
@@ -219,7 +228,17 @@ async function newSessionIn(directory) {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <!-- Backdrop only exists as a drawer (styles/responsive.css hides it when
+       docked); it is a button so it is reachable without a mouse. -->
+  <button
+    v-if="layoutStore.sidebarOpen"
+    type="button"
+    class="sidebar-backdrop"
+    aria-label="Close the session list"
+    @click="closeSidebar"
+  ></button>
+
+  <aside class="sidebar" :class="{ open: layoutStore.sidebarOpen }">
     <div class="sidebar-header">
       <span class="sidebar-title">OpenCode Sessions</span>
       <div class="sidebar-header-actions">
@@ -359,7 +378,7 @@ async function newSessionIn(directory) {
               class="chat-row"
               :class="{ active: s.id === activeSessionId }"
               :title="s.title"
-              @click="openSession(s.id)"
+              @click="onOpenSession(s.id)"
             >
               <span
                 v-if="sessionStatus(s.id)"
@@ -392,7 +411,14 @@ async function newSessionIn(directory) {
             </button>
           </div>
         </div>
-        <div v-if="!groups.length" class="chat-row dim">
+        <!-- "Couldn't fetch the list" must not look like "you have no sessions":
+             the sidebar is the only route to a session, so the empty version of
+             this reads as data loss. -->
+        <div v-if="projectsStore.sessionsError" class="chat-row sidebar-error">
+          <span>{{ projectsStore.sessionsError }}</span>
+          <button type="button" @click="fetchSessions">Retry</button>
+        </div>
+        <div v-else-if="!groups.length" class="chat-row dim">
           {{ showArchived ? "no archived projects" : "no sessions — click + to create a project" }}
         </div>
       </template>

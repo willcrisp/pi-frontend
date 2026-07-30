@@ -6,7 +6,13 @@
 -->
 <script setup>
 import { onMounted, ref } from "vue";
-import { opencodeStore, initOpenCode, commitRevert, clearRevert } from "./stores/opencode.js";
+import {
+  opencodeStore,
+  initOpenCode,
+  commitRevert,
+  clearRevert,
+  loadCatalogs,
+} from "./stores/opencode.js";
 import { initProjects } from "./stores/projects.js";
 import { connectionStore, testConnection } from "./stores/ssh.js";
 import { permissionStore } from "./stores/permission.js";
@@ -26,6 +32,7 @@ import { confirmStore } from "./stores/confirm.js";
 import ProvidersDialog from "./components/dialogs/ProvidersDialog.vue";
 import HandoverDialog from "./components/dialogs/HandoverDialog.vue";
 import { handoverStore } from "./stores/handover.js";
+import { toggleSidebar } from "./stores/layout.js";
 
 const showProviders = ref(false);
 
@@ -39,6 +46,12 @@ async function boot() {
   connectionStore.status = "connected";
   await initOpenCode();
   await initProjects();
+}
+
+// The empty state's escape hatch when the catalogs couldn't be fetched: a fresh
+// set of retry attempts, so the user never has to reload the page by hand.
+function retryCatalogs() {
+  loadCatalogs({ force: true });
 }
 
 onMounted(() => {
@@ -65,17 +78,53 @@ onMounted(() => {
 
     <!-- First run has no credentials and no sessions, and the only way to add
          a provider used to be a gear icon in the sidebar you had to know
-         about. Surface it here when no model is available. -->
+         about. Surface it here when no model is available.
+
+         ⚠️ Nothing may be inserted between this v-if and its v-else below.
+         A ProvidersDialog used to sit in the gap, and Vue bound the v-else to
+         *that* element's v-if instead: the chat panel became the dialog's
+         else-branch, so it rendered alongside this empty state whenever no
+         session was open, and unmounted whenever the dialog was open. The
+         dialog is now mounted after the pair. -->
     <div v-if="!opencodeStore.activeSessionId" class="chat-panel chat-empty">
+      <!-- ChatHeader isn't mounted here, so the empty state needs its own way to
+           reach the drawer — otherwise the narrow layout has no route to the
+           session list at exactly the moment you need one. -->
+      <div class="chat-empty-header">
+        <button
+          type="button"
+          class="sidebar-toggle"
+          title="Sessions"
+          aria-label="Show the session list"
+          @click="toggleSidebar"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M2.5 4h11M2.5 8h11M2.5 12h11"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
       <p>Select or create an OpenCode session to start chatting</p>
-      <template v-if="!opencodeStore.availableModels.length">
+      <!-- "No models" and "couldn't ask for models" look identical in this
+           empty state, and telling someone to connect a provider they already
+           have is worse than saying nothing. catalogFailed tells them apart. -->
+      <template v-if="opencodeStore.catalogFailed">
+        <p class="chat-empty-hint">
+          Couldn't load the model list from the server. It may still be starting up.
+        </p>
+        <button type="button" @click="retryCatalogs">Try again</button>
+      </template>
+      <template v-else-if="!opencodeStore.availableModels.length">
         <p class="chat-empty-hint">
           No models available yet — connect a provider to get started.
         </p>
         <button type="button" @click="showProviders = true">Add a provider</button>
       </template>
     </div>
-    <ProvidersDialog v-if="showProviders" @close="showProviders = false" />
 
     <div v-else class="chat-panel">
       <ChatHeader />
@@ -96,6 +145,9 @@ onMounted(() => {
       <MessageList />
       <Composer />
     </div>
+
+    <!-- Mounted after the v-if/v-else pair above, never between them. -->
+    <ProvidersDialog v-if="showProviders" @close="showProviders = false" />
   </template>
 </template>
 
@@ -104,6 +156,7 @@ onMounted(() => {
   color: var(--dim);
   font-size: 13px;
 }
+
 
 .revert-banner {
   display: flex;

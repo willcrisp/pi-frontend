@@ -9,7 +9,7 @@
 // A "variant" is a reasoning-effort preset the model offers; catalog loading
 // lives in catalog.js, this module only reads what it produced.
 import { opencodeStore } from "./state.js";
-import { apiPost } from "../../lib/api.js";
+import { apiPost, errorMessage } from "../../lib/api.js";
 import { readJSON, writeJSON } from "../../lib/storage.js";
 
 const MODEL_KEY = "oc.model";
@@ -93,14 +93,22 @@ export async function setThinkingLevel(level) {
   await pushSessionModel();
 }
 
+// Same contract as setAgent: a picker showing a model the server didn't accept
+// means the next prompt runs on something other than what the composer says, so
+// a refusal is reported rather than logged. The local selection is left as the
+// user set it — it is also the persisted preference for the next session, and
+// dropping it would lose their choice as well as the switch.
 async function pushSessionModel() {
   const sessionID = opencodeStore.activeSessionId;
   const modelRef = selectedModelRef();
   if (!sessionID || !modelRef) return;
   try {
-    await apiPost(`/session/${sessionID}/model`, { model: modelRef });
+    const res = await apiPost(`/session/${sessionID}/model`, { model: modelRef });
+    if (!res.ok) {
+      opencodeStore.error = await errorMessage(res, `Couldn't switch model (${res.status})`);
+    }
   } catch (e) {
-    console.warn("Failed to switch session model:", e);
+    opencodeStore.error = e.message || "Couldn't switch model";
   }
 }
 

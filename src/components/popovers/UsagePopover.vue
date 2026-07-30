@@ -6,12 +6,25 @@
 import { computed } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
 
-import { gatewayCostFor } from "../../stores/usage.js";
+import { gatewayCostFor, serverSessionTotals } from "../../stores/usage.js";
 
 // The popover stays a live, at-a-glance view of the session on screen; history
 // and cross-project totals need more room than a hover target, so they live in
 // UsageDialog.vue and this is the way in.
 defineEmits(["open-usage"]);
+
+// Which accounting is on screen.
+//
+// store.sessionStats is built from the events of THIS page load, so it reads 0
+// for a session whose turns all happened before you opened the tab — while the
+// dialog one click away showed that same session's server total. Two different
+// numbers for one session, neither labelled. So: prefer the live figures once
+// anything has streamed, fall back to the server's cumulative record otherwise,
+// and always say which.
+const live = computed(() => (store.sessionStats?.tokens?.total || 0) > 0);
+const serverTotals = computed(() => serverSessionTotals(store.activeSessionId));
+const stats = computed(() => (live.value ? store.sessionStats : serverTotals.value));
+const sourceLabel = computed(() => (live.value ? "since this page loaded" : "server total"));
 
 // A provider configured without pricing gives OpenCode nothing to compute a
 // cost from, so `sessionStats.cost` sits at exactly 0 no matter how much the
@@ -90,28 +103,34 @@ function formatDuration(ms) {
     </svg>
 
     <div class="usage-popover">
-      <template v-if="store.sessionStats">
+      <template v-if="stats">
         <div class="usage-row usage-total">
           <span>Session tokens</span>
-          <strong>{{ formatTokens(store.sessionStats.tokens?.total) }}</strong>
+          <strong>{{ formatTokens(stats.tokens?.total) }}</strong>
+        </div>
+        <!-- Which of the two accountings this is. Without it the same session
+             read 0 here and 35.0k in the dialog, with nothing to tell them
+             apart. -->
+        <div class="usage-row usage-dim usage-source">
+          <span>{{ sourceLabel }}</span>
         </div>
         <div class="usage-row usage-dim">
           <span>input / output</span>
           <span
-            >{{ formatTokens(store.sessionStats.tokens?.input) }} /
-            {{ formatTokens(store.sessionStats.tokens?.output) }}</span
+            >{{ formatTokens(stats.tokens?.input) }} /
+            {{ formatTokens(stats.tokens?.output) }}</span
           >
         </div>
         <div class="usage-row usage-dim">
           <span>cache read / write</span>
           <span
-            >{{ formatTokens(store.sessionStats.tokens?.cacheRead) }} /
-            {{ formatTokens(store.sessionStats.tokens?.cacheWrite) }}</span
+            >{{ formatTokens(stats.tokens?.cacheRead) }} /
+            {{ formatTokens(stats.tokens?.cacheWrite) }}</span
           >
         </div>
         <div class="usage-row">
           <span>cost{{ gatewayCost != null ? " (gateway)" : "" }}</span>
-          <span>{{ formatCost(gatewayCost != null ? gatewayCost : store.sessionStats.cost) }}</span>
+          <span>{{ formatCost(gatewayCost != null ? gatewayCost : stats.cost) }}</span>
         </div>
         <div class="usage-row usage-dim" v-if="store.sessionStats.contextUsage?.percent != null">
           <!-- Flagged when it's the server's own accounting rather than our
@@ -126,7 +145,7 @@ function formatDuration(ms) {
           </span>
         </div>
       </template>
-      <div v-else class="usage-row usage-dim">no session stats yet</div>
+      <div v-else class="usage-row usage-dim">no usage recorded for this session yet</div>
 
       <div class="usage-sep"></div>
 
@@ -160,6 +179,12 @@ function formatDuration(ms) {
 </template>
 
 <style scoped>
+.usage-source {
+  margin-top: -2px;
+  font-size: 10.5px;
+  font-style: italic;
+}
+
 .usage-more {
   width: 100%;
   background: none;

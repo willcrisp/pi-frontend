@@ -10,7 +10,7 @@
 -->
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { opencodeStore as store } from "../../stores/opencode.js";
+import { opencodeStore as store, loadSessionTranscript } from "../../stores/opencode.js";
 import { randomThinkingPhrase } from "../../lib/thinkingPhrases.js";
 import MessageView from "./MessageView.vue";
 import MessageRail from "./MessageRail.vue";
@@ -106,6 +106,12 @@ watch(
   }
 );
 
+// A failed load is a dead end unless there's a way out of it that isn't
+// "reload the page".
+function retryTranscript() {
+  loadSessionTranscript(store.activeSessionId);
+}
+
 onMounted(() => {
   mainEl.value?.addEventListener("scroll", onScroll, { passive: true });
   scrollToBottom();
@@ -121,6 +127,23 @@ onBeforeUnmount(() => {
   <div class="message-area">
     <main ref="mainEl">
       <div ref="messagesEl" class="messages">
+        <!-- Three states that used to be one blank column: still loading,
+             wouldn't load, and genuinely empty. -->
+        <div v-if="store.messagesLoading && !store.messages.length" class="transcript-state">
+          <span class="thinking-dots"><span></span><span></span><span></span></span>
+          loading this chat…
+        </div>
+        <div v-else-if="store.messagesError && !store.messages.length" class="transcript-state">
+          <p>{{ store.messagesError }}</p>
+          <button type="button" @click="retryTranscript">Try again</button>
+        </div>
+        <!-- Messages are on screen but the server disagreed or couldn't be
+             reached: a notice, not a replacement. -->
+        <div v-else-if="store.messagesError" class="transcript-notice">
+          <span>{{ store.messagesError }}</span>
+          <button type="button" @click="retryTranscript">Retry</button>
+        </div>
+
         <TransitionGroup name="msg-fade">
           <MessageView
             v-for="(msg, i) in store.messages"
@@ -141,3 +164,51 @@ onBeforeUnmount(() => {
     <FindBar :container="messagesEl" />
   </div>
 </template>
+
+<style scoped>
+/* Self-contained, so scoped rather than another global partial. */
+.transcript-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  text-align: center;
+}
+
+.transcript-state p {
+  margin: 0;
+}
+
+.transcript-state button,
+.transcript-notice button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.transcript-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.transcript-notice span {
+  flex: 1;
+}
+</style>

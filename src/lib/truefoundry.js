@@ -27,6 +27,20 @@
 export const TRUEFOUNDRY_PROVIDER_ID = "truefoundry";
 const OPENAI_COMPATIBLE_NPM = "@ai-sdk/openai-compatible";
 
+// The gateway the two dialogs prefill, once the user has saved one. Read at
+// build time from VITE_TRUEFOUNDRY_GATEWAY (a `.env` is enough) and otherwise
+// empty — it used to be one deployment's hostname hardcoded as a `ref()` default
+// in both ProvidersDialog and UsageDialog, which is fine for that deployment and
+// wrong for a general harness. Empty means the field shows its placeholder and
+// asks, which is the honest default for anyone else.
+//
+// The user's own saved value always wins: this is only the fallback for a fresh
+// browser (see the TRUEFOUNDRY_GATEWAY_KEY reads in ProvidersDialog/UsageDialog).
+export const DEFAULT_TRUEFOUNDRY_GATEWAY = import.meta.env.VITE_TRUEFOUNDRY_GATEWAY || "";
+
+// One key, so the two dialogs can't drift onto different storage.
+export const TRUEFOUNDRY_GATEWAY_KEY = "truefoundry.gateway";
+
 // A model is usable in a chat UI if it can hold a conversation. The enabled
 // endpoint also lists embeddings, image models and one-off custom endpoints
 // (Sora), which would otherwise become model-picker entries that break on first

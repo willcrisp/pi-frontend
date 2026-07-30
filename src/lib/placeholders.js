@@ -1,4 +1,13 @@
-// Composer placeholder text: one random sci-fi/fantasy quote per mount.
+// Composer placeholder text.
+//
+// The quote is the only always-visible copy in the app, and in an empty chat it
+// was also the only thing where an instruction should have been: a first-time
+// user got "The ships hung in the sky in much the same way that bricks don't."
+// where they needed to know that "/" and "@" do something. So the quote is now
+// what you see once a chat has started, and an empty one says what the box does.
+// See composerPlaceholder in components/chat/Composer.vue.
+export const EMPTY_CHAT_PLACEHOLDER = "Ask for anything — / for commands, @ for files";
+
 // Purely decorative — nothing reads these back.
 const SCI_FI_QUOTES = [
   "I must not fear. Fear is the mind-killer. — Dune",

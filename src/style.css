@@ -39,3 +39,6 @@
 @import "./styles/confirm-dialog.css"; /* ConfirmDialog (reuses the connect-dialog chrome above) */
 @import "./styles/find-bar.css"; /* FindBar and its ::highlight() registration */
 @import "./styles/git-branch-badge.css"; /* Git branch badge in ChatHeader */
+/* Last, and it has to stay last: these are overrides of the shell rules above,
+   and ties here resolve by source order. */
+@import "./styles/responsive.css"; /* Narrow-window shell: sidebar drawer, header, composer */

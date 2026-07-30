@@ -11,6 +11,9 @@ const ARCHIVED_KEY = "opencode-web:archivedProjects"; // string[] of directories
 export const projectsStore = reactive({
   sessions: [], // [{ id, title, updatedAt, directory, parentID }]
   loadingSessions: false,
+  // Why the list is empty, when it's empty for a bad reason. The sidebar is the
+  // only route to a session, so "couldn't fetch" must not look like "none".
+  sessionsError: null,
   // Client-only project archiving (by root directory) — the server has no
   // project entity to archive, so this just hides groups in the sidebar.
   archivedDirectories: readArray(ARCHIVED_KEY),
@@ -34,8 +37,16 @@ export function setProjectArchived(directory, archived) {
 
 export async function fetchSessions() {
   projectsStore.loadingSessions = true;
+  projectsStore.sessionsError = null;
   try {
     const res = await apiGet("/session");
+    if (!res.ok) {
+      // An empty sidebar reads as "you have no sessions", which is a very
+      // different thing from "the list couldn't be fetched" — and the sidebar is
+      // the only way to reach a session, so a silent failure looks like data
+      // loss. This used to be a console.error and nothing else.
+      projectsStore.sessionsError = `Couldn't load sessions (${res.status})`;
+    }
     if (res.ok) {
       const list = unwrap(await res.json());
       projectsStore.sessions = list
@@ -61,10 +72,31 @@ export async function fetchSessions() {
         .sort((a, b) => b.updatedAt - a.updatedAt);
     }
   } catch (err) {
-    console.error("Failed to fetch OpenCode sessions:", err);
+    projectsStore.sessionsError = err.message || "Couldn't load sessions";
   } finally {
     projectsStore.loadingSessions = false;
   }
+}
+
+// The session list is otherwise only fetched on boot, on the ⟳ button, and when
+// this app creates a session — nothing on the event stream refreshed it. So the
+// title the server writes from a chat's first prompt never arrived: a new chat
+// sat in the sidebar as "New session - <iso timestamp>" until you pressed
+// refresh or reloaded, which is the most common flow in the app. The metered
+// `cost`/`tokens` on each record went stale the same way, taking the usage view
+// with them.
+//
+// Coalesced because a single turn touches the session record several times
+// (title, cost, tokens) and each of those is one more event.
+const REFRESH_DEBOUNCE_MS = 1200;
+let refreshTimer = null;
+
+export function scheduleSessionsRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    fetchSessions().catch(() => {});
+  }, REFRESH_DEBOUNCE_MS);
 }
 
 // Sessions the user actually started. A session with a `parentID` is a

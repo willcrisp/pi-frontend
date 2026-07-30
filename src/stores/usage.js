@@ -60,6 +60,31 @@ function dayKey(ts) {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+// One session's cumulative figures as the SERVER has them, off its own
+// SessionV2.Info record — the same source the usage view reads.
+//
+// This exists because the header popover and the usage dialog were showing two
+// different numbers for the same session at the same time: the popover reads
+// stores/opencode/context.js, which is built from the events of the current page
+// load and so reads 0 until a turn streams, while the dialog reads these
+// cumulative totals. Both were right and neither said which it was. The popover
+// now falls back to this and labels which one is on screen.
+export function serverSessionTotals(sessionID) {
+  const s = (projectsStore.sessions || []).find((x) => x.id === sessionID);
+  if (!s) return null;
+  const cache = s.tokens?.cache || {};
+  return {
+    cost: s.cost || 0,
+    tokens: {
+      input: s.tokens?.input || 0,
+      output: s.tokens?.output || 0,
+      cacheRead: cache.read || 0,
+      cacheWrite: cache.write || 0,
+      total: tokenTotal(s.tokens),
+    },
+  };
+}
+
 // Everything the usage view needs, derived from the session list in memory.
 // Sub-agent sessions are counted: they are metered separately from their parent
 // and their spend is additive, never a double-count (docs/subagents-alfuat.md).

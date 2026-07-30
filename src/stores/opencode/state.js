@@ -10,7 +10,17 @@ export const opencodeStore = reactive({
   activeSessionId: null,
   activeSession: null,
   messages: [],
+  // Transcript load state for the session in view. Both exist because "this chat
+  // is empty", "this chat hasn't loaded yet" and "this chat wouldn't load" used
+  // to render identically — and on a failed switch the previous chat's messages
+  // simply stayed on screen under the new chat's title. See messages.js.
+  messagesLoading: false,
+  messagesError: null,
   isStreaming: false,
+  // The server has accepted an interrupt but the agent loop hasn't drained yet.
+  // Set by session.js#abortSession, cleared by run.js#settleRun — the composer
+  // shows "stopping…" for the gap, rather than claiming the run already ended.
+  interrupting: false,
   availableModels: [], // [{ providerID, modelID, label, contextLimit, variants }]
   selectedModel: null, // { providerID, modelID }
   thinkingLevel: "", // selected model variant name ("" only while no variant-capable model is selected)
@@ -40,6 +50,10 @@ export const opencodeStore = reactive({
   },
   commands: [],
   skills: [],
+  // True once a catalog fetch has failed and every retry with it (catalog.js).
+  // An empty `availableModels` otherwise reads as "no provider connected", which
+  // is the wrong thing to tell someone whose server was merely still starting.
+  catalogFailed: false,
   // Sub-agent dispatches. A `subagent` tool call spawns a CHILD SESSION whose
   // turn streams over this same /api/event connection under its own sessionID.
   // childSessions is keyed by that child sessionID; callChildIndex maps the

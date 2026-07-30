@@ -387,3 +387,28 @@ button:hover {
   background: var(--error);
   color: var(--bg);
 }
+
+/* The interrupt is in, the agent hasn't wound up yet. Pulsing rather than
+   swapping to a send arrow: run.js hasn't confirmed the run is over, so the
+   button must not imply the session is ready for a new prompt. */
+.composer-icon-btn.stop.interrupting {
+  animation: stop-pending 1s ease-in-out infinite;
+  cursor: default;
+}
+
+.composer-icon-btn.stop.interrupting:hover {
+  background: transparent;
+  color: var(--error);
+}
+
+@keyframes stop-pending {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-icon-btn.stop.interrupting {
+    animation: none;
+    opacity: 0.5;
+  }
+}

@@ -1,12 +1,20 @@
-// The TrueFoundry card in the Integrations dialog.
+// The TrueFoundry card in the Providers dialog.
 //
 // Discovery shells out over a PTY, which the mock server doesn't implement, so
 // these tests seed the discovery cache in localStorage instead — the same path
 // a returning user hits, and it keeps the test about the selection UI rather
 // than about PTY plumbing (see test/mentions.spec.js for the same approach).
+//
+// The saved gateway is seeded alongside the cache, because the cache is keyed by
+// gateway URL and the card only finds it once the field holds the same one. This
+// used to work by accident: one deployment's hostname was hardcoded as the
+// field's default, so it matched without being set. That default is now empty
+// unless VITE_TRUEFOUNDRY_GATEWAY says otherwise, and seeding both halves of the
+// returning user's state is the honest version of this fixture anyway.
 import { expect, test } from "@playwright/test";
 
-const GATEWAY = "https://gateway.ai.fortescue.com";
+// Any URL works — it only has to be the same on both sides.
+const GATEWAY = "https://gateway.example.com";
 
 // Two provider accounts under one broad provider type, plus a second type.
 // The duplicated "virtual-model" type is the case that makes grouping by
@@ -35,6 +43,9 @@ test.beforeEach(async ({ page }) => {
         "opencode-web:truefoundry-cache",
         JSON.stringify({ [gateway]: { models, fetchedAt: Date.now() } })
       );
+      // What the card reads back into its gateway field, and the key the cache
+      // above is looked up by (TRUEFOUNDRY_GATEWAY_KEY in lib/truefoundry.js).
+      localStorage.setItem("truefoundry.gateway", gateway);
     },
     [GATEWAY, MODELS]
   );

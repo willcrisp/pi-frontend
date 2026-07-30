@@ -117,6 +117,8 @@ export function settleRun(sessionID) {
 
   if (sessionID === opencodeStore.activeSessionId) {
     opencodeStore.isStreaming = false;
+    // Whatever the interrupt was waiting for has happened.
+    opencodeStore.interrupting = false;
     // Reconcile with server truth (drops optimistic artifacts, applies final
     // content). Only at the real end of the run — mid-loop this would race the
     // next step's stream.

@@ -48,10 +48,15 @@ export {
 export { refreshSessionContext } from "./opencode/context.js";
 export { sessionStatus } from "./opencode/activity.js";
 export { pendingSteersFor, sendSteer } from "./opencode/steer.js";
-export { connectToSession, refreshActiveMessages } from "./opencode/messages.js";
+export {
+  connectToSession,
+  loadSessionTranscript,
+  refreshActiveMessages,
+} from "./opencode/messages.js";
 export { sendPrompt } from "./opencode/prompt.js";
 export {
   loadAgents,
+  loadCatalogs,
   loadCommands,
   loadModels,
   loadSkills,

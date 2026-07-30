@@ -15,6 +15,31 @@ header .wordmark {
   font-weight: 600;
 }
 
+/* Opens the sidebar when it is an off-screen drawer. Hidden at every width by
+   default; styles/responsive.css reveals it below the layout breakpoint.
+   Global rather than scoped in the two components that render it (ChatHeader and
+   the empty state) precisely so that media query can win — a scoped
+   `.sidebar-toggle[data-v-x]` out-specifies a plain `.sidebar-toggle`, which
+   would have kept the button hidden everywhere. */
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  color: var(--fg);
+}
+
 .header-left {
   display: flex;
   align-items: center;
@@ -55,9 +80,14 @@ header .wordmark {
   border-radius: 4px;
 }
 
+/* `gap`, not spaces in the markup. A flex container trims the leading and
+   trailing white space of each item, so the " · " separator spans rendered as
+   "Mock session·120 in / 12 out· 0% ctx" — glued on one side, spaced on the
+   other. The separators are bare "·" now and the spacing comes from here. */
 .header-title-content {
   display: inline-flex !important;
   align-items: center;
+  gap: 5px;
 }
 
 /* Trail back out of a sub-agent's session. Sub-agent sessions are absent from

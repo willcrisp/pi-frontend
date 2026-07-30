@@ -12,13 +12,18 @@ import { computed, onMounted, ref } from "vue";
 import { localUsage, hasUnpricedModels, usageStore, refreshGatewayUsage } from "../../stores/usage.js";
 import { providersStore, loadEnvPAT } from "../../stores/providers.js";
 import { readString } from "../../lib/storage.js";
+import {
+  DEFAULT_TRUEFOUNDRY_GATEWAY,
+  TRUEFOUNDRY_GATEWAY_KEY,
+} from "../../lib/truefoundry.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const emit = defineEmits(["close"]);
 
 const usage = computed(() => localUsage());
 const gateway = computed(() => usageStore.gateway);
 
-const tfGateway = ref(readString("truefoundry.gateway", "https://gateway.ai.fortescue.com"));
+const tfGateway = ref(readString(TRUEFOUNDRY_GATEWAY_KEY, DEFAULT_TRUEFOUNDRY_GATEWAY));
 const tfPAT = ref("");
 
 // Same read-through as the Integrations card: a token already in the host's
@@ -66,9 +71,7 @@ function shortDay(day) {
   return day.slice(5); // MM-DD
 }
 
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) emit("close");
-}
+const { onBackdrop } = useDialogEscape(() => emit("close"));
 </script>
 
 <template>
@@ -161,7 +164,13 @@ function onBackdrop(e) {
         token is not stored.
       </p>
       <form class="add-project-form" @submit.prevent="onLoadGateway">
-        <input v-model="tfGateway" type="url" class="connect-filter" autocomplete="off" />
+        <input
+          v-model="tfGateway"
+          type="url"
+          class="connect-filter"
+          placeholder="https://gateway.example.com"
+          autocomplete="off"
+        />
         <input
           v-model="tfPAT"
           type="password"

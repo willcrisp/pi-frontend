@@ -26,6 +26,7 @@ import {
   saveTargetPath,
   subagentsStore,
 } from "../../stores/subagents.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const emit = defineEmits(["close"]);
 
@@ -255,9 +256,7 @@ async function onDelete() {
   if (await deleteSubagent({ path: e.originalPath })) editing.value = null;
 }
 
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) emit("close");
-}
+const { onBackdrop } = useDialogEscape(() => emit("close"));
 </script>
 
 <template>

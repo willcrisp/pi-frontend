@@ -22,6 +22,10 @@ import {
 } from "../../stores/handover.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 import { onMarkdownClick } from "../../lib/codeCopy.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
+
+// On `window`, not the backdrop: see the note in useDialogEscape.
+const { onBackdrop } = useDialogEscape(() => closeHandover());
 
 const record = computed(() => handoverById(handoverStore.openId));
 const rendered = computed(() => renderMarkdown(record.value?.body || ""));
@@ -37,10 +41,6 @@ const extraEl = ref(null);
 onMounted(() => {
   nextTick(() => extraEl.value?.focus());
 });
-
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) closeHandover();
-}
 
 async function copyDocument() {
   if (!record.value) return;
@@ -74,7 +74,6 @@ function onExtraKeydown(e) {
     v-if="record"
     class="connect-backdrop"
     @mousedown="onBackdrop"
-    @keydown.escape="closeHandover"
   >
     <div class="connect-panel handover-panel">
       <div class="connect-head">

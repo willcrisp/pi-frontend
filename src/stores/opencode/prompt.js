@@ -23,6 +23,7 @@ export async function sendPrompt(text, files) {
   opencodeStore.draft = "";
   appendLocalUserMessage(promptText, attachments);
   opencodeStore.isStreaming = true;
+  opencodeStore.interrupting = false;
   markRunning(sessionID);
 
   try {

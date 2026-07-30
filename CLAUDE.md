@@ -181,21 +181,22 @@ each other, the shared part belongs lower down):
 | Module | Owns |
 |---|---|
 | `state.js` | the `reactive()` store; imports no sibling, so anything may use it |
+| `drafts.js` | the half-typed prompt per session; imports only `state.js` |
 | `transport.js` | `POST /session/:id/prompt` — delivery modes, flat-vs-wrapped body |
 | `children.js` | linking a `subagent` call to the child session it dispatched |
 | `models.js` | model + reasoning-effort selection and its persistence |
 | `context.js` | token/context accounting (local estimate vs server truth) |
 | `steer.js` | prompts admitted into a run already in flight |
 | `activity.js` | per-session running/unread — the sidebar dot |
-| `messages.js` | transcript load, REST→view normalization, sub-agent backfill |
+| `messages.js` | transcript load + its loading/error state, REST→view normalization, sub-agent backfill |
 | `run.js` | when a run is over — event candidates confirmed against `GET /session/active` |
 | `prompt.js` | sending a prompt that starts a turn |
-| `catalog.js` | model/agent/command/skill lists |
+| `catalog.js` | model/agent/command/skill lists, and the retry that keeps them loaded |
 | `session.js` | revert, interrupt, agent switch, compact |
 | `events.js` | the SSE reducer — one handler per event type |
 | `stream.js` | the SSE subscription and `initOpenCode()` |
 
-Four behaviours are worth knowing before changing any of them:
+Five behaviours are worth knowing before changing any of them:
 
 - *Sub-agent child sessions* (`children.js`). A `subagent` tool call dispatches a
   child session; the link between call and child arrives by up to three routes
@@ -215,6 +216,14 @@ Four behaviours are worth knowing before changing any of them:
   live dot ("working" / "unread"), tracked for every session the stream mentions
   — not just the one on screen — with unread persisted across reloads. This
   module owns "it is working"; `run.js` owns "it has stopped".
+- *Keeping the catalogs loaded* (`catalog.js`). The four lists are fetched at boot
+  and retried with a bounded backoff while any is still empty, plus once more
+  whenever the event stream (re)connects. They used to be load-once with failures
+  going to `console.warn`, so a single early `GET /model` against a server that
+  hadn't finished starting left the composer with **no agent or model select at
+  all** until the page was reloaded by hand — and an empty catalog is
+  indistinguishable in the UI from a server with no providers, which is why
+  `catalogFailed` exists to tell the empty state which it is.
 
 **Adding or changing an SSE event** is a single entry in the `HANDLERS` table in
 `events.js`, keyed by event type. Each handler gets
@@ -225,6 +234,10 @@ than `opencodeStore.messages` so a child's transcript lands on the child.
 
 - `projects.js`: session list, active selection, and sidebar grouping by project
   directory. Archiving is client-side only (the server has no project entity).
+  `scheduleSessionsRefresh()` is how the list stays current — a step ending is
+  when the server has written a session's title, cost and tokens, and nothing
+  else refetches it.
+- `fork.js`: starting a new chat from an existing prompt (the rail's fork button).
 - `ssh.js`: connection settings, `apiBase()`, `authHeaders()` — see above.
 
 **Interactive gating**
@@ -255,7 +268,10 @@ than `opencodeStore.messages` so a child's transcript lands on the child.
 
 **Client-only UI state** — `theme.js` (color profile, font sizes, content width,
 applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
-`filepreview.js`.
+`filepreview.js`, `shortcuts.js` (whether the shortcut reference is open), and
+`layout.js` (whether the window is narrow enough for the sidebar to be an overlay
+drawer, and whether that drawer is open — the breakpoint is shared with
+`styles/responsive.css`, so moving one means moving both).
 
 - `providers.js`: integrations/credentials via `/api/integration`, **plus** the
   whole TrueFoundry flow — gateway discovery over PTY, the config write, and the
@@ -284,6 +300,13 @@ mid-run whether a long turn was on track.
 shortcuts), and `useListMenu` — the keyboard behaviour the two autocomplete
 menus share. `Composer.vue` is wiring plus the template.
 
+`useDialogEscape` lives here too but isn't the composer's: it is the
+Escape/backdrop close contract every modal is supposed to honour, and a new
+dialog gets it by calling one function. Read its header before adding a dialog —
+four of them used to have no key listener at all while the shortcuts reference
+advertised Escape, and two more put `@keydown.escape` on a non-focusable
+backdrop `<div>`, which worked only by luck of focus.
+
 Composables return refs; **destructure them at the top of `<script setup>`** so
 the template auto-unwraps (`attachments`, not `files.attachments.value`).
 
@@ -298,6 +321,24 @@ global rules with many equal-specificity selectors, so ties resolve by source
 order. Edit the partial that owns the component; a genuinely new component gets
 a new partial imported at the *end* of the list. Self-contained components are
 better off with a `<style scoped>` block, which wins over all of it.
+
+`styles/responsive.css` is the narrow-window behaviour of the shell (sidebar
+drawer, header, composer) and **must stay the last import** — it overrides the
+partials above it, and ties resolve by source order. Its breakpoint is the same
+number as `NARROW_PX` in `stores/layout.js`.
+
+Two traps worth knowing, both of which have bitten:
+
+- `<style scoped>` beating a media query. A scoped `.foo[data-v-x]` (0,2,0)
+  out-specifies a global `.foo` (0,1,0), so a base rule in a component and its
+  responsive override in a partial will not resolve the way you expect. If a rule
+  needs a media query to override it, both belong in partials —
+  `.sidebar-toggle` lives in `styles/header.css` for exactly this reason.
+- Hiding something with `opacity: 0`. It stays clickable, stays in the tab order,
+  and keeps its box in the layout. Use `visibility: hidden` (and take it out of
+  flow if it shouldn't reserve space) — see the note on `.msg-revert` in
+  `MessageView.vue`, which was an invisible 95px hit target for a destructive
+  action on every user message.
 
 ## Docs map
 

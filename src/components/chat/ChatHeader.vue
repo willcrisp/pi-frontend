@@ -17,6 +17,7 @@ import {
 } from "../../stores/projects.js";
 import { gitStore, fetchBranches } from "../../stores/git.js";
 import { openShortcuts } from "../../stores/shortcuts.js";
+import { toggleSidebar } from "../../stores/layout.js";
 import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
 import SshPopover from "../popovers/SshPopover.vue";
@@ -69,6 +70,11 @@ const tokenSummary = computed(() => {
   return `${fmtTokens(t.input || 0)} in / ${fmtTokens(t.output || 0)} out`;
 });
 
+// Same distinction the usage popover draws: these counters are built from the
+// events of this page load, not the session's cumulative server total. Said on
+// hover so the number is never read as the whole story.
+const tokenTitle = "Tokens seen since this page loaded — hover the chart icon for the session total";
+
 // Use raw counts as the transition key so an update still animates when the
 // compact display (for example, 1.2k) has not rounded to a new value yet.
 const tokenSummaryKey = computed(() => {
@@ -117,6 +123,25 @@ function scrollToRunningSubagent() {
 <template>
   <header>
     <div class="header-left">
+      <!-- Only rendered as a control below the layout breakpoint (CSS decides —
+           styles/responsive.css), because that is where the sidebar becomes an
+           off-screen drawer and this is the only way back to it. -->
+      <button
+        type="button"
+        class="sidebar-toggle"
+        title="Sessions"
+        aria-label="Show the session list"
+        @click="toggleSidebar"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M2.5 4h11M2.5 8h11M2.5 12h11"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
       <SshPopover />
       <span class="wordmark" title="radius — OpenCode V2 AI harness">radius</span>
 
@@ -162,16 +187,26 @@ function scrollToRunningSubagent() {
         <span class="breadcrumb-current">{{ currentCrumb }}</span>
       </nav>
 
+      <!-- Separators are bare "·": the spacing is `gap` on the flex container,
+           because flex trims white space at each item's edges (see header.css). -->
       <span class="header-title-content">
         <span v-if="showInlineTitle">{{ sessionTitle }}</span>
         <template v-if="tokenSummary">
-          <span v-if="showInlineTitle"> · </span>
+          <span v-if="showInlineTitle">·</span>
           <Transition name="token-roll" mode="out-in">
-            <span :key="tokenSummaryKey" class="token-summary-value">{{ tokenSummary }}</span>
+            <span :key="tokenSummaryKey" class="token-summary-value" :title="tokenTitle">
+              {{ tokenSummary }}
+            </span>
           </Transition>
         </template>
-        <span v-if="contextPercent">{{ showInlineTitle || tokenSummary ? " · " : "" }}{{ contextPercent }}</span>
-        <span v-if="store.isStreaming" class="dim"> · streaming…</span>
+        <template v-if="contextPercent">
+          <span v-if="showInlineTitle || tokenSummary">·</span>
+          <span>{{ contextPercent }}</span>
+        </template>
+        <template v-if="store.isStreaming">
+          <span class="dim">·</span>
+          <span class="dim">streaming…</span>
+        </template>
       </span>
     </div>
 

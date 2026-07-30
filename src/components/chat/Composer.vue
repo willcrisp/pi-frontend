@@ -13,7 +13,7 @@
   upward, so their lists read bottom-up.
 -->
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   opencodeStore as store,
   sendPrompt,
@@ -23,7 +23,7 @@ import {
   setThinkingLevel,
   runCommand,
 } from "../../stores/opencode.js";
-import { randomPlaceholder } from "../../lib/placeholders.js";
+import { EMPTY_CHAT_PLACEHOLDER, randomPlaceholder } from "../../lib/placeholders.js";
 import { useAttachments } from "../../composables/useAttachments.js";
 import { useAutosize } from "../../composables/useAutosize.js";
 import { useFileMentions } from "../../composables/useFileMentions.js";
@@ -97,7 +97,13 @@ const {
   thinkingColor,
 } = useModelPicker();
 
-const composerPlaceholder = ref(randomPlaceholder());
+// An empty chat gets the instruction; once there's a transcript the quote takes
+// over, because by then the user has seen the box work and the flavour is the
+// point. One quote per mount, so it doesn't reshuffle under the cursor.
+const quote = ref(randomPlaceholder());
+const composerPlaceholder = computed(() =>
+  store.messages.length ? quote.value : EMPTY_CHAT_PLACEHOLDER
+);
 const canSend = computed(() => !!(input.value.trim() || attachments.value.length));
 
 // Mid-run, the same box steers instead of being dead: the prompt is admitted
@@ -148,6 +154,41 @@ function onKeydown(e) {
     submit();
   }
 }
+
+// Every surface that owns Escape ahead of the run: each closes on Escape itself,
+// so interrupting as well would do two things with one key.
+//
+// Each selector must match ONLY while that surface is open. `.select-panel` and
+// `.ssh-popover-panel.open` are the open states of the model/agent selects and
+// the connection popover — their wrappers (`.select-menu`, `.ssh-trigger-wrap`)
+// are in the DOM permanently, and matching one of those silently disabled this
+// shortcut altogether.
+const ESCAPE_OWNERS = [
+  ".connect-backdrop", // every dialog
+  ".palette-backdrop", // CommandPalette
+  ".shortcuts-backdrop", // ShortcutsDialog
+  ".find-bar", // v-if'd
+  ".select-panel", // an open SelectMenu, not its trigger
+  ".ssh-popover-panel.open",
+  ".colors-popover-panel.open",
+  ".model-filter-menu", // v-if'd
+  ".sidebar.open", // the narrow-layout drawer
+].join(", ");
+
+// Esc interrupts the run. Stopping an agent was mouse-only, which is an odd gap
+// in an app that ships a shortcuts dialog — but Escape is contended, so this is
+// deliberately the lowest-priority claim on it: it fires only when nothing else
+// on screen would have used the key.
+function onGlobalKeydown(e) {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (!store.isStreaming || store.interrupting) return;
+  if (mentionOpen.value || slashOpen.value) return;
+  if (document.querySelector(ESCAPE_OWNERS)) return;
+  abortSession();
+}
+
+onMounted(() => window.addEventListener("keydown", onGlobalKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKeydown));
 
 // Combined @input handler: autosize still needs to run on every keystroke, and
 // the mention state needs the caret position `e.target` carries (v-model updates
@@ -265,10 +306,16 @@ function onComposerInput(e) {
             </svg>
           </button>
           <SteerButton v-if="store.isStreaming" :disabled="!canSend" @steer="steer" />
+          <!-- Stays a stop square while `interrupting`: the server took the
+               request but the loop hasn't drained, and run.js is what decides
+               the run is actually over. Dimmed and re-labelled so the click
+               visibly registered without claiming more than it knows. -->
           <button
             v-if="store.isStreaming"
             class="composer-icon-btn stop"
-            title="Stop"
+            :class="{ interrupting: store.interrupting }"
+            :title="store.interrupting ? 'Stopping — waiting for the agent to wind up' : 'Stop (Esc)'"
+            :disabled="store.interrupting"
             @click="abortSession"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">

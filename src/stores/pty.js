@@ -74,12 +74,22 @@ export async function runScript(cwd, script, { timeoutMs = 15000, title } = {}) 
     cwd,
     title: title || "harness: script",
   });
+  // These messages surface verbatim in dialogs (the sub-agent manager opens with
+  // one when PTY isn't reachable), so they say what the user can do about it
+  // rather than naming the internal step that failed. "pty create response had
+  // no id" was accurate and told nobody anything.
   if (!createRes.ok) {
-    throw new Error(`pty create failed (${createRes.status})`);
+    throw new Error(
+      createRes.status === 404
+        ? "This OpenCode server has no PTY support, so files on the server can't be read or written from here."
+        : `Couldn't start a shell on the OpenCode server (${createRes.status}).`
+    );
   }
   const created = await createRes.json();
   const ptyId = created?.data?.id ?? created?.id;
-  if (!ptyId) throw new Error("pty create response had no id");
+  if (!ptyId) {
+    throw new Error("The OpenCode server accepted the shell request but returned no session to attach to.");
+  }
 
   try {
     return await runInShell(ptyId, script, timeoutMs);

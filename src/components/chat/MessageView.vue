@@ -277,22 +277,44 @@ function revertToHere() {
 
 /* Kept out of the way until the message is hovered — it's a destructive-ish
    action sitting next to every user turn. */
+/* `visibility: hidden`, not `opacity: 0`.
+
+   Staging a revert is the one destructive thing you can do from the transcript,
+   and with opacity alone this button was a 95px hit target that was present,
+   clickable and in the tab order on EVERY user message while invisible —
+   document.elementFromPoint at its centre returned the button. It also still
+   occupied layout: floated right on the first line, it consumed the whole line
+   in a narrow column, which is why user prompts wrapped after their first
+   character at small widths.
+
+   `visibility` takes it out of hit-testing and the tab order; `position:
+   absolute` takes it out of the text flow. `focus-within` keeps it reachable by
+   keyboard, so it is hidden without becoming mouse-only. */
+.msg {
+  position: relative;
+}
+
 .msg-revert {
-  float: right;
-  margin-left: 8px;
+  position: absolute;
+  top: 0;
+  right: 0;
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  background: transparent;
+  background: var(--bg);
   color: var(--dim);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
+  visibility: hidden;
   opacity: 0;
   transition: opacity 0.12s;
 }
 
-.msg:hover .msg-revert {
+.msg:hover .msg-revert,
+.msg:focus-within .msg-revert,
+.msg-revert:focus-visible {
+  visibility: visible;
   opacity: 1;
 }
 
