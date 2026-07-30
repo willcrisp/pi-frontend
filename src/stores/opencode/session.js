@@ -67,8 +67,8 @@ export async function abortSession() {
   const sessionID = opencodeStore.activeSessionId;
   if (!sessionID) return;
 
-  // Immediately, so the composer responds to the click rather than to the
-  // round-trip; settleRun does it again for the rest of the state.
+  // Immediately, so the composer answers the click rather than the round-trip;
+  // the settle below does it again along with the rest of the state.
   opencodeStore.isStreaming = false;
   try {
     await apiPost(`/session/${sessionID}/interrupt`);

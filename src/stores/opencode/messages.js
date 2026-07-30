@@ -125,10 +125,9 @@ export function appendLocalUserMessage(text, attachments) {
   opencodeStore.messages.push({
     id,
     role: "user",
-    // Marks a message the server has never heard of, whose id is ours rather
-    // than a `msg_…`. mergeTranscript drops these: the server's own copy of the
-    // same prompt is in the list under a different id, so keeping both would
-    // show the prompt twice.
+    // Marks a message the server has never heard of, carrying an id of our own
+    // rather than a `msg_…`. It is how mergeTranscript knows this one is
+    // superseded once the server's copy of the same prompt shows up.
     local: true,
     parts: [
       ...(text ? [{ type: "text", text }] : []),

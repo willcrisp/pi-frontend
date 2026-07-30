@@ -31,6 +31,7 @@ here rather than grepping the whole tree:
 |---|---|
 | an SSE event's effect | one entry in `HANDLERS`, `stores/opencode/events.js` |
 | when a turn counts as finished | `stores/opencode/run.js` — **not** an event handler |
+| how a dropped or stalled event stream is noticed and recovered | `stores/opencode/stream.js` |
 | the request/response shape of a server call | the store that owns the route; the transport is `lib/api.js` |
 | how a prompt is sent, or its body shape | `stores/opencode/transport.js` |
 | a component's appearance | its partial in `src/styles/`, or its `<style scoped>` |
@@ -71,8 +72,12 @@ empty transcript, an SSE stream held open) plus an **agent loop** that answers a
 prompt the way a real one does — thinking, then text, then a `step.ended`, with a
 steered prompt getting its own extra step and `GET /session/active` reporting the
 loop as running throughout. `POST /api/mock/control` (not a real route) switches
-the event vocabulary or asks for a run whose ending is never announced, which is
-what `test/run-lifecycle.spec.js` drives.
+the event vocabulary, asks for a run whose ending is never announced, breaks the
+event stream mid-turn (closed, or left open and silent) while the run carries on
+without its client, and pins a finished run as active so a recovery can't be
+credited to the run poll — which is what `test/run-lifecycle.spec.js` drives. The
+mock resets its per-test state on `GET /api/health`, the one call a page load
+makes and a reconnect doesn't.
 
 First run on a fresh machine needs a browser: `npx playwright install chromium`.
 Where a sandbox or CI image already ships a Chromium that doesn't match this
@@ -193,7 +198,7 @@ each other, the shared part belongs lower down):
 | `events.js` | the SSE reducer — one handler per event type |
 | `stream.js` | the SSE subscription and `initOpenCode()` |
 
-Four behaviours are worth knowing before changing any of them:
+Five behaviours are worth knowing before changing any of them:
 
 - *Sub-agent child sessions* (`children.js`). A `subagent` tool call dispatches a
   child session; the link between call and child arrives by up to three routes
@@ -213,6 +218,15 @@ Four behaviours are worth knowing before changing any of them:
   live dot ("working" / "unread"), tracked for every session the stream mentions
   — not just the one on screen — with unread persisted across reloads. This
   module owns "it is working"; `run.js` owns "it has stopped".
+- *Keeping the stream alive* (`stream.js`). A dead SSE connection is
+  indistinguishable from an agent that stopped thinking, so neither of the two
+  ways it dies quietly is left to the library: a **clean close** (which
+  `fetch-event-source` treats as "done" and never retries — `onclose` throws to
+  turn it back into a retry) and a **stall** (socket open, nothing arriving,
+  no error — a watchdog fires when the run poll is getting answers while the
+  stream is silent, which is proof the fault is the stream's own). Events are
+  not replayed to a new subscriber, so a reconnect resyncs the transcript,
+  merged rather than replaced — see `refreshActiveMessages`.
 
 **Adding or changing an SSE event** is a single entry in the `HANDLERS` table in
 `events.js`, keyed by event type. Each handler gets

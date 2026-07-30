@@ -125,7 +125,7 @@ function setupEventStream() {
 // Drop the current subscription and open a new one. Aborting the signal makes
 // the library dispose of the in-flight request without retrying, so this is the
 // only way to replace a connection it still believes in.
-export function restartEventStream() {
+function restartEventStream() {
   if (eventAbort) eventAbort.abort();
   eventAbort = null;
   opencodeStore.connected = false;
