@@ -38,6 +38,8 @@ here rather than grepping the whole tree:
 | what the sidebar dot shows | `stores/opencode/activity.js` |
 | sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
 | the `/handover` brief, or the chat it seeds | `stores/handover.js` |
+| TrueFoundry discovery, or the provider config written for it | `stores/providers.js` + `lib/truefoundry.js` — read `docs/truefoundry.md` first |
+| usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
 | a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands
@@ -253,7 +255,17 @@ than `opencodeStore.messages` so a child's transcript lands on the child.
 
 **Client-only UI state** — `theme.js` (color profile, font sizes, content width,
 applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
-`filepreview.js`, `providers.js` (integrations/credentials via `/api/integration`).
+`filepreview.js`.
+
+- `providers.js`: integrations/credentials via `/api/integration`, **plus** the
+  whole TrueFoundry flow — gateway discovery over PTY, the config write, and the
+  PAT read-through from `.env`. Read `docs/truefoundry.md` before changing any of
+  it; the config keys OpenCode actually reads are not the obvious ones, and a
+  wrong one fails silently.
+- `usage.js`: usage across sessions. Aggregated from the `cost`/`tokens` already
+  on every `SessionV2.Info` — no extra request. `stores/opencode/context.js`
+  still owns the *live* session's accounting; this is the historical view, and
+  the two must not be confused.
 
 **Components** — `components/chat/` (composer, message list/view, sub-agent
 cards, the thinking quote, find bar), `components/dialogs/` (connect, permission,
@@ -292,6 +304,8 @@ better off with a `<style scoped>` block, which wins over all of it.
 | File | Use it for |
 |---|---|
 | `docs/opencode-api.md` | The API reference. Start here. |
+| `docs/truefoundry.md` | TrueFoundry ground truth: gateway endpoints, the config shape OpenCode actually reads, PAT handling, claims marked [verified] vs [unverified]. Read before touching provider config or the TrueFoundry card. |
+| `docs/plan-truefoundry-usage.md` | Why the TrueFoundry and usage work is shaped the way it is, and what it corrected in the handover PDF that seeded it. |
 | `docs/subagents-alfuat.md` | Sub-agent ground truth for the real deployment target, claims marked [observed] vs [spec]. |
 | `docs/subagents-v2.md` | A *different* build, explicitly **not** the target. Kept only as a record of how far builds diverge. |
 | `docs/handover.md` | General project status (snapshot as of an older `main`). |
