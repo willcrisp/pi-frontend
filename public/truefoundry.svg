@@ -1,0 +1,21 @@
+<!--
+  Stand-in TrueFoundry mark: three stacked layers (a "foundry" of models)
+  in TrueFoundry's indigo. Drawn here rather than copied from the official
+  brand asset, which this environment can't reach — swap in the real mark
+  from TrueFoundry's brand kit when convenient. Sized 34x34 to match the
+  other provider glyphs in the Integrations dialog.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" width="34" height="34" role="img" aria-label="TrueFoundry">
+  <defs>
+    <linearGradient id="tf-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C6CF6" />
+      <stop offset="100%" stop-color="#4338CA" />
+    </linearGradient>
+  </defs>
+  <rect width="34" height="34" rx="8" fill="url(#tf-g)" />
+  <g fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M17 7.5 26 12l-9 4.5L8 12z" fill="#fff" stroke="none" />
+    <path d="M8 17l9 4.5L26 17" opacity=".85" />
+    <path d="M8 22l9 4.5L26 22" opacity=".55" />
+  </g>
+</svg>
