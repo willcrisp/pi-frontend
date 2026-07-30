@@ -50,6 +50,13 @@ export async function fetchSessions() {
           // Set only on a dispatched sub-agent's session. Drives both the
           // sidebar filter and the breadcrumb — see rootSessions/sessionAncestry.
           parentID: s.parentID || "",
+          // SessionV2.Info meters every session, so the whole history's usage is
+          // already in this one response — stores/usage.js aggregates it without
+          // a second call. `cost` is the server's own figure and reads 0 for a
+          // provider configured without pricing (see stores/usage.js).
+          cost: typeof s.cost === "number" ? s.cost : 0,
+          tokens: s.tokens || null,
+          model: s.model || null,
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
     }
@@ -98,7 +105,7 @@ export function sessionAncestry(sessionID) {
 
 // Basename of a session's directory, for a short group-header label (full path stays
 // available as the group's `directory` for a tooltip).
-function directoryLabel(directory) {
+export function directoryLabel(directory) {
   if (!directory) return "(unknown project)";
   const trimmed = directory.replace(/[/\\]+$/, "");
   const segments = trimmed.split(/[/\\]/);

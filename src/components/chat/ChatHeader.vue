@@ -21,6 +21,9 @@ import ColorProfilePopover from "../popovers/ColorProfilePopover.vue";
 import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
 import SshPopover from "../popovers/SshPopover.vue";
 import UsagePopover from "../popovers/UsagePopover.vue";
+import UsageDialog from "../dialogs/UsageDialog.vue";
+
+const showUsage = ref(false);
 
 // Title comes from the session record the server creates (auto-titled from the
 // first prompt), not a synthesised id label. Until that auto-title lands the
@@ -183,7 +186,8 @@ function scrollToRunningSubagent() {
         <span class="subagent-badge-dot"></span>
         {{ subagentBadge.count }} agent{{ subagentBadge.count === 1 ? "" : "s" }}
       </button>
-      <UsagePopover class="header-usage" />
+      <UsagePopover class="header-usage" @open-usage="showUsage = true" />
+      <UsageDialog v-if="showUsage" @close="showUsage = false" />
       <ModelFilterPopover />
       <ColorProfilePopover />
       <button

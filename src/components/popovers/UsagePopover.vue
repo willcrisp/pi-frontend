@@ -6,6 +6,23 @@
 import { computed } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
 
+import { gatewayCostFor } from "../../stores/usage.js";
+
+// The popover stays a live, at-a-glance view of the session on screen; history
+// and cross-project totals need more room than a hover target, so they live in
+// UsageDialog.vue and this is the way in.
+defineEmits(["open-usage"]);
+
+// A provider configured without pricing gives OpenCode nothing to compute a
+// cost from, so `sessionStats.cost` sits at exactly 0 no matter how much the
+// session actually spent. When the gateway's own figure has been loaded, show
+// that instead of a zero the user would reasonably read as "free".
+const gatewayCost = computed(() => {
+  if (store.sessionStats?.cost) return null;
+  const m = store.selectedModel;
+  return m ? gatewayCostFor([m.modelID]) : null;
+});
+
 // Each sub-agent dispatch is a child session, metered separately from the
 // parent — its tokens are additive with the session totals above, never a
 // double-count of them (docs/subagents-alfuat.md).
@@ -93,8 +110,8 @@ function formatDuration(ms) {
           >
         </div>
         <div class="usage-row">
-          <span>cost</span>
-          <span>{{ formatCost(store.sessionStats.cost) }}</span>
+          <span>cost{{ gatewayCost != null ? " (gateway)" : "" }}</span>
+          <span>{{ formatCost(gatewayCost != null ? gatewayCost : store.sessionStats.cost) }}</span>
         </div>
         <div class="usage-row usage-dim" v-if="store.sessionStats.contextUsage?.percent != null">
           <!-- Flagged when it's the server's own accounting rather than our
@@ -133,6 +150,25 @@ function formatDuration(ms) {
         </div>
       </template>
       <div v-else class="usage-row usage-dim">no sub-agents used this session</div>
+
+      <div class="usage-sep"></div>
+      <button type="button" class="usage-more" @click.stop="$emit('open-usage')">
+        All usage &amp; history →
+      </button>
     </div>
   </div>
 </template>
+
+<style scoped>
+.usage-more {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+</style>

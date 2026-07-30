@@ -1,6 +1,7 @@
 # Plan: TrueFoundry integration and usage tracking
 
-Status: plan only. No implementation has landed.
+Status: **implemented**. All phases landed; see "Outcome" at the end for what
+was verified and what still needs a live server.
 
 Supersedes the TrueFoundry handover PDF supplied on 2026-07-30, which described
 work in a **different worktree** (`/home/coder/pi-frontend`, uncommitted, on
@@ -54,11 +55,29 @@ authoritative fix, which is why these two requests are one piece of work.
 
 ## Part A — TrueFoundry integration
 
-### A1. Settle the config schema
+### A1. Settle the config schema — **resolved**
 
-Fetch `https://opencode.ai/config.json` and, where a server is reachable, its
-`/openapi.json`. Resolve `provider` vs `providers`, `npm` vs `package`,
-`options` vs `settings`. Everything downstream depends on this.
+The published opencode.json schema uses **`provider`** (singular), **`npm`** for
+the adapter, and **`options`** for per-provider settings:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "truefoundry": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TrueFoundry",
+      "options": { "baseURL": "https://gateway.ai.fortescue.com" },
+      "models": { "openai/gpt-5-mini": { "name": "gpt-5-mini" } }
+    }
+  }
+}
+```
+
+The handover's `providers` / `package` / `settings` was wrong on all three keys.
+A config written to that spec parses as valid JSON and is silently ignored by
+OpenCode — the failure mode this phase existed to prevent. Encoded in
+`lib/truefoundry.js#buildProviderConfig`.
 
 ### A2. Pure logic in `src/lib/truefoundry.js`
 
@@ -208,6 +227,43 @@ left intact; JSONC refusal.
 No OpenCode server is running and `gateway.ai.fortescue.com` is not reachable.
 Live discovery, the restart-and-reconnect credential flow, a real inference
 call, and any metrics query all need a local machine and a freshly rotated PAT.
+
+## Outcome
+
+Shipped across `lib/truefoundry.js`, `stores/providers.js`, `stores/usage.js`,
+`components/dialogs/ProvidersDialog.vue`, `components/dialogs/UsageDialog.vue`
+and `components/popovers/UsagePopover.vue`.
+
+Two additions beyond the plan, both prompted by the constraint that PTY-backed
+paths can't be mocked:
+
+- **Discovery results are cached per gateway** in localStorage, the way `git.js`
+  and `filesearch.js` cache theirs. Reopening the dialog no longer costs a PTY
+  round-trip, and it gives the tests a seam to seed — the `mentions.spec.js`
+  pattern.
+- **The mock grew a `seed` object** separate from `control`. Control resets when
+  a client opens the event stream, which is the same page load that fetches the
+  session list, so a data seed kept in `control` could never be in effect for
+  the fetch it was meant to shape.
+
+Verified: `npm run build` clean; the full Playwright suite green at 45 tests,
+including 11 new ones (7 for the TrueFoundry card, 4 for usage); desktop and
+mobile screenshots captured against the mock.
+
+Two visual defects were caught by screenshotting rather than by tests, which is
+why the repo asks for pictures:
+
+- The cost-by-day chart rendered **completely empty**. `.connect-panel` is a
+  flex column, so the chart's fixed height was shrunk to its content and every
+  bar's percentage height resolved against nothing. The test counted bar slots
+  and passed against an invisible chart; it now asserts a bar has real height.
+- The gateway URL truncated mid-host and the discover button wrapped to two
+  lines at the dialog's 460px. The URL now takes its own row.
+
+Still unverified, and still needing a live server plus a freshly rotated PAT:
+discovery against a real tenant, the config write over PTY, the restart-and-
+reconnect credential flow, the inference smoke test, and every field name in the
+metrics API.
 
 ## References
 

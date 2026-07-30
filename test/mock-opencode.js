@@ -27,20 +27,56 @@ const DIRECTORY = "/home/user/pi-frontend";
 
 // Two sessions in one project, so the sidebar has something to switch between —
 // which is what per-session composer drafts need in order to be testable.
+//
+// Both are metered: SessionV2.Info carries `cost` and `tokens`, which is the
+// only source the usage view has for anything but the session on screen. The
+// timestamps are real milliseconds so day-bucketing lands in this decade rather
+// than 1970 — ordering (mock1 newer than mock2) is what the sidebar tests rely
+// on, and that still holds.
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-07-30T12:00:00Z");
+
 const SESSIONS = [
   {
     id: "ses_mock1",
     title: "Mock session",
-    time: { created: 1, updated: 2 },
+    time: { created: NOW - DAY, updated: NOW },
     location: { directory: DIRECTORY },
+    cost: 0.42,
+    tokens: { input: 18400, output: 5200, cache: { read: 9100, write: 2300 } },
   },
   {
     id: "ses_mock2",
     title: "Second session",
-    time: { created: 1, updated: 1 },
+    time: { created: NOW - 2 * DAY, updated: NOW - DAY },
     location: { directory: DIRECTORY },
+    cost: 0.17,
+    tokens: { input: 7300, output: 2100, cache: { read: 1200, write: 400 } },
   },
 ];
+
+// A longer, multi-project history, added only when a test asks for it via
+// /api/mock/control {richHistory: true}. The default list stays at two entries
+// because several specs count the sidebar's rows.
+const EXTRA_SESSIONS = [
+  ["Refactor the parser", 1.86, 61000, 3, "/home/user/pi-frontend"],
+  ["Chase a flaky test", 0.94, 32000, 4, "/home/user/pi-frontend"],
+  ["Draft the release notes", 0.31, 11000, 5, "/home/user/notes"],
+  ["Port the auth middleware", 2.41, 88000, 6, "/home/user/api-gateway"],
+  ["Investigate the latency spike", 1.12, 40000, 7, "/home/user/api-gateway"],
+  ["Tidy the CI workflow", 0.22, 8000, 9, "/home/user/notes"],
+].map(([title, cost, total, daysAgo, directory], i) => ({
+  id: `ses_hist${i + 1}`,
+  title,
+  time: { created: NOW - (daysAgo + 1) * DAY, updated: NOW - daysAgo * DAY },
+  location: { directory },
+  cost,
+  tokens: {
+    input: Math.round(total * 0.7),
+    output: Math.round(total * 0.2),
+    cache: { read: Math.round(total * 0.1), write: 0 },
+  },
+}));
 
 // Two models so the picker has something to rank and colour: MODEL_RANK puts
 // "sol" above "luna", and only Sol carries variants.
@@ -111,6 +147,17 @@ let nextSessionSeq = 3;
 // fork test creates a session and asserts against it, and the next test still
 // sees the two seeded ones with their two seeded prompts — which several of
 // them count.
+// What the *data* looks like, as opposed to how the stream behaves. Kept out of
+// `control` because control is reset whenever a client opens the event stream,
+// and the session list is fetched during that same page load — a seed reset on
+// connect could never be in effect for the fetch it is meant to shape. Tests
+// that set this clear it themselves.
+const seed = {
+  // Adds EXTRA_SESSIONS to the session list, so the usage view has a history
+  // worth charting. Off by default: specs count the sidebar's rows.
+  richHistory: false,
+};
+
 function resetCreatedSessions() {
   SESSIONS.length = BASE_SESSION_COUNT;
   for (const id of Object.keys(TRANSCRIPT)) {
@@ -359,7 +406,9 @@ const server = http.createServer((req, res) => {
   if (url === "/api/skill")
     return json(res, { data: [{ id: "pdf", name: "pdf", description: "read pdfs" }] });
   if (url === "/api/session")
-    return req.method === "POST" ? createSession(res) : json(res, { data: SESSIONS });
+    return req.method === "POST"
+      ? createSession(res)
+      : json(res, { data: seed.richHistory ? [...SESSIONS, ...EXTRA_SESSIONS] : SESSIONS });
   // The run-state probe: every session whose agent loop is running right now.
   // "Sessions absent from the result are inactive" — this is what tells the
   // frontend a turn is over, since no event does. See stores/opencode/run.js.
@@ -372,8 +421,12 @@ const server = http.createServer((req, res) => {
   // whose ending is never announced.
   if (url === "/api/mock/control" && req.method === "POST") {
     return readBody(req).then((body) => {
-      Object.assign(control, body);
-      json(res, { data: control });
+      // Seed keys are routed to `seed`, which survives a stream reconnect;
+      // everything else is stream behaviour and lives in `control`.
+      const { richHistory, ...rest } = body;
+      if (richHistory !== undefined) seed.richHistory = richHistory;
+      Object.assign(control, rest);
+      json(res, { data: { ...control, ...seed } });
     });
   }
   const messages = url.match(/^\/api\/session\/([^/]+)\/message$/);
