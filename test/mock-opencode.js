@@ -280,6 +280,19 @@ function replyFor(text) {
   return /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
 }
 
+// An interrupted step, from the server's side: it keeps everything the step had
+// produced, INCLUDING the answer the client was never sent — the generation ran
+// ahead of what went out on the stream. Recovering that gap is the whole job of
+// the reconciliation that stopping does, and without it the answer only turns
+// up on a reload.
+function interrupted(record, thought, reply) {
+  record([
+    { type: "reasoning", text: thought },
+    { type: "text", text: reply },
+  ]);
+  return true;
+}
+
 // One step of the loop: think a little, answer, end the step. Returns true if
 // it was interrupted partway.
 async function runStep(sessionID, text) {
@@ -288,16 +301,35 @@ async function runStep(sessionID, text) {
   const assistantMessageID = `msg_a_mock${seq}`;
   const reply = replyFor(text);
 
+  // What the turn is worth to a client that asks for the transcript. Written
+  // when the step ends, as a real server does — and before the run can settle,
+  // since settling triggers a refresh and a reply the refresh can't see would
+  // be wiped off screen the moment it landed. Not written any earlier than
+  // that: a transcript that already held the answer mid-turn would hand it to
+  // any refresh, and a test about recovering the stream would pass without the
+  // stream ever being recovered.
+  const record = (content) => {
+    list.push({
+      id: `msg_u_mock${seq}`,
+      type: "user",
+      time: { created: nextTime++ },
+      text: text || "",
+    });
+    list.push({ id: assistantMessageID, type: "assistant", time: { created: nextTime++ }, content });
+  };
+
   const base = { sessionID, assistantMessageID };
   emit(ev("step.started"), { ...base, agent: "build", model: { providerID: "acme", id: "sol-1" } });
 
   const reasoning = { ...base, ...partIDs("reasoning", 0) };
   emit(ev("reasoning.started"), reasoning);
   let delivered = 0;
+  let thought = "";
   for (const word of THINKING.split(" ")) {
     await sleep(control.stepMs);
-    if (aborted.delete(sessionID)) return true;
+    if (aborted.delete(sessionID)) return interrupted(record, thought, reply);
     emit(ev("reasoning.delta"), { ...reasoning, delta: `${word} ` });
+    thought += `${word} `;
     if (++delivered === control.cutAfterDeltas) cutStream();
   }
   emit(ev("reasoning.ended"), { ...reasoning, text: THINKING });
@@ -305,26 +337,14 @@ async function runStep(sessionID, text) {
   const body = { ...base, ...partIDs("text", 0) };
   emit(ev("text.started"), body);
   await sleep(control.stepMs);
-  if (aborted.delete(sessionID)) return true;
+  if (aborted.delete(sessionID)) return interrupted(record, THINKING, reply);
   emit(ev("text.delta"), { ...body, delta: reply });
   emit(ev("text.ended"), { ...body, text: reply });
 
-  // Recorded when the step ends, as a real server does — and before the run can
-  // settle, since settling triggers a transcript refresh and a reply the
-  // refresh can't see would be wiped off screen the moment it landed. Not
-  // earlier: a transcript that already holds the answer mid-turn would hand it
-  // to any refresh, and a test about recovering the stream would pass without
-  // the stream ever being recovered.
-  list.push({ id: `msg_u_mock${seq}`, type: "user", time: { created: nextTime++ }, text: text || "" });
-  list.push({
-    id: assistantMessageID,
-    type: "assistant",
-    time: { created: nextTime++ },
-    content: [
-      { type: "reasoning", text: THINKING },
-      { type: "text", text: reply },
-    ],
-  });
+  record([
+    { type: "reasoning", text: THINKING },
+    { type: "text", text: reply },
+  ]);
 
   await sleep(control.stepMs);
   if (control.dropTerminalEvents) return;

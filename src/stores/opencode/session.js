@@ -3,7 +3,7 @@
 import { opencodeStore } from "./state.js";
 import { apiPost, errorMessage } from "../../lib/api.js";
 import { refreshActiveMessages } from "./messages.js";
-import { settleRun } from "./run.js";
+import { settleWhenIdle } from "./run.js";
 
 // --- Revert ------------------------------------------------------------------
 // V2 has no session fork, and `revert/*` is the closest thing to "go back to
@@ -75,9 +75,11 @@ export async function abortSession() {
   } catch (err) {
     console.error("Failed to interrupt session:", err);
   } finally {
-    // Merged, not replaced: an interrupted step may never be flushed to the
-    // server, and the partial answer on screen is the only copy of it.
-    settleRun(sessionID, { merge: true });
+    // Once the server has actually stopped, not the moment it accepts the
+    // interrupt — see settleWhenIdle. Merged rather than replaced, because an
+    // interrupted step may never be flushed at all, and then the partial answer
+    // on screen is the only copy of it.
+    await settleWhenIdle(sessionID, { merge: true });
   }
 }
 

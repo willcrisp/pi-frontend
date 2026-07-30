@@ -244,6 +244,26 @@ export async function reconcileRunState() {
   return true;
 }
 
+// Settle as soon as the server agrees the run is over, waiting a short while
+// for it to get there. For the stop button: an interrupt is acknowledged before
+// the loop has actually stopped, and reconciling the transcript inside that
+// window reads a turn the server has not finished writing — which is how
+// stopping ended up showing less than the run had produced.
+const STOP_WAIT_MS = 5000;
+const STOP_POLL_MS = 300;
+
+export async function settleWhenIdle(sessionID, opts) {
+  if (!sessionID) return;
+  const deadline = Date.now() + STOP_WAIT_MS;
+  while (probeUsable() && Date.now() < deadline) {
+    const running = await fetchRunningSessions();
+    // Unanswerable, or answered "not running": either way, stop waiting.
+    if (!running || !running[sessionID]) break;
+    await new Promise((r) => setTimeout(r, STOP_POLL_MS));
+  }
+  settleRun(sessionID, opts);
+}
+
 // A terminal event arrived. Confirm it rather than obeying it — see the header.
 const pendingEnds = new Set();
 let confirmTimer = null;

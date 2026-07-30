@@ -171,8 +171,8 @@ test("stopping a run settles it, and keeps what the turn had already produced", 
 
   await prompt(page, "never mind");
   await expect(stop(page)).toBeVisible();
-  // Interrupt partway through the thinking, with nothing recorded server-side:
-  // what is on screen is the only copy of this turn.
+  // Interrupt partway through the thinking — before a word of the answer has
+  // been streamed, though the server has already generated it.
   await expect(page.locator(".msg-assistant").last()).toContainText("Let me check", {
     timeout: 15000,
   });
@@ -182,8 +182,8 @@ test("stopping a run settles it, and keeps what the turn had already produced", 
   // comes back and stays back rather than waiting on a poll.
   await expect(send(page)).toBeVisible();
   await expect(stop(page)).toHaveCount(0);
-  // …and the reconciliation that follows must not blank the transcript it was
-  // reconciling: the server has no record of this turn at all.
-  await expect(page.locator(".msg-assistant").last()).toContainText("Let me check");
+  // And it reconciles: what the interrupted step produced is on screen without
+  // a reload, which is what stopping used to need.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Acknowledged.");
   await expect(page.locator(".msg-user").last()).toContainText("never mind");
 });
