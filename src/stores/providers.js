@@ -10,6 +10,7 @@ import { activeSessionDirectory } from "./projects.js";
 import { readTextFile, writeTextFile } from "./remotefs.js";
 import { runScript, shellQuote } from "./pty.js";
 import { readJSON, writeJSON } from "../lib/storage.js";
+import { parseEnv } from "../lib/dotenv.js";
 import {
   TRUEFOUNDRY_PROVIDER_ID,
   buildProviderConfig,
@@ -36,6 +37,9 @@ export const providersStore = reactive({
     notice: null,
     testing: false,
     testResult: null, // { ok, message }
+    // Where a PAT was picked up from, or null — { key, path }. Never the token
+    // itself; see the read-through section below.
+    envPATSource: null,
   },
 });
 
@@ -193,8 +197,70 @@ const STATUS_MARKER = "__OC_CURL_STATUS__";
 // cached — never the PAT.
 const CACHE_KEY = "opencode-web:truefoundry-cache"; // { [gateway]: { models, fetchedAt } }
 
+// --- PAT read-through from .env ---------------------------------------------
+// Re-typing the PAT after every OpenCode restart is the sharpest edge in this
+// flow, so a token already sitting in a .env file on the host is picked up
+// instead. Checked most-specific first, mirroring how OpenCode resolves config:
+// the open project's .env, then the global one beside opencode.json.
+const PAT_KEYS = ["TRUEFOUNDRY_API_KEY", "TRUEFOUNDRY_PAT", "TFY_API_KEY"];
+const GLOBAL_ENV = "~/.config/opencode/.env";
+
+// The value lives in module scope, NOT in the reactive store: everything in
+// `providersStore` is enumerable through Vue's devtools and any component that
+// imports it, and a credential has no reason to be that reachable. The store
+// carries only where it came from, which is all the UI needs to say.
+let envPAT = "";
+let envPATLoaded = false;
+
+// Whatever the caller typed, else the token found in .env. Typing always wins —
+// a stale .env shouldn't make a deliberately entered token unusable.
+//
+// Exported for stores/usage.js, which needs the same resolution for its gateway
+// query. Deliberately a function rather than an exported value: nothing gets to
+// hold the token except at the moment of using it.
+export function resolvePAT(typed) {
+  return (typed && typed.trim()) || envPAT || "";
+}
+
+const effectivePAT = resolvePAT;
+
 function tfState() {
   return providersStore.trueFoundry;
+}
+
+// Look for a PAT in the host's .env files. Memoized: this costs a PTY
+// round-trip and the dialog can be opened repeatedly in one sitting. Failures
+// are silent — no .env is the normal case, not an error worth showing.
+export async function loadEnvPAT({ force = false } = {}) {
+  if (envPATLoaded && !force) return providersStore.trueFoundry.envPATSource;
+  envPATLoaded = true;
+
+  const projectDir = activeSessionDirectory();
+  const candidates = projectDir ? [".env", GLOBAL_ENV] : [GLOBAL_ENV];
+
+  for (const path of candidates) {
+    let text = null;
+    try {
+      text = await readTextFile(projectDir || undefined, path);
+    } catch {
+      continue; // unreadable is the same as absent for this purpose
+    }
+    if (text === null) continue;
+
+    const parsed = parseEnv(text);
+    const key = PAT_KEYS.find((k) => parsed[k]);
+    if (!key) continue;
+
+    envPAT = parsed[key];
+    // Label the project file by the name the user would recognise it under.
+    const shown = path === ".env" ? `${projectDir}/.env` : path;
+    providersStore.trueFoundry.envPATSource = { key, path: shown };
+    return providersStore.trueFoundry.envPATSource;
+  }
+
+  envPAT = "";
+  providersStore.trueFoundry.envPATSource = null;
+  return null;
 }
 
 const loadCache = () => readJSON(CACHE_KEY, {}) || {};
@@ -290,7 +356,8 @@ async function gatewayJSON(cwd, url, pat, { method = "GET", body = null } = {}) 
 
 // Discover the models this PAT can reach, trying the documented endpoint first
 // and the Fortescue tenant's enabled-model endpoint second.
-export async function discoverTrueFoundry(gateway, pat) {
+export async function discoverTrueFoundry(gateway, typedPAT) {
+  const pat = effectivePAT(typedPAT);
   const state = tfState();
   state.busy = true;
   state.error = null;
@@ -303,7 +370,7 @@ export async function discoverTrueFoundry(gateway, pat) {
   state.models = [];
 
   try {
-    if (!pat) throw new Error("Enter a TrueFoundry PAT");
+    if (!pat) throw new Error("Enter a TrueFoundry PAT, or set TRUEFOUNDRY_API_KEY in .env");
     const base = gatewayURL(gateway);
     const cwd = activeSessionDirectory() || undefined;
 
@@ -344,11 +411,13 @@ export async function discoverTrueFoundry(gateway, pat) {
 // than merely listed. The enabled endpoint reports inventory: it does not prove
 // the PAT can invoke a model, that the provider account is healthy, or that the
 // chat route isn't intercepted the way /models is.
-export async function testTrueFoundryModel(gateway, pat, modelID) {
+export async function testTrueFoundryModel(gateway, typedPAT, modelID) {
   const state = tfState();
   state.testing = true;
   state.testResult = null;
   try {
+    const pat = effectivePAT(typedPAT);
+    if (!pat) throw new Error("Enter a TrueFoundry PAT, or set TRUEFOUNDRY_API_KEY in .env");
     const base = gatewayURL(gateway);
     const cwd = activeSessionDirectory() || undefined;
     const payload = await gatewayJSON(cwd, `${base}/api/inference/openai/chat/completions`, pat, {
@@ -374,7 +443,8 @@ export async function testTrueFoundryModel(gateway, pat, modelID) {
 
 // Write the selected models into the active project's opencode.json and, if the
 // running server already knows the provider, hand it the PAT.
-export async function configureTrueFoundry(gateway, pat, models) {
+export async function configureTrueFoundry(gateway, typedPAT, models) {
+  const pat = effectivePAT(typedPAT);
   const state = tfState();
   state.busy = true;
   state.error = null;
@@ -414,9 +484,12 @@ export async function configureTrueFoundry(gateway, pat, models) {
     // to OpenCode's own credential store, which is the one place designed to
     // hold it. Until the server has loaded the provider there is nothing to
     // attach it to, hence the two notices.
+    // `pat` can legitimately be empty here — the models are worth saving even
+    // without a credential to attach, and posting a blank key would just
+    // register a broken connection.
     const loaded = providersStore.integrations.some((i) => i.id === TRUEFOUNDRY_PROVIDER_ID);
     const count = `${models.length} model${models.length === 1 ? "" : "s"}`;
-    if (loaded && (await connectKey(TRUEFOUNDRY_PROVIDER_ID, pat, "TrueFoundry PAT"))) {
+    if (loaded && pat && (await connectKey(TRUEFOUNDRY_PROVIDER_ID, pat, "TrueFoundry PAT"))) {
       state.notice =
         `Saved ${count} globally and stored the PAT. ` +
         `Restart OpenCode and reload this page to pick them up.`;

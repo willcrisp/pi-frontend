@@ -109,6 +109,14 @@ Security properties to preserve verbatim from the PDF:
 - PAT validated against `/^[A-Za-z0-9._~-]+$/` before it enters a curl config.
 - PAT passed via a curl config on **stdin**, never in argv.
 - PAT never written to a config file, `localStorage` or `sessionStorage`.
+- A PAT may be *read* from the host's `.env` (`TRUEFOUNDRY_API_KEY`), checking
+  the open project's `.env` then `~/.config/opencode/.env`. The value is held in
+  module scope rather than in `providersStore`, and never loaded into the
+  password input — only `{key, path}` is exposed to the UI.
+- The config does **not** use `{env:…}` substitution for `apiKey`: OpenCode has
+  a known bug where that fails specifically inside a custom provider's `options`
+  with `@ai-sdk/openai-compatible`, substituting an empty string. Credentials go
+  through the credential endpoint instead.
 - PTY title is fixed text and carries no secret.
 - A 200 with `text/html` is not treated as authentication success.
 

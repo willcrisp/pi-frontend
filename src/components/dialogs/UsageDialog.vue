@@ -8,8 +8,9 @@
   a configured TrueFoundry tenant.
 -->
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { localUsage, hasUnpricedModels, usageStore, refreshGatewayUsage } from "../../stores/usage.js";
+import { providersStore, loadEnvPAT } from "../../stores/providers.js";
 import { readString } from "../../lib/storage.js";
 
 const emit = defineEmits(["close"]);
@@ -19,6 +20,12 @@ const gateway = computed(() => usageStore.gateway);
 
 const tfGateway = ref(readString("truefoundry.gateway", "https://gateway.ai.fortescue.com"));
 const tfPAT = ref("");
+
+// Same read-through as the Integrations card: a token already in the host's
+// .env means this panel works without typing one here either.
+onMounted(loadEnvPAT);
+const envPATSource = computed(() => providersStore.trueFoundry.envPATSource);
+const hasPAT = computed(() => Boolean(tfPAT.value.trim() || envPATSource.value));
 
 // Bars are drawn relative to the busiest day, so a quiet week still reads.
 const maxDayCost = computed(() =>
@@ -159,13 +166,17 @@ function onBackdrop(e) {
           v-model="tfPAT"
           type="password"
           class="connect-filter"
-          placeholder="Personal access token"
+          :placeholder="envPATSource ? 'Using token from .env' : 'Personal access token'"
           autocomplete="off"
         />
-        <button type="submit" :disabled="gateway.busy || !tfPAT.trim()">
+        <button type="submit" :disabled="gateway.busy || !hasPAT">
           {{ gateway.busy ? "loading…" : "Load" }}
         </button>
       </form>
+
+      <p v-if="envPATSource" class="connect-hint">
+        Using <code>{{ envPATSource.key }}</code> from <code>{{ envPATSource.path }}</code>.
+      </p>
 
       <p v-if="gateway.error" class="connect-error">{{ gateway.error }}</p>
 

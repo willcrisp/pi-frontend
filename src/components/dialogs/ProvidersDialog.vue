@@ -17,6 +17,7 @@ import {
   configureTrueFoundry,
   testTrueFoundryModel,
   restoreTrueFoundryCache,
+  loadEnvPAT,
 } from "../../stores/providers.js";
 import { opencodeStore } from "../../stores/opencode.js";
 import { groupByAccount, TRUEFOUNDRY_PROVIDER_ID } from "../../lib/truefoundry.js";
@@ -36,7 +37,16 @@ onMounted(() => {
   // round-trip and re-running it on every open is a stall for a list that
   // rarely changes.
   restoreTrueFoundryCache(tfGateway.value);
+  // Picks up a token already on the host so it needn't be re-typed after every
+  // OpenCode restart. Memoized in the store, so reopening costs nothing.
+  loadEnvPAT();
 });
+
+// A PAT is available if one was typed or one was found on the host. The token
+// from .env is never loaded into the input: a value in a password field can be
+// revealed by flipping its type and gets offered to password managers, and
+// there is no reason for it to be in the DOM at all.
+const tfHasPAT = computed(() => Boolean(tfPAT.value.trim() || tf.value.envPATSource));
 
 // --- TrueFoundry -----------------------------------------------------------
 // The gateway URL is a durable preference and survives reloads; the PAT never
@@ -235,13 +245,19 @@ function onBackdrop(e) {
               v-model="tfPAT"
               type="password"
               class="connect-filter"
-              placeholder="Personal access token"
+              :placeholder="tf.envPATSource ? 'Using token from .env' : 'Personal access token'"
               autocomplete="off"
             />
-            <button type="submit" :disabled="tf.busy || !tfPAT.trim()">
+            <button type="submit" :disabled="tf.busy || !tfHasPAT">
               {{ tf.busy ? "discovering…" : "Discover models" }}
             </button>
           </form>
+
+          <p v-if="tf.envPATSource" class="tf-env">
+            Using <code>{{ tf.envPATSource.key }}</code> from
+            <code>{{ tf.envPATSource.path }}</code
+            >. Typing a token above overrides it.
+          </p>
 
           <p v-if="tf.error" class="connect-error">{{ tf.error }}</p>
           <p v-else-if="tf.notice" class="tf-notice">{{ tf.notice }}</p>
@@ -313,7 +329,7 @@ function onBackdrop(e) {
               <button
                 type="button"
                 class="connect-secondary"
-                :disabled="!tfSelected.length || tf.testing || !tfPAT.trim()"
+                :disabled="!tfSelected.length || tf.testing || !tfHasPAT"
                 @click="onTestTrueFoundry"
               >
                 {{ tf.testing ? "testing…" : "Test first selection" }}
@@ -506,6 +522,16 @@ function onBackdrop(e) {
   font-size: 12px;
   color: var(--accent);
   margin: 0;
+}
+
+.tf-env {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.tf-env code {
+  font-size: 11px;
 }
 
 .tf-toolbar {

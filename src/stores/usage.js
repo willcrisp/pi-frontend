@@ -25,6 +25,7 @@ import { projectsStore, activeSessionDirectory, directoryLabel } from "./project
 import { runScript, shellQuote } from "./pty.js";
 import { opencodeStore } from "./opencode.js";
 import { TRUEFOUNDRY_PROVIDER_ID } from "../lib/truefoundry.js";
+import { loadEnvPAT, resolvePAT } from "./providers.js";
 
 const STATUS_MARKER = "__OC_CURL_STATUS__";
 // Long enough that reopening the panel is instant, short enough that a figure
@@ -190,7 +191,7 @@ function rowsOf(payload) {
 
 // Gateway usage for the last `days`, grouped by model. Cached; pass
 // `{force: true}` to bypass.
-export async function refreshGatewayUsage(gateway, pat, { days = 30, force = false } = {}) {
+export async function refreshGatewayUsage(gateway, typedPAT, { days = 30, force = false } = {}) {
   const state = usageStore.gateway;
   if (!force && state.fetchedAt && Date.now() - state.fetchedAt < CACHE_TTL_MS) return true;
   if (state.busy) return false;
@@ -198,7 +199,13 @@ export async function refreshGatewayUsage(gateway, pat, { days = 30, force = fal
   state.busy = true;
   state.error = null;
   try {
-    if (!pat) throw new Error("Enter a TrueFoundry PAT to load gateway usage");
+    // Same read-through as discovery: a PAT already in the host's .env means
+    // the usage panel works without re-typing it here too.
+    await loadEnvPAT();
+    const pat = resolvePAT(typedPAT);
+    if (!pat) {
+      throw new Error("Enter a TrueFoundry PAT, or set TRUEFOUNDRY_API_KEY in .env");
+    }
     const origin = new URL(gateway).origin;
     const cwd = activeSessionDirectory() || undefined;
     const endTs = Date.now();
