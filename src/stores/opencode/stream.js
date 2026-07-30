@@ -8,6 +8,7 @@ import { apiUrl, apiGet } from "../../lib/api.js";
 import { authHeaders } from "../ssh.js";
 import { handleServerEvent } from "./events.js";
 import { loadAgents, loadCommands, loadModels, loadSkills } from "./catalog.js";
+import { reconcileRunState, resetRunProbe } from "./run.js";
 import { loadPendingQuestions } from "../question.js";
 
 let eventAbort = null;
@@ -23,10 +24,13 @@ function setupEventStream() {
     onopen: async (res) => {
       if (res.ok) {
         opencodeStore.connected = true;
-        // Runs on every (re)connect, not just the first: an ask that landed
-        // while the stream was down would otherwise block its agent forever on
-        // a question this UI never shows.
+        // Both of these run on every (re)connect, not just the first, because
+        // what the stream dropped while it was down is exactly what blocks the
+        // UI afterwards: an ask nobody ever sees, and — since a turn's end is a
+        // single event — a run that appears to go on forever.
         loadPendingQuestions();
+        resetRunProbe();
+        reconcileRunState();
         return;
       }
       opencodeStore.connected = false;

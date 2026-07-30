@@ -6,8 +6,11 @@
 // Both are tracked for every session the event stream mentions, because the
 // interesting case is precisely the session you are NOT looking at. `unread` is
 // persisted so a page reload doesn't quietly drop "this one answered you".
+//
+// This module owns "it is working"; run.js owns "it has stopped", because
+// deciding that needs the server (no event says it reliably) and a transcript
+// refresh, both of which live further down the graph.
 import { opencodeStore } from "./state.js";
-import { clearSteers } from "./steer.js";
 import { readArray, writeJSON } from "../../lib/storage.js";
 
 const UNREAD_KEY = "oc.unreadSessions";
@@ -27,17 +30,6 @@ const RUN_ACTIVE_EVENTS = new Set([
   "session.tool.called",
   "session.tool.progress",
   "message.part.updated",
-]);
-
-// Every way a turn can stop. The three execution.* spellings and session.idle
-// are all handled in events.js for the same reason — different builds settle a
-// turn with different ones.
-const RUN_ENDED_EVENTS = new Set([
-  "session.execution.succeeded",
-  "session.execution.completed",
-  "session.execution.failed",
-  "session.error",
-  "session.idle",
 ]);
 
 export function activityRecord(sessionID) {
@@ -85,29 +77,14 @@ export function markStopped(sessionID) {
 // Fold one raw event into the activity map. Called for every event, BEFORE the
 // active-session/child routing in events.js#handleServerEvent — that routing
 // drops events for sessions that aren't in view, which is exactly the traffic
-// this needs to see.
+// this needs to see. The other half of the lifecycle is run.js#runMayHaveEnded,
+// called from the same place.
 export function trackSessionActivity(type, sessionID) {
-  if (RUN_ACTIVE_EVENTS.has(type)) {
-    markRunning(sessionID);
-    // Amber outranks green: a session that started working again has nothing
-    // stale left to read.
-    setUnread(sessionID, false);
-    return;
-  }
-  if (!RUN_ENDED_EVENTS.has(type)) return;
-
-  const rec = activityRecord(sessionID);
-  const wasRunning = rec.running;
-  rec.running = false;
-  rec.updatedAt = Date.now();
-  clearSteers(sessionID);
-  // Green means "it finished while you were elsewhere". Finishing in the chat
-  // you're actually reading is just finishing — and a sub-agent finishing is
-  // reported on its card inside the parent turn, not as mail waiting for you.
-  const isChild = !!opencodeStore.childSessions[sessionID];
-  if (wasRunning && !isChild && sessionID !== opencodeStore.activeSessionId) {
-    setUnread(sessionID, true);
-  }
+  if (!RUN_ACTIVE_EVENTS.has(type)) return;
+  markRunning(sessionID);
+  // Amber outranks green: a session that started working again has nothing
+  // stale left to read.
+  setUnread(sessionID, false);
 }
 
 // Unread dots survive a reload; running state does not (nothing to ask the

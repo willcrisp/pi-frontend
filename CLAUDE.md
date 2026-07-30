@@ -30,6 +30,7 @@ here rather than grepping the whole tree:
 | To change… | Edit |
 |---|---|
 | an SSE event's effect | one entry in `HANDLERS`, `stores/opencode/events.js` |
+| when a turn counts as finished | `stores/opencode/run.js` — **not** an event handler |
 | the request/response shape of a server call | the store that owns the route; the transport is `lib/api.js` |
 | how a prompt is sent, or its body shape | `stores/opencode/transport.js` |
 | a component's appearance | its partial in `src/styles/`, or its `<style scoped>` |
@@ -66,7 +67,12 @@ that port.
 server and no setup: `playwright.config.js` starts both the Vite dev server
 and `test/mock-opencode.js`, a stand-in implementing just enough of the V2
 HttpApi to boot the frontend (health, the four catalogs, a session list, an
-empty transcript, an SSE stream held open).
+empty transcript, an SSE stream held open) plus an **agent loop** that answers a
+prompt the way a real one does — thinking, then text, then a `step.ended`, with a
+steered prompt getting its own extra step and `GET /session/active` reporting the
+loop as running throughout. `POST /api/mock/control` (not a real route) switches
+the event vocabulary or asks for a run whose ending is never announced, which is
+what `test/run-lifecycle.spec.js` drives.
 
 First run on a fresh machine needs a browser: `npx playwright install chromium`.
 Where a sandbox or CI image already ships a Chromium that doesn't match this
@@ -74,7 +80,9 @@ package's build number, point at it instead — `PLAYWRIGHT_CHROMIUM_PATH=/path/
 
 The suite covers `src/composables/` — the composer's autosize, attachments,
 the `/` and `@` menus, and the model picker — because that is the most stateful
-UI in the repo. It is a smoke suite, not a regression net for everything:
+UI in the repo, plus the run lifecycle (`run-lifecycle.spec.js`) and the thinking
+quote (`thinking.spec.js`). It is a smoke suite, not a regression net for
+everything:
 
 - Prefer driving the real component to stubbing at the network layer. If a test
   needs a route the mock lacks, add it to `mock-opencode.js`.
@@ -136,6 +144,12 @@ curl -s http://127.0.0.1:4096/openapi.json | jq '.paths | keys'
 
 Recurring shape traps, all documented in full in `docs/opencode-api.md`:
 
+- **No event says a run finished.** The per-turn vocabulary is prefixed
+  `session.next.` on current builds and `session.` on the ALF-UAT target, and
+  neither reliably has a completion event — a turn's last event is
+  `step.ended {finish: "stop"}`, and with a steered prompt the loop runs another
+  step after it. `GET /session/active` is the only authority on "is it still
+  going", and `stores/opencode/run.js` is the only place that decides.
 - `POST /session/{id}/prompt` takes a `delivery: "steer" | "queue"` (defaults to
   `steer`) — that's the steering mechanism. Its body is flat on some builds and
   wrapped under `prompt` on others; `postPrompt()` in
@@ -172,13 +186,14 @@ each other, the shared part belongs lower down):
 | `steer.js` | prompts admitted into a run already in flight |
 | `activity.js` | per-session running/unread — the sidebar dot |
 | `messages.js` | transcript load, REST→view normalization, sub-agent backfill |
+| `run.js` | when a run is over — event candidates confirmed against `GET /session/active` |
 | `prompt.js` | sending a prompt that starts a turn |
 | `catalog.js` | model/agent/command/skill lists |
 | `session.js` | revert, interrupt, agent switch, compact |
 | `events.js` | the SSE reducer — one handler per event type |
 | `stream.js` | the SSE subscription and `initOpenCode()` |
 
-Three behaviours are worth knowing before changing any of them:
+Four behaviours are worth knowing before changing any of them:
 
 - *Sub-agent child sessions* (`children.js`). A `subagent` tool call dispatches a
   child session; the link between call and child arrives by up to three routes
@@ -188,9 +203,16 @@ Three behaviours are worth knowing before changing any of them:
   that is already going; the agent reads it at its next turn. The server keeps an
   admitted input out of the message list until it promotes it, so `pendingSteers`
   tracks the gap and the composer's steer pill counts it.
+- *Ending a run* (`run.js`). **Not an event handler, on purpose.** A terminal
+  event is only a candidate: it doesn't exist on every build, and a steered
+  prompt keeps the same agent loop going past it. Candidates are confirmed —
+  and, while a run is believed in flight, polled — against
+  `GET /session/active`, which is the only thing that knows. Without that
+  confirmation the composer's stop square never turned back into a send arrow.
 - *Per-session activity* (`activity.js`). `sessionStatus(id)` drives the sidebar's
   live dot ("working" / "unread"), tracked for every session the stream mentions
-  — not just the one on screen — with unread persisted across reloads.
+  — not just the one on screen — with unread persisted across reloads. This
+  module owns "it is working"; `run.js` owns "it has stopped".
 
 **Adding or changing an SSE event** is a single entry in the `HANDLERS` table in
 `events.js`, keyed by event type. Each handler gets
@@ -234,9 +256,14 @@ applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
 `filepreview.js`, `providers.js` (integrations/credentials via `/api/integration`).
 
 **Components** — `components/chat/` (composer, message list/view, sub-agent
-cards, find bar), `components/dialogs/` (connect, permission, question,
-sub-agents, providers, command palette), `components/popovers/`,
+cards, the thinking quote, find bar), `components/dialogs/` (connect, permission,
+question, sub-agents, providers, command palette), `components/popovers/`,
 `components/sidebar/`.
+
+A reasoning part renders as `ThinkingBlock.vue`: collapsed to its newest line
+while it streams, its opening line once it's finished, and the whole thing on a
+click. Left fully expanded it buried the answer; hidden, there was no way to tell
+mid-run whether a long turn was on track.
 
 **Composables** — `src/composables/` holds the composer's parts:
 `useAttachments` (paste/drop/picker, thumbnails, image markup), `useAutosize`,

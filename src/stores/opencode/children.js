@@ -113,8 +113,10 @@ function attachToPendingCall(child) {
 // Note the doubled nesting: the event's own `metadata` wraps the tool's.
 // Observed on `session.tool.progress`; handled on every tool event because a
 // build that reports it elsewhere (or only once, on success) should still link.
+// `structured` is the same field's name on builds that emit the
+// `session.next.tool.*` vocabulary, which carry no `metadata` at all.
 export function linkFromToolMetadata(props) {
-  const meta = props.metadata && props.metadata.metadata;
+  const meta = (props.metadata && props.metadata.metadata) || props.structured;
   if (!meta || !meta.sessionID || !props.callID) return;
   const patch = { callID: props.callID, parentSessionID: props.sessionID };
   if (meta.status) patch.status = meta.status;

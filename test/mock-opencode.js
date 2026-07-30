@@ -1,11 +1,15 @@
 // A stand-in for `opencode2 serve`, used by the Playwright tests.
 //
 // It implements just enough of the V2 HttpApi to boot the frontend: health, the
-// four catalogs, a session list, an empty transcript, and an SSE stream that
-// stays open. It is NOT a fidelity model of the real server — the point is to
-// exercise OUR code (stores, composables, components) without needing a live
-// agent, so responses are the minimum shape docs/opencode-api.md says each
-// route returns.
+// four catalogs, a session list, an empty transcript, an SSE stream that stays
+// open, and an agent loop that answers a prompt. It is NOT a fidelity model of
+// the real server — the point is to exercise OUR code (stores, composables,
+// components) without needing a live agent, so responses are the minimum shape
+// docs/opencode-api.md says each route returns.
+//
+// The one place fidelity does matter is the shape of a turn: see "The agent
+// loop" below, which follows a sequence captured from a live server, because the
+// frontend's idea of when a run has finished is derived from it.
 //
 // If a test needs a route this doesn't have, add it here rather than mocking at
 // the network layer in the spec — one obvious server beats per-test stubs.
@@ -113,6 +117,11 @@ function resetCreatedSessions() {
     if (BASE_TRANSCRIPT_LENGTHS[id] === undefined) delete TRANSCRIPT[id];
     else TRANSCRIPT[id].length = BASE_TRANSCRIPT_LENGTHS[id];
   }
+  // Agent-loop state and anything a test set through /api/mock/control go with
+  // them, so a spec never inherits the previous one's event vocabulary.
+  running.clear();
+  steered.clear();
+  Object.assign(control, DEFAULT_CONTROL);
 }
 
 // Session create. The real route takes `{agent?, model?, location?}` and answers
@@ -160,14 +169,76 @@ A mock handover, written by test/mock-opencode.js.
 `;
 
 const PLAIN_REPLY = "Acknowledged.";
+const THINKING = "Let me check what was asked. It looks routine, so I will just answer it.";
+
+// --- The agent loop ----------------------------------------------------------
+//
+// Modelled on a real turn, captured from `opencode2 serve` 0.0.0-next-202606270058
+// by tapping GET /api/event (see docs/opencode-api.md § SSE event catalog):
+//
+//   session.next.prompt.admitted -> session.next.prompted
+//     -> session.next.step.started
+//        -> reasoning.started/.delta/.ended -> text.started/.delta/.ended
+//     -> session.next.step.ended {finish: "stop", cost, tokens}
+//
+// Two things that the frontend has to get right are only visible against a loop
+// that behaves like this one:
+//
+//  · There is no "run finished" event. `step.ended` is the last thing a turn
+//    emits, and it is NOT the end of the loop when a prompt was steered in —
+//    the loop promotes the steered input and runs another step. What ends the
+//    run is the session leaving GET /api/session/active.
+//  · `control.vocabulary = "classic"` switches to the `session.execution.*` /
+//    `ordinal` spelling the other build in the wild emits, which the frontend
+//    normalizes onto the same handlers.
+const DEFAULT_CONTROL = {
+  vocabulary: "next", // "next" | "classic"
+  // Simulates a turn whose ending is never announced (a stream that dropped
+  // mid-run, or a build with a lifecycle we don't know): the loop drains but
+  // emits no step.ended, so only the run-state poll can settle it.
+  dropTerminalEvents: false,
+  stepMs: 30,
+};
+
+// Set through POST /api/mock/control, reset per page load.
+const control = { ...DEFAULT_CONTROL };
+
+// Sessions whose agent loop is running, and the inputs admitted into a loop that
+// was already going (steered), keyed by session.
+const running = new Set();
+const steered = new Map();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Event names differ per build, and admission/promotion are named differently
+// again in the classic spelling. The payload keys for a streaming part differ
+// with them too (`ordinal` vs `textID`/`reasoningID`).
+const CLASSIC_NAMES = {
+  "prompt.admitted": "session.input.admitted",
+  prompted: "session.input.promoted",
+};
+
+function ev(name) {
+  if (control.vocabulary !== "classic") return `session.next.${name}`;
+  return CLASSIC_NAMES[name] || `session.${name}`;
+}
+
+function partIDs(kind, id) {
+  return control.vocabulary === "classic" ? { ordinal: 0 } : { [`${kind}ID`]: `${kind}-${id}` };
+}
 
 let nextTime = 100;
 
-function answerPrompt(sessionID, text, res) {
+function replyFor(text) {
+  return /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
+}
+
+// One step of the loop: think a little, answer, end the step.
+async function runStep(sessionID, text) {
   const list = TRANSCRIPT[sessionID] || (TRANSCRIPT[sessionID] = []);
   const seq = nextEventSeq;
   const assistantMessageID = `msg_a_mock${seq}`;
-  const reply = /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
+  const reply = replyFor(text);
 
   // Recorded before the run settles: settling triggers a transcript refresh, and
   // a reply the refresh can't see would be wiped off screen the moment it landed.
@@ -176,17 +247,89 @@ function answerPrompt(sessionID, text, res) {
     id: assistantMessageID,
     type: "assistant",
     time: { created: nextTime++ },
-    content: [{ type: "text", text: reply }],
+    content: [
+      { type: "reasoning", text: THINKING },
+      { type: "text", text: reply },
+    ],
   });
 
-  json(res, { data: { messageID: assistantMessageID } });
+  const base = { sessionID, assistantMessageID };
+  emit(ev("step.started"), { ...base, agent: "build", model: { providerID: "acme", id: "sol-1" } });
 
-  const props = { sessionID, assistantMessageID, ordinal: 0 };
-  emit("session.execution.started", { sessionID });
-  emit("session.text.started", props);
-  emit("session.text.delta", { ...props, delta: reply });
-  emit("session.text.ended", { ...props, text: reply });
-  emit("session.execution.succeeded", { sessionID });
+  const reasoning = { ...base, ...partIDs("reasoning", 0) };
+  emit(ev("reasoning.started"), reasoning);
+  for (const word of THINKING.split(" ")) {
+    await sleep(control.stepMs);
+    emit(ev("reasoning.delta"), { ...reasoning, delta: `${word} ` });
+  }
+  emit(ev("reasoning.ended"), { ...reasoning, text: THINKING });
+
+  const body = { ...base, ...partIDs("text", 0) };
+  emit(ev("text.started"), body);
+  await sleep(control.stepMs);
+  emit(ev("text.delta"), { ...body, delta: reply });
+  emit(ev("text.ended"), { ...body, text: reply });
+
+  await sleep(control.stepMs);
+  if (control.dropTerminalEvents) return;
+  emit(ev("step.ended"), {
+    ...base,
+    finish: "stop",
+    cost: 0.01,
+    tokens: { input: 120, output: 12, reasoning: 0, cache: { read: 0, write: 0 } },
+  });
+  if (control.vocabulary === "classic") emit("session.execution.succeeded", { sessionID });
+}
+
+// The loop: the prompt that started it, then anything steered in while it ran.
+async function runLoop(sessionID, text) {
+  running.add(sessionID);
+  try {
+    await runStep(sessionID, text);
+    while (steered.get(sessionID)?.length) {
+      const next = steered.get(sessionID).shift();
+      // Promotion is what the composer's steer pill waits for.
+      emit(ev("prompted"), {
+        sessionID,
+        messageID: next.messageID,
+        prompt: { text: next.text },
+        delivery: "steer",
+      });
+      await runStep(sessionID, next.text);
+    }
+  } finally {
+    running.delete(sessionID);
+  }
+}
+
+// POST /api/session/{id}/prompt — admits one input. Into a loop that is already
+// going it is a steer; otherwise it starts the loop. Either way the answer is a
+// `SessionInput.Admitted` record, and the turn happens on the event stream.
+function admitPrompt(sessionID, text, res) {
+  const messageID = `msg_u_admitted${nextEventSeq}`;
+  emit(ev("prompt.admitted"), {
+    sessionID,
+    messageID,
+    prompt: { text: text || "" },
+    delivery: "steer",
+  });
+  json(res, {
+    data: {
+      admittedSeq: nextEventSeq,
+      id: messageID,
+      sessionID,
+      prompt: { text: text || "" },
+      delivery: "steer",
+      timeCreated: Date.now(),
+    },
+  });
+
+  if (running.has(sessionID)) {
+    if (!steered.has(sessionID)) steered.set(sessionID, []);
+    steered.get(sessionID).push({ messageID, text });
+    return;
+  }
+  runLoop(sessionID, text);
 }
 
 function readBody(req) {
@@ -217,6 +360,22 @@ const server = http.createServer((req, res) => {
     return json(res, { data: [{ id: "pdf", name: "pdf", description: "read pdfs" }] });
   if (url === "/api/session")
     return req.method === "POST" ? createSession(res) : json(res, { data: SESSIONS });
+  // The run-state probe: every session whose agent loop is running right now.
+  // "Sessions absent from the result are inactive" — this is what tells the
+  // frontend a turn is over, since no event does. See stores/opencode/run.js.
+  if (url === "/api/session/active") {
+    return json(res, {
+      data: Object.fromEntries([...running].map((id) => [id, { type: "running" }])),
+    });
+  }
+  // Not part of the API: how a spec picks the event vocabulary or asks for a run
+  // whose ending is never announced.
+  if (url === "/api/mock/control" && req.method === "POST") {
+    return readBody(req).then((body) => {
+      Object.assign(control, body);
+      json(res, { data: control });
+    });
+  }
   const messages = url.match(/^\/api\/session\/([^/]+)\/message$/);
   if (messages) return json(res, { data: TRANSCRIPT[messages[1]] || [] });
   const prompt = url.match(/^\/api\/session\/([^/]+)\/prompt$/);
@@ -224,7 +383,7 @@ const server = http.createServer((req, res) => {
     // Flat first, wrapped second — transport.js sends whichever shape it has
     // learned works, and both are legitimate (see its header comment).
     return readBody(req).then((body) =>
-      answerPrompt(prompt[1], body.text ?? (body.prompt && body.prompt.text), res)
+      admitPrompt(prompt[1], body.text ?? (body.prompt && body.prompt.text), res)
     );
   }
   if (/^\/api\/session\/[^/]+\/context$/.test(url)) return json(res, { data: {} });

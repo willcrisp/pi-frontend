@@ -44,7 +44,7 @@ this frontend or flagged as a known gap.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/session` | Wired: `projects.js#fetchSessions`. Returns `{data: SessionV2.Info[]}` |
-| GET | `/api/session/active` | Not wired. Current active-session pointer |
+| GET | `/api/session/active` | Wired: `run.js`. **The run-state probe** — see below |
 | GET | `/api/session/{sessionID}` | Not wired. Single-session detail |
 | POST | `/api/session` | Wired: `projects.js#startNewChat`. Body `{id?, agent?, model?, location?}` where `location` is `{directory, workspaceID?}` (`Location.Ref`) |
 | ❌ | ~~DELETE `/api/session/{sessionID}`~~ | **Not exposed in this build.** `removeSession` is client-side-only |
@@ -56,7 +56,7 @@ this frontend or flagged as a known gap.
 |---|---|---|
 | POST | `/api/session/{sessionID}/prompt` | Wired: `sendPrompt` / `sendSteer`. **Body shape differs by build** — see "Steering" below. Carries the `delivery` mode |
 | POST | `/api/session/{sessionID}/interrupt` | Wired: `abortSession` |
-| POST | `/api/session/{sessionID}/wait` | Not wired. Sync wait for completion |
+| ❌ | ~~POST `/api/session/{sessionID}/wait`~~ | Declared ("wait for a session agent loop to become idle", 204) but **stubbed**: returns 503 `{"message": "Session wait is not available yet"}`, like compact. Use `/api/session/active` |
 | GET | `/api/session/{sessionID}/message` | Wired: `refreshActiveMessages` |
 | GET | `/api/session/{sessionID}/message/{messageID}` | Not wired |
 | GET | `/api/session/{sessionID}/context` | Not wired. Server-computed context/tokens; UI currently derives from messages |
@@ -75,6 +75,28 @@ this frontend or flagged as a known gap.
 | ❌ | ~~POST `/api/session/{sessionID}/fork`~~ | **Not exposed.** Use `revert/*` instead |
 | ❌ | ~~POST `/api/session/{sessionID}/share`~~ | **Not exposed at all** in this build |
 | ❌ | ~~POST `/api/session/{sessionID}/command`~~ | **Not exposed.** Slash commands are sent as raw prompt text |
+
+### Is a session running? `GET /api/session/active`
+
+The only reliable answer, and the one the composer's stop-vs-send square and the
+sidebar dot are settled against. The route's own description: "Retrieve foreground
+Session drains currently owned by this OpenCode process. **Sessions absent from
+the result are inactive.**"
+
+```
+GET /api/session/active
+→ 200 {"data": {"ses_04ec…": {"type": "running"}}}   // that session's loop is going
+→ 200 {"data": {}}                                    // nothing is running
+```
+
+Live-verified against a real turn: the session appears for the whole of the run —
+including across the extra step a steered prompt adds — and disappears the moment
+the agent loop drains. `SessionActive` is `{type: "running"}` and nothing more.
+
+**Why this matters:** no SSE event reliably marks the end of a run (see the event
+catalog below), so `stores/opencode/run.js` treats a terminal-looking event as a
+candidate and confirms it here, and polls here while a run is believed to be in
+flight. A build without the route degrades to trusting the events.
 
 ### Steering: sending a prompt into a run that is already going
 
@@ -245,14 +267,64 @@ remains unverified against the live target (see above).
 
 ## SSE event catalog
 
-Envelope: `{id: "evt_...", type: string, data: object, metadata?, durable?, location?}`. Types seen in the spec:
+Envelope: `{id: "evt_...", type: string, data: object, metadata?, durable?, location?}`.
+
+### ⚠️ Two vocabularies, and no "the run finished" event in either
+
+Verified by running a real turn against a live `opencode2 serve`
+(0.0.0-next-202606270058) with a fake OpenAI-compatible provider and tapping
+`GET /api/event`. **That build's per-turn events are all prefixed
+`session.next.`, and it has no `session.execution.*` and no `session.idle` at
+all** — its `/openapi.json` declares 59 event schemas and not one of them says a
+run completed. A whole turn is:
+
+```
+session.next.prompt.admitted        {sessionID, messageID, prompt, delivery}
+session.next.prompted               {sessionID, messageID, prompt, delivery}
+session.next.step.started           {sessionID, assistantMessageID, agent, model}
+  session.next.reasoning.started/.delta/.ended   {reasoningID, delta|text}
+  session.next.tool.input.started/.delta/.ended  {callID, name|text}
+  session.next.tool.called/.progress/.success/.failed {callID, tool, input, structured, content}
+  session.next.text.started/.delta/.ended        {textID, delta|text}
+session.next.step.ended             {assistantMessageID, finish: "stop", cost, tokens}
+```
+
+The ALF-UAT target emits the same shapes under `session.<x>` and adds a
+`session.execution.*` lifecycle. `events.js#canonicalType` drops the `next.`
+infix so one handler table serves both; the streaming part id is `ordinal` on one
+and `textID`/`reasoningID` on the other, so `partKey` takes whichever came.
+
+**The end of a turn is `step.ended` with a terminal `finish` reason** ("stop",
+not "tool-calls" — that one means another step follows). And even that is not
+the end of the *run*: with a steered input the loop promotes it and runs another
+step. Verified in one session:
+
+```
+… step.ended {finish: "stop"} -> session.next.prompted (the steered input)
+-> step.started … -> step.ended {finish: "stop"}
+```
+
+So a run's end is settled against `GET /api/session/active`, not off an event —
+see `stores/opencode/run.js`, and "Is a session running?" in the inventory above.
+Also worth knowing: that build emits **no `session.usage.updated` and no
+`message.updated`** — tokens and cost only ever arrive on `step.ended`.
+
+### Types seen in the spec
 
 - `server.connected` — wired, sets `connected = true`
 - `message.updated`, `message.part.updated`, `message.part.removed`, `message.removed` — wired
-- `session.execution.started` / `.completed` / `.failed` — wired
-- `session.idle` — wired
+- `session.execution.started` / `.completed` / `.failed` — wired (absent from current @next builds)
+- `session.idle` — wired (likewise absent)
+- `session.next.step.started` / `.ended` / `.failed` — wired; `.ended` is what ends a turn
+- `session.next.text.*` / `.reasoning.*` / `.tool.*` — wired, via the canonical `session.<x>` names
+- `session.next.retried` — wired as a deliberate no-op: a failed step being retried by the same loop
+- `session.next.compaction.*`, `session.next.agent.switched`, `session.next.model.switched`,
+  `session.next.moved`, `session.next.synthetic`, `session.next.shell.*`,
+  `session.next.revert.*`, `session.next.context.updated`, `todo.updated`,
+  `reference.updated`, `session.updated` / `.deleted` — not wired
 - `session.model.selected` — wired, syncs local model selection
-- `session.input.admitted` — wired (acknowledged, no state change)
+- `session.input.admitted` / `session.next.prompt.admitted` — wired (acknowledged, no state change)
+- `session.input.promoted` / `session.next.prompted` — wired, retires a pending steer
 - `permission.v2.asked` — wired, enqueues in permission store
 - `permission.v2.replied` — wired, clears queue entry
 - `question.v2.asked` — wired, enqueues in question store (`data` is a `QuestionV2.Request`)
@@ -312,6 +384,11 @@ You are a strict PR reviewer…
 
 ## Known gotchas
 
+- **No event says a run finished.** Not on every build, and where one exists it
+  fires per *turn*, not per run — a steered prompt continues the same agent loop
+  past it. Anything that needs "is it still going" has to ask
+  `GET /api/session/active`. Deriving it from an event is what left the composer
+  stuck on its stop square forever.
 - **Agents are addressed by `id`, not `name`.** `{id: "build", name: "Build"}` — send `build`. Sending `Build` fails with `Agent not found: "Build"`.
 - **`fs/list` `path` is relative to `location.directory`.** Sending an absolute path when the location is the server's own workspace returns 500 because the server sandboxes to the project root.
 - **`compact` is stubbed server-side in this build** — the endpoint exists (POST `/api/session/{id}/compact`) but always returns 503 with `{message: "Session compact is not available yet"}`. Frontend surfaces this as an error banner.

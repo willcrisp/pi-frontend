@@ -18,6 +18,22 @@
 // vocabulary and the point of this table is that supporting one more is adding
 // one entry, not editing a branch someone else depends on.
 //
+// ── Two spellings of the same vocabulary ─────────────────────────────────────
+// The current opencode-ai@next (0.0.0-next-202606270058, verified against a live
+// `opencode2 serve` and its /openapi.json) emits the whole per-turn vocabulary
+// under a `session.next.` prefix instead — `session.next.step.started`,
+// `session.next.text.delta`, and so on — and no session.execution.* at all.
+// Rather than duplicate 20 entries, the infix is normalized away on the way in
+// (canonicalType) so one table serves both. Keys below are therefore canonical
+// names, not necessarily what any single build puts on the wire.
+//
+// It also identifies streaming parts by `textID`/`reasoningID` where the other
+// build uses `ordinal` — partKey takes whichever came.
+//
+// **What ends a run is deliberately NOT decided here.** No event answers that
+// across builds, and on both of them a steered prompt continues the agent loop
+// past a step's end; see run.js.
+//
 // ── Adding or changing an event ──────────────────────────────────────────────
 // Add a key to HANDLERS below. Each handler receives one context object:
 //
@@ -42,12 +58,8 @@ import { persistSelection, resolveVariant } from "./models.js";
 import { trackSessionActivity } from "./activity.js";
 import { resolveSteer } from "./steer.js";
 import { applyUsageUpdate, scheduleContextRefresh, updateSessionStats } from "./context.js";
-import {
-  findOrCreateMessage,
-  recomputeText,
-  refreshActiveMessages,
-  toolContentText,
-} from "./messages.js";
+import { findOrCreateMessage, recomputeText, toolContentText } from "./messages.js";
+import { isRunEndEvent, runMayHaveEnded } from "./run.js";
 import { loadModels } from "./catalog.js";
 import { handlePermissionEvent } from "../permission.js";
 import { handleQuestionEvent } from "../question.js";
@@ -72,6 +84,15 @@ function upsertPart(msg, id, patch) {
 function appendPartText(msg, id, kind, delta) {
   const existing = msg.parts.find((p) => p.id === id);
   upsertPart(msg, id, { type: kind, text: (existing?.text || "") + (delta || "") });
+}
+
+// The synthetic part id for a streaming text/reasoning part. Builds identify the
+// part by `ordinal`, or by `textID`/`reasoningID` — take whichever came, because
+// keying every part of a message the same way merges them, and then `.ended`
+// (which replaces rather than appends) drops everything but the last one.
+function partKey(kind, props) {
+  const id = props.ordinal ?? props.textID ?? props.reasoningID ?? 0;
+  return `${kind}:${id}`;
 }
 
 // Streaming events carry the assistant message id but no role/time, so seed those.
@@ -102,26 +123,26 @@ function scheduleIntegrationRefresh() {
 
 // --- Shared handler shapes ---------------------------------------------------
 
-// Text and reasoning stream identically, keyed by `ordinal`; only the part type
-// differs. `kind` is baked in per registration below.
+// Text and reasoning stream identically (see partKey for what identifies a
+// part); only the part type differs. `kind` is baked in per registration below.
 const streamStarted = (kind) => ({ props, child, messages }) => {
   const msg = assistantMessageFor(messages, props);
-  upsertPart(msg, `${kind}:${props.ordinal}`, { type: kind, text: "" });
-  if (!child) opencodeStore.isStreaming = true;
+  upsertPart(msg, partKey(kind, props), { type: kind, text: "" });
+  if (ownsSession(child, props)) opencodeStore.isStreaming = true;
 };
 
 const streamDelta = (kind) => ({ props, child, messages }) => {
   const msg = assistantMessageFor(messages, props);
-  appendPartText(msg, `${kind}:${props.ordinal}`, kind, props.delta);
+  appendPartText(msg, partKey(kind, props), kind, props.delta);
   if (kind === "text") recomputeText(msg);
-  if (!child) opencodeStore.isStreaming = true;
+  if (ownsSession(child, props)) opencodeStore.isStreaming = true;
 };
 
 // `.ended` carries the authoritative full text, so replace rather than append —
 // this also repairs any delta that was missed.
 const streamEnded = (kind) => ({ props, messages }) => {
   const msg = assistantMessageFor(messages, props);
-  upsertPart(msg, `${kind}:${props.ordinal}`, {
+  upsertPart(msg, partKey(kind, props), {
     type: kind,
     text: props.text || "",
     phase: props.state && props.state.phase,
@@ -129,24 +150,13 @@ const streamEnded = (kind) => ({ props, messages }) => {
   if (kind === "text") recomputeText(msg);
 };
 
-// A turn ending. Builds disagree on which event settles a run — session.idle,
-// session.execution.succeeded and session.execution.completed all mean the same
-// thing here, so they share this.
-function settleRun({ props, child }) {
-  if (child) {
-    child.status = "completed";
-    child.endedAt = Date.now();
-    return;
-  }
-  if (!ownsSession(child, props)) return;
-  opencodeStore.isStreaming = false;
-  // Reconcile with server truth (drops optimistic artifacts, applies final content).
-  refreshActiveMessages();
-}
-
-// A turn failing. A sub-agent failing is reported on its card, not as a
-// session-wide error banner — the parent turn is still alive and will handle the
-// tool error. `readMessage` differs per event because the error shapes do.
+// A turn failing. The streaming flag is NOT cleared here — a failed step can be
+// retried by the same agent loop (session.next.retried), so whether the run is
+// over is settled by run.js like any other ending. This is only the report.
+//
+// A sub-agent failing is reported on its card, not as a session-wide error
+// banner — the parent turn is still alive and will handle the tool error.
+// `readMessage` differs per event because the error shapes do.
 const failRun = (readMessage) => ({ props, child }) => {
   const message = readMessage(props.error) || "Execution failed";
   if (child) {
@@ -156,7 +166,6 @@ const failRun = (readMessage) => ({ props, child }) => {
     return;
   }
   opencodeStore.error = message;
-  opencodeStore.isStreaming = false;
 };
 
 const ignore = () => {};
@@ -195,9 +204,12 @@ const HANDLERS = {
   // the run's end reconciles against the server, so re-adding it here would
   // duplicate it.
   "session.input.admitted": ignore,
-  "session.next.prompt.admitted": ignore,
+  "session.prompt.admitted": ignore,
   "shell.created": ignore,
   "shell.exited": ignore,
+  // The agent loop is having another go at a failed step; it never stopped, so
+  // there is nothing to settle and the error already showed.
+  "session.retried": ignore,
 
   // No state today — the PTY runner uses a one-shot lifecycle (see pty.js).
   "pty.created": ignore,
@@ -206,10 +218,10 @@ const HANDLERS = {
 
   // Promotion is the moment a steered/queued input actually reaches the agent,
   // so it's what retires the pending entry. Two spellings, because builds
-  // disagree (`session.input.promoted` on the ALF-UAT target,
-  // `session.next.prompted` on opencode-ai@next).
+  // disagree (`session.input.promoted` on the ALF-UAT target, `session.prompted`
+  // — wire name `session.next.prompted` — on opencode-ai@next).
   "session.input.promoted": ({ props, sessionID }) => resolveSteer(sessionID, props.messageID || props.id),
-  "session.next.prompted": ({ props, sessionID }) => resolveSteer(sessionID, props.messageID || props.id),
+  "session.prompted": ({ props, sessionID }) => resolveSteer(sessionID, props.messageID || props.id),
 
   "session.step.started": ({ props, child, messages }) => {
     const msg = assistantMessageFor(messages, props);
@@ -220,7 +232,7 @@ const HANDLERS = {
       // its first step does.
       if (child && !child.model) child.model = props.model;
     }
-    if (!child) opencodeStore.isStreaming = true;
+    if (ownsSession(child, props)) opencodeStore.isStreaming = true;
   },
 
   "session.reasoning.started": streamStarted("reasoning"),
@@ -255,6 +267,10 @@ const HANDLERS = {
   "session.tool.called": ({ props, messages }) => {
     const msg = assistantMessageFor(messages, props);
     const patch = { type: "tool", callID: props.callID, state: { status: "running" } };
+    // The name is on `tool` here and on `name` in tool.input.started, depending
+    // on the build. Without it a `subagent` dispatch renders as a generic tool
+    // row instead of a card, so take it from whichever event brought it.
+    if (props.tool || props.name) patch.tool = props.tool || props.name;
     // Don't clobber the arguments `session.tool.input.ended` already parsed:
     // they're the same call's input, and a build that abbreviates them here
     // would otherwise erase the sub-agent's task text from its card.
@@ -302,10 +318,17 @@ const HANDLERS = {
   "session.tool.error": toolFailed,
   "session.tool.failed": toolFailed,
 
-  "session.step.ended": ({ props, messages }) => {
+  // Whether this is also the end of the run is run.js's call — see isRunEndEvent.
+  "session.step.ended": ({ props, child, messages }) => {
     const msg = assistantMessageFor(messages, props);
     msg.tokens = props.tokens;
     msg.cost = props.cost;
+    if (child) return;
+    // On a build with no session.usage.updated (opencode-ai@next has none — the
+    // step's own event is where tokens and cost arrive) this is the only place
+    // the usage popover ever hears a number.
+    updateSessionStats(msg);
+    scheduleContextRefresh();
   },
 
   // Parent and child are metered separately — each emits its own
@@ -322,13 +345,13 @@ const HANDLERS = {
     scheduleContextRefresh();
   },
 
-  // Live oc2 servers emit a session.execution.* lifecycle around each prompt
-  // rather than only session.idle.
-  "session.execution.succeeded": settleRun,
-  "session.execution.completed": settleRun,
-  "session.idle": settleRun,
-
+  // The end-of-run events (session.idle, session.execution.succeeded /
+  // .completed / .aborted, session.step.failed …) are handled ahead of this
+  // table, in handleServerEvent — settling a run needs to happen for every
+  // session, not just the one on screen, and it is confirmed against the server
+  // rather than taken from the event. These entries only report what failed.
   "session.execution.failed": failRun((err) => (err && err.message) || (err && err.type)),
+  "session.step.failed": failRun((err) => (err && err.message) || (err && err.name)),
   "session.error": failRun(
     (err) => (err && err.data && err.data.message) || (err && err.name) || "Session error"
   ),
@@ -358,7 +381,7 @@ const HANDLERS = {
     // which MessageView renders directly. Upsert by part id.
     const part = props.part;
     if (!part) return;
-    if (!child) opencodeStore.isStreaming = true;
+    if (ownsSession(child, props)) opencodeStore.isStreaming = true;
     const msg = findOrCreateMessage(messages, part.messageID);
     const idx = msg.parts.findIndex((p) => p.id === part.id);
     if (idx >= 0) msg.parts[idx] = part;
@@ -396,12 +419,21 @@ function toolFailed({ props, messages }) {
 
 // --- Entry point -------------------------------------------------------------
 
+// `session.next.foo` and `session.foo` are the same event under two builds'
+// spellings (see the header), so the infix is dropped once, here, and everything
+// downstream — this table, activity.js, run.js — only ever sees the canonical
+// name. `session.next.prompted` therefore arrives as `session.prompted`.
+function canonicalType(type) {
+  return type.startsWith("session.next.") ? `session.${type.slice(13)}` : type;
+}
+
 // Exported as the reducer for the event stream — the SSE subscription in
 // stream.js is its only caller today, but it is also the seam to drive the store
 // from a session-scoped stream or a replay.
 export function handleServerEvent(event) {
   if (!event || !event.type) return;
-  const { type, data } = event;
+  const { data } = event;
+  const type = canonicalType(event.type);
   const props = data || {};
 
   // Interactive gates are dispatched BEFORE the session router below, because
@@ -423,10 +455,13 @@ export function handleServerEvent(event) {
     (props.info && props.info.sessionID) ||
     props.sessionID;
 
-  // Sidebar status first: every session's dot is driven from here, so this has
-  // to happen before the routing below drops events for sessions that aren't
-  // the one on screen.
-  if (sessionID) trackSessionActivity(type, sessionID);
+  // Run state first: the sidebar dot is driven for every session, and settling a
+  // run has to happen even for one we aren't looking at — both would be lost to
+  // the routing below, which drops events for sessions that aren't on screen.
+  if (sessionID) {
+    trackSessionActivity(type, sessionID);
+    if (isRunEndEvent(type, props)) runMayHaveEnded(sessionID);
+  }
 
   // A sub-agent's child session emits the SAME event vocabulary under its own
   // sessionID, so events are routed rather than filtered: the active session

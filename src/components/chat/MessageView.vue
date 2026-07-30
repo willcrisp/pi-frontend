@@ -14,10 +14,11 @@ import { computed } from "vue";
 import { renderMarkdown } from "../../lib/markdown.js";
 import { onMarkdownClick } from "../../lib/codeCopy.js";
 import { collapseRows, editDiffInfo, lineDiff } from "../../lib/diff.js";
-import { isSubagentPart, stageRevert } from "../../stores/opencode.js";
+import { isSubagentPart, opencodeStore as store, stageRevert } from "../../stores/opencode.js";
 import { filePathFromToolInput, openPreview } from "../../stores/filepreview.js";
 import { handoverForMessage, isHandoverRequest } from "../../stores/handover.js";
 import SubagentView from "./SubagentView.vue";
+import ThinkingBlock from "./ThinkingBlock.vue";
 import HandoverChip from "./HandoverChip.vue";
 
 const props = defineProps({
@@ -49,6 +50,18 @@ function renderPart(text) {
 
 function isImagePart(part) {
   return !!part.url && (part.mime || "").startsWith("image/");
+}
+
+// A reasoning part is still streaming when it's the last part of the last
+// message of a run in flight. Only that one previews its tail and follows itself
+// (ThinkingBlock); a sub-agent's transcript renders through the same component
+// but isn't the session's own stream, so nothing there is ever "live".
+function isLivePart(index) {
+  return (
+    store.isStreaming &&
+    store.messages.at(-1) === props.message &&
+    index === props.message.parts.length - 1
+  );
 }
 
 function truncate(text) {
@@ -137,8 +150,12 @@ function revertToHere() {
           v-html="renderPart(part.text)"
         ></div>
 
-        <!-- reasoning -->
-        <div v-else-if="part.type === 'reasoning'" class="thinking markdown" v-html="renderPart(part.text)"></div>
+        <!-- reasoning: a collapsed quote, click to expand — see ThinkingBlock -->
+        <ThinkingBlock
+          v-else-if="part.type === 'reasoning'"
+          :text="part.text"
+          :live="isLivePart(pi)"
+        />
 
         <!-- subagent dispatch: rendered as a rich card driven by the child
              session the call spawned, not as a generic tool row -->

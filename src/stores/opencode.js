@@ -25,6 +25,8 @@
 //                 one, this keeps the rest and persists them.
 //   messages.js   Transcript loading, REST->view normalization, sub-agent
 //                 backfill.
+//   run.js        When a turn is over: which events might mean it, and the
+//                 GET /session/active reconciliation that decides.
 //   prompt.js     Sending a prompt that starts a turn.
 //   catalog.js    Models, agents, commands and skills lists.
 //   session.js    Revert, interrupt, agent switch, compact.

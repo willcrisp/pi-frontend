@@ -65,6 +65,12 @@ watch(
 
 watch(() => store.messages.at(-1)?.text, followStream);
 
+// Streamed text moves `text`, but a turn that opens with a long stretch of
+// thinking (or a tool call) moves neither it nor `messages.length` — so follow
+// the newest part's own growth as well, or the view sits still while the agent
+// is visibly working.
+watch(() => store.messages.at(-1)?.parts?.at(-1)?.text, followStream);
+
 // A different chat starts at its own bottom, whatever the scroll position in
 // the one being left.
 watch(
