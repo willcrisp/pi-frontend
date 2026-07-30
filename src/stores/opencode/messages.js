@@ -81,16 +81,35 @@ export async function fetchSessionMessages(sessionID) {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 
-export async function refreshActiveMessages() {
+// Serialises the write, not the fetch: two refreshes can be in flight at once
+// (a settle racing a session switch, a stall resync racing a settle) and the
+// slower one must not land on top of the newer one's answer.
+let refreshSeq = 0;
+
+// Replace the transcript with the server's, or — with `merge` — reconcile
+// against it without losing ground.
+//
+// `merge` exists for the two moments where the server is authoritative about
+// what it HAS but not about what we've already been shown: recovering from a
+// gap in the event stream mid-run, and the stop button landing before the
+// interrupted step has been flushed. There, a plain replace would blank the
+// half-streamed assistant message that is on screen. At the natural end of a
+// run the plain replace is still right — that's what drops optimistic
+// artifacts.
+export async function refreshActiveMessages({ merge = false } = {}) {
   const sessionID = opencodeStore.activeSessionId;
   if (!sessionID) return;
+  const seq = ++refreshSeq;
 
   const list = await fetchSessionMessages(sessionID);
   if (!list) {
     console.error(`Failed to fetch messages for session ${sessionID}`);
     return;
   }
-  opencodeStore.messages = list;
+  // The user navigated, or a newer refresh already answered: this one is stale,
+  // and writing it would put another session's transcript on screen.
+  if (seq !== refreshSeq || sessionID !== opencodeStore.activeSessionId) return;
+  opencodeStore.messages = merge ? mergeTranscript(opencodeStore.messages, list) : list;
 
   // Server truth just landed, and it carries the sub-agent linkage each
   // dispatch needs. Awaited so a caller that refreshes and then reads
@@ -106,6 +125,11 @@ export function appendLocalUserMessage(text, attachments) {
   opencodeStore.messages.push({
     id,
     role: "user",
+    // Marks a message the server has never heard of, whose id is ours rather
+    // than a `msg_…`. mergeTranscript drops these: the server's own copy of the
+    // same prompt is in the list under a different id, so keeping both would
+    // show the prompt twice.
+    local: true,
     parts: [
       ...(text ? [{ type: "text", text }] : []),
       ...attachments.map((f, i) => ({ id: `${id}-f${i}`, type: "file", ...f })),
@@ -113,6 +137,49 @@ export function appendLocalUserMessage(text, attachments) {
     text,
   });
   return id;
+}
+
+// --- Merging server truth into a transcript that is mid-stream ---------------
+
+// How much of a message is actually there. Compared, not trusted absolutely:
+// the question a merge asks is only "which of these two copies has more of it".
+function contentWeight(msg) {
+  const parts = msg.parts || [];
+  return parts.reduce((n, p) => n + ((p.text || "").length || 1), parts.length);
+}
+
+// Server list + what we hold, keeping whichever copy of each message is further
+// along. Server order wins; messages only we have (an assistant message still
+// streaming, which the server won't persist until the step ends) keep their
+// place at the end.
+function mergeTranscript(local, incoming) {
+  const localIDs = new Set(local.map((m) => m.id));
+  const incomingIDs = new Set(incoming.map((m) => m.id));
+  // What the server has that we had never seen. The echo of an optimistic
+  // prompt is in here once the server has taken it — and only then.
+  const fresh = incoming.filter((m) => !localIDs.has(m.id));
+
+  const merged = incoming.map((server) => {
+    const mine = local.find((m) => m.id === server.id);
+    if (!mine) return server;
+    // Scalars (tokens, cost, error, createdAt) are the server's either way; only
+    // the parts can be behind, and only in one direction.
+    return contentWeight(mine) > contentWeight(server)
+      ? { ...server, parts: mine.parts, text: mine.text }
+      : server;
+  });
+
+  for (const mine of local) {
+    if (incomingIDs.has(mine.id)) continue;
+    // Our optimistic copy of a prompt, dropped only once the server's own copy
+    // of it has arrived — same text under a different id, and keeping both
+    // shows the prompt twice. Until then it stays: a mid-run resync must not
+    // take the user's own message off the screen, and an interrupted turn may
+    // never be recorded server-side at all.
+    if (mine.local && fresh.some((m) => m.role === mine.role && m.text === mine.text)) continue;
+    merged.push(mine);
+  }
+  return merged;
 }
 
 // --- Sub-agent backfill ------------------------------------------------------

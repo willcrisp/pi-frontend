@@ -30,6 +30,10 @@ export async function sendPrompt(text, files) {
     if (!res.ok) {
       throw new Error(await errorMessage(res, `Failed to send prompt (${res.status})`));
     }
+    // The server has the input. Until it says so, "absent from GET
+    // /session/active" means the run may simply not have started yet, and
+    // run.js holds off settling on it; from here the absence is meaningful.
+    markRunning(sessionID, true);
     // Do NOT append assistant text here — the SSE stream drives assistant rendering.
   } catch (err) {
     opencodeStore.isStreaming = false;

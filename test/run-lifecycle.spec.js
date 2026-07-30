@@ -103,3 +103,87 @@ test("a run whose ending is never announced is recovered from server state", asy
   await expect(stop(page)).toBeVisible();
   await expect(send(page)).toBeVisible({ timeout: 20000 });
 });
+
+// --- When the stream itself is what failed -----------------------------------
+//
+// These assert a second bug with the same symptom as the first: the turn stops
+// on screen and never comes back. Not because the run's ending was missed this
+// time — the run is still going — but because the connection carrying it died
+// and nothing noticed. Everything the UI knows mid-turn arrives on that one SSE
+// stream, so a stream that has quietly stopped delivering is indistinguishable
+// from an agent that has stopped thinking: the thinking block sits on its last
+// delta until the page is reloaded.
+//
+// Both cases below set `hangRun`, which keeps the session in
+// GET /session/active forever. That rules out the poll: it is the frontend's
+// other recovery path, and without this every stream fault would look fixed
+// because the run settled a few seconds later and refreshed the transcript.
+// Anything that reaches the screen here got there because the stream came back.
+test("a stream the server closes mid-turn is reconnected, and the rest of the turn lands", async ({
+  page,
+  request,
+}) => {
+  // A clean end of response — an idle proxy, a tunnel, a load balancer. There is
+  // no error: `fetch-event-source` calls onclose and, left to itself, stops.
+  await control(request, { cutStream: "close", hangRun: true, stepMs: 150 });
+
+  await prompt(page, "keep going");
+  await expect(stop(page)).toBeVisible();
+
+  // The turn is only recorded server-side when its step ends, so the transcript
+  // cannot supply this: the reply is here because the reconnected stream
+  // delivered it.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Acknowledged.", {
+    timeout: 20000,
+  });
+  // Still running as far as the server is concerned — so this was not a settle.
+  await expect(stop(page)).toBeVisible();
+  // And the resync that follows a reconnect didn't take the prompt with it.
+  await expect(page.locator(".msg-user").last()).toContainText("keep going");
+});
+
+test("a stream that goes quiet without closing is replaced, and the turn recovered", async ({
+  page,
+  request,
+}) => {
+  // The socket stays open and nothing is ever written to it: no error, no close,
+  // no events. Nothing in the connection can report this — only the watchdog
+  // noticing that the run poll is getting answers while the stream is silent.
+  await control(request, { cutStream: "mute", cutAfterDeltas: 0, hangRun: true, stepMs: 300 });
+
+  await prompt(page, "anyone there");
+  await expect(stop(page)).toBeVisible();
+
+  // Not one event reaches the client for this turn, so this is the watchdog
+  // reconnecting and resyncing the transcript across the gap.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Acknowledged.", {
+    timeout: 30000,
+  });
+  await expect(stop(page)).toBeVisible();
+  await expect(page.locator(".msg-user").last()).toContainText("anyone there");
+});
+
+test("stopping a run settles it, and keeps what the turn had already produced", async ({
+  page,
+  request,
+}) => {
+  await control(request, { stepMs: 150 });
+
+  await prompt(page, "never mind");
+  await expect(stop(page)).toBeVisible();
+  // Interrupt partway through the thinking, with nothing recorded server-side:
+  // what is on screen is the only copy of this turn.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Let me check", {
+    timeout: 15000,
+  });
+  await stop(page).click();
+
+  // Stop ends the turn, so it settles it like any other ending — the composer
+  // comes back and stays back rather than waiting on a poll.
+  await expect(send(page)).toBeVisible();
+  await expect(stop(page)).toHaveCount(0);
+  // …and the reconciliation that follows must not blank the transcript it was
+  // reconciling: the server has no record of this turn at all.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Let me check");
+  await expect(page.locator(".msg-user").last()).toContainText("never mind");
+});

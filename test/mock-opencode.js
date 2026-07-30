@@ -106,11 +106,17 @@ const BASE_TRANSCRIPT_LENGTHS = Object.fromEntries(
 let nextSessionSeq = 3;
 
 // Sessions a test created — and turns a test sent — are dropped when the next
-// page loads (a client opening the event stream is the signal). One worker runs
-// the suite serially, so this is the cheap equivalent of a per-test server: the
-// fork test creates a session and asserts against it, and the next test still
-// sees the two seeded ones with their two seeded prompts — which several of
-// them count.
+// page loads. One worker runs the suite serially, so this is the cheap
+// equivalent of a per-test server: the fork test creates a session and asserts
+// against it, and the next test still sees the two seeded ones with their two
+// seeded prompts — which several of them count.
+//
+// The signal is GET /api/health, which the frontend calls once from
+// initOpenCode and nowhere else in a page's life. It used to be a client
+// opening the event stream, but that cannot tell a new page from a RECONNECT —
+// and a reconnect mid-run is precisely what the stream-recovery tests drive.
+// Resetting there would delete the turn out from under the page that is
+// recovering it.
 function resetCreatedSessions() {
   SESSIONS.length = BASE_SESSION_COUNT;
   for (const id of Object.keys(TRANSCRIPT)) {
@@ -118,9 +124,11 @@ function resetCreatedSessions() {
     else TRANSCRIPT[id].length = BASE_TRANSCRIPT_LENGTHS[id];
   }
   // Agent-loop state and anything a test set through /api/mock/control go with
-  // them, so a spec never inherits the previous one's event vocabulary.
+  // them, so a spec never inherits the previous one's event vocabulary — or a
+  // run its `hangRun` left pinned as active.
   running.clear();
   steered.clear();
+  muted = false;
   Object.assign(control, DEFAULT_CONTROL);
 }
 
@@ -146,10 +154,31 @@ function createSession(res) {
 // enough — a second connection replaces the first.
 let eventStream = null;
 let nextEventSeq = 2;
+// A stream that is open and delivering nothing — see control.cutStream. Cleared
+// when a client reconnects, because a new subscriber gets a working stream.
+let muted = false;
 
 function emit(type, data) {
-  if (!eventStream) return;
+  if (!eventStream || muted) return;
   eventStream.write(`data: ${JSON.stringify({ id: `e${nextEventSeq++}`, type, data })}\n\n`);
+}
+
+// Break the stream the way a real one breaks, partway through a turn. The run
+// itself carries on: the server has no idea the client stopped listening, which
+// is the entire problem the frontend has to solve.
+function cutStream() {
+  if (control.cutStream === "close" && eventStream) {
+    // A clean end of response. `fetch-event-source` treats it as a normal
+    // finish and will not reconnect unless the client's onclose objects.
+    const res = eventStream;
+    eventStream = null;
+    res.end();
+  } else if (control.cutStream === "mute") {
+    // Socket still open, nothing written to it, no error anywhere. Only a
+    // watchdog can find this one.
+    muted = true;
+  }
+  control.cutStream = null; // once per turn
 }
 
 // The canned agent. A real one is what the frontend is missing here, and
@@ -198,6 +227,20 @@ const DEFAULT_CONTROL = {
   // emits no step.ended, so only the run-state poll can settle it.
   dropTerminalEvents: false,
   stepMs: 30,
+  // Break the event stream a couple of reasoning deltas into the turn — the
+  // moment a real one dies, leaving the UI on a thinking block that never
+  // moves. "close" ends the response; "mute" leaves the socket open and stops
+  // writing. Either way the agent loop carries on without the client.
+  cutStream: null, // null | "close" | "mute"
+  // Where in the turn it breaks: how many reasoning deltas are delivered first.
+  // 0 breaks it before the prompt is even acknowledged — a stream that died
+  // while the tab was asleep, where the turn produces no event at all.
+  cutAfterDeltas: 2,
+  // Keep reporting the session in GET /session/active after its turn is over.
+  // The poll is the frontend's other recovery path, and a test about the event
+  // stream has to rule it out — otherwise every stream fault looks fixed
+  // because the poll settled the run four seconds later.
+  hangRun: false,
 };
 
 // Set through POST /api/mock/control, reset per page load.
@@ -207,6 +250,10 @@ const control = { ...DEFAULT_CONTROL };
 // was already going (steered), keyed by session.
 const running = new Set();
 const steered = new Map();
+// Sessions asked to stop. The loop notices before its next emit and abandons
+// the step, recording nothing — the harsher case for the frontend, where the
+// half-finished answer on screen is the only copy there is.
+const aborted = new Set();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -233,15 +280,41 @@ function replyFor(text) {
   return /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
 }
 
-// One step of the loop: think a little, answer, end the step.
+// One step of the loop: think a little, answer, end the step. Returns true if
+// it was interrupted partway.
 async function runStep(sessionID, text) {
   const list = TRANSCRIPT[sessionID] || (TRANSCRIPT[sessionID] = []);
   const seq = nextEventSeq;
   const assistantMessageID = `msg_a_mock${seq}`;
   const reply = replyFor(text);
 
-  // Recorded before the run settles: settling triggers a transcript refresh, and
-  // a reply the refresh can't see would be wiped off screen the moment it landed.
+  const base = { sessionID, assistantMessageID };
+  emit(ev("step.started"), { ...base, agent: "build", model: { providerID: "acme", id: "sol-1" } });
+
+  const reasoning = { ...base, ...partIDs("reasoning", 0) };
+  emit(ev("reasoning.started"), reasoning);
+  let delivered = 0;
+  for (const word of THINKING.split(" ")) {
+    await sleep(control.stepMs);
+    if (aborted.delete(sessionID)) return true;
+    emit(ev("reasoning.delta"), { ...reasoning, delta: `${word} ` });
+    if (++delivered === control.cutAfterDeltas) cutStream();
+  }
+  emit(ev("reasoning.ended"), { ...reasoning, text: THINKING });
+
+  const body = { ...base, ...partIDs("text", 0) };
+  emit(ev("text.started"), body);
+  await sleep(control.stepMs);
+  if (aborted.delete(sessionID)) return true;
+  emit(ev("text.delta"), { ...body, delta: reply });
+  emit(ev("text.ended"), { ...body, text: reply });
+
+  // Recorded when the step ends, as a real server does — and before the run can
+  // settle, since settling triggers a transcript refresh and a reply the
+  // refresh can't see would be wiped off screen the moment it landed. Not
+  // earlier: a transcript that already holds the answer mid-turn would hand it
+  // to any refresh, and a test about recovering the stream would pass without
+  // the stream ever being recovered.
   list.push({ id: `msg_u_mock${seq}`, type: "user", time: { created: nextTime++ }, text: text || "" });
   list.push({
     id: assistantMessageID,
@@ -252,23 +325,6 @@ async function runStep(sessionID, text) {
       { type: "text", text: reply },
     ],
   });
-
-  const base = { sessionID, assistantMessageID };
-  emit(ev("step.started"), { ...base, agent: "build", model: { providerID: "acme", id: "sol-1" } });
-
-  const reasoning = { ...base, ...partIDs("reasoning", 0) };
-  emit(ev("reasoning.started"), reasoning);
-  for (const word of THINKING.split(" ")) {
-    await sleep(control.stepMs);
-    emit(ev("reasoning.delta"), { ...reasoning, delta: `${word} ` });
-  }
-  emit(ev("reasoning.ended"), { ...reasoning, text: THINKING });
-
-  const body = { ...base, ...partIDs("text", 0) };
-  emit(ev("text.started"), body);
-  await sleep(control.stepMs);
-  emit(ev("text.delta"), { ...body, delta: reply });
-  emit(ev("text.ended"), { ...body, text: reply });
 
   await sleep(control.stepMs);
   if (control.dropTerminalEvents) return;
@@ -285,7 +341,7 @@ async function runStep(sessionID, text) {
 async function runLoop(sessionID, text) {
   running.add(sessionID);
   try {
-    await runStep(sessionID, text);
+    if (await runStep(sessionID, text)) return;
     while (steered.get(sessionID)?.length) {
       const next = steered.get(sessionID).shift();
       // Promotion is what the composer's steer pill waits for.
@@ -298,7 +354,10 @@ async function runLoop(sessionID, text) {
       await runStep(sessionID, next.text);
     }
   } finally {
-    running.delete(sessionID);
+    // `hangRun` leaves the session in the active set: its turn is over but the
+    // server still calls it running, so nothing the frontend reads from
+    // GET /session/active can settle it. Cleared on the next page load.
+    if (!control.hangRun) running.delete(sessionID);
   }
 }
 
@@ -307,6 +366,9 @@ async function runLoop(sessionID, text) {
 // `SessionInput.Admitted` record, and the turn happens on the event stream.
 function admitPrompt(sessionID, text, res) {
   const messageID = `msg_u_admitted${nextEventSeq}`;
+  // Break it before the admission is even announced, so the turn produces
+  // nothing at all on the stream.
+  if (control.cutStream && !control.cutAfterDeltas) cutStream();
   emit(ev("prompt.admitted"), {
     sessionID,
     messageID,
@@ -351,7 +413,11 @@ function readBody(req) {
 const server = http.createServer((req, res) => {
   const url = req.url.split("?")[0];
 
-  if (url === "/api/health") return json(res, { ok: true });
+  // A page load, and the only one — see resetCreatedSessions.
+  if (url === "/api/health") {
+    resetCreatedSessions();
+    return json(res, { ok: true });
+  }
   if (url === "/api/model") return json(res, { data: MODELS });
   if (url === "/api/agent") return json(res, { data: AGENTS });
   if (url === "/api/command")
@@ -386,12 +452,18 @@ const server = http.createServer((req, res) => {
       admitPrompt(prompt[1], body.text ?? (body.prompt && body.prompt.text), res)
     );
   }
+  const interrupt = url.match(/^\/api\/session\/([^/]+)\/interrupt$/);
+  if (interrupt && req.method === "POST") {
+    if (running.has(interrupt[1])) aborted.add(interrupt[1]);
+    return json(res, { data: {} });
+  }
   if (/^\/api\/session\/[^/]+\/context$/.test(url)) return json(res, { data: {} });
   if (url === "/api/question/request") return json(res, { data: [] });
   if (url === "/api/integration") return json(res, { data: [] });
 
   if (url === "/api/event") {
-    resetCreatedSessions();
+    // A new subscriber gets a working stream, whatever was done to the last one.
+    muted = false;
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     res.write(`data: ${JSON.stringify({ id: "e1", type: "server.connected", data: {} })}\n\n`);
     eventStream = res;

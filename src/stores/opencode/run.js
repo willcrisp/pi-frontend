@@ -46,11 +46,12 @@
 //     dropped mid-turn or because the build spells it something we've never seen.
 //
 // A build without the route degrades to the old behaviour rather than hanging:
-// after a few failed probes the poll gives up and terminal events are trusted
-// on their own.
+// once the server has answered "no such route" the poll gives up and terminal
+// events are trusted on their own. A *transient* failure must never do that —
+// see the probe section below.
 import { watch } from "vue";
 import { opencodeStore } from "./state.js";
-import { getJSON } from "../../lib/api.js";
+import { apiGet } from "../../lib/api.js";
 import { activityRecord, setUnread } from "./activity.js";
 import { clearSteers } from "./steer.js";
 import { refreshActiveMessages } from "./messages.js";
@@ -61,9 +62,18 @@ const POLL_MS = 4000;
 // A terminal event is confirmed, not obeyed. Also coalesces the burst at the end
 // of a turn (step.ended + execution.succeeded + usage on some builds).
 const CONFIRM_MS = 250;
-// Consecutive probe failures after which the route is treated as unavailable on
-// this server, and terminal events are trusted on their own.
+// Consecutive *malformed* answers after which the route is treated as
+// unusable on this server. A 200 that isn't the documented shape is a build
+// mismatch, not a blip, so it is worth giving up on — unlike a network error.
 const PROBE_GIVE_UP = 3;
+// How long a run we started ourselves may be absent from GET /session/active
+// before the emptiness is believed. The POST that starts it can still be in
+// flight, and the server registers the loop when it admits the input, not when
+// we decided to send — settling on that window takes the composer back to a
+// send arrow and wipes the optimistic user message a moment before the run's
+// first event lands. Once the server has acknowledged the run even once (a
+// probe or any event for it), no grace is needed and this is not consulted.
+const START_GRACE_MS = 15000;
 
 // Every spelling of "the run stopped" seen or documented across builds. A
 // `step.ended` is conditional (see isRunEndEvent), so it isn't in here.
@@ -96,11 +106,15 @@ export function isRunEndEvent(type, props) {
 // Stop claiming a session's agent is mid-turn. Safe to call for any session:
 // the streaming flag and the transcript belong to the one on screen, the dot
 // belongs to all of them, and a sub-agent's card settles itself.
-export function settleRun(sessionID) {
+// `merge` is for a settle where the server may not yet hold everything on
+// screen — the stop button, which lands before the interrupted step has been
+// flushed. See refreshActiveMessages.
+export function settleRun(sessionID, { merge = false } = {}) {
   if (!sessionID) return;
   const rec = activityRecord(sessionID);
   const wasRunning = rec.running;
   rec.running = false;
+  rec.confirmed = false;
   rec.updatedAt = Date.now();
   // Anything admitted into a run that has stopped has either been promoted or
   // died with it — nothing is still waiting to be read.
@@ -120,7 +134,7 @@ export function settleRun(sessionID) {
     // Reconcile with server truth (drops optimistic artifacts, applies final
     // content). Only at the real end of the run — mid-loop this would race the
     // next step's stream.
-    refreshActiveMessages();
+    refreshActiveMessages({ merge });
     return;
   }
   // Green means "it finished while you were elsewhere".
@@ -129,28 +143,76 @@ export function settleRun(sessionID) {
 
 // --- Server truth ------------------------------------------------------------
 
-let probeFailures = 0;
+// Two very different reasons the probe can stop being worth making, kept apart
+// on purpose. Conflating them is what made a single bad minute permanent:
+//   · the route isn't on this build (404/405/501) or the build answers 200 with
+//     something that isn't the documented map — nothing will change that, give up
+//   · the server was unreachable, slow, or 5xx'd — the ONLY recovery a stalled
+//     run has, so it must survive and keep asking
+let routeUnusable = false;
+let malformedAnswers = 0;
+let probeOkAt = 0;
 
 function probeUsable() {
-  return probeFailures < PROBE_GIVE_UP;
+  return !routeUnusable;
+}
+
+// When the server last answered this probe. Proof of "the server is reachable
+// and talking to us" that is independent of the event stream, which is exactly
+// what tells stream.js a silent stream is the stream's own fault.
+export function lastRunProbeOkAt() {
+  return probeOkAt;
+}
+
+// Is any session believed to be mid-run right now?
+export function anyRunActive() {
+  return Object.values(opencodeStore.sessionActivity).some((rec) => rec.running);
 }
 
 // The stream coming back up is a fresh chance for a route that failed while the
 // server was unreachable.
 export function resetRunProbe() {
-  probeFailures = 0;
+  routeUnusable = false;
+  malformedAnswers = 0;
 }
 
 // GET /api/session/active -> {"ses_…": {"type": "running"}}, or null when the
-// question couldn't be asked (route missing, server down, bad payload).
+// question couldn't be asked. A null is "we don't know", never "nothing is
+// running" — the caller must not settle anything on it.
 async function fetchRunningSessions() {
-  const payload = await getJSON("/session/active");
-  const data = payload && (payload.data || payload);
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    probeFailures += 1;
+  let res;
+  try {
+    res = await apiGet("/session/active");
+  } catch {
+    return null; // network/proxy: transient by assumption, keep polling
+  }
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    routeUnusable = true; // this build doesn't have it
     return null;
   }
-  probeFailures = 0;
+  if (!res.ok) return null; // 5xx/401: transient, and the stream reports auth
+
+  let payload;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;
+  }
+  const data = payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+  // A 2xx that names nothing means nothing is running — including `data: null`,
+  // which must not be read as the payload itself or every key of the envelope
+  // becomes a session that is running forever.
+  if (data == null) {
+    probeOkAt = Date.now();
+    malformedAnswers = 0;
+    return {};
+  }
+  if (typeof data !== "object" || Array.isArray(data)) {
+    if ((malformedAnswers += 1) >= PROBE_GIVE_UP) routeUnusable = true;
+    return null;
+  }
+  probeOkAt = Date.now();
+  malformedAnswers = 0;
   return data;
 }
 
@@ -161,16 +223,23 @@ export async function reconcileRunState() {
   const running = await fetchRunningSessions();
   if (!running) return false;
 
+  const now = Date.now();
   for (const id of Object.keys(running)) {
     const rec = activityRecord(id);
     rec.running = true;
-    rec.updatedAt = Date.now();
+    rec.confirmed = true;
+    rec.updatedAt = now;
     // The server says this one is working: if it's the chat on screen, say so
     // even if we never saw the events that started it.
     if (id === opencodeStore.activeSessionId) opencodeStore.isStreaming = true;
   }
   for (const id of Object.keys(opencodeStore.sessionActivity)) {
-    if (opencodeStore.sessionActivity[id].running && !running[id]) settleRun(id);
+    const rec = opencodeStore.sessionActivity[id];
+    if (!rec.running || running[id]) continue;
+    // Absent from the server, but we started it so recently that the server may
+    // not have admitted it yet — see START_GRACE_MS.
+    if (!rec.confirmed && now - (rec.startedAt || 0) < START_GRACE_MS) continue;
+    settleRun(id);
   }
   return true;
 }
@@ -218,8 +287,4 @@ function startPolling() {
 // Self-driving: the poll runs exactly while something is believed to be running,
 // so a caller starting a turn (or an event arriving for one) needs to know
 // nothing about it.
-watch(
-  () => Object.values(opencodeStore.sessionActivity).some((rec) => rec.running),
-  (anyRunning) => (anyRunning ? startPolling() : stopPolling()),
-  { immediate: true }
-);
+watch(anyRunActive, (running) => (running ? startPolling() : stopPolling()), { immediate: true });

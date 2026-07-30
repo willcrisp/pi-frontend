@@ -35,7 +35,10 @@ const RUN_ACTIVE_EVENTS = new Set([
 export function activityRecord(sessionID) {
   let rec = opencodeStore.sessionActivity[sessionID];
   if (!rec) {
-    rec = { running: false, unread: false, updatedAt: 0 };
+    // `startedAt` / `confirmed` are run.js's: they separate "we believe this is
+    // running because we just sent it" from "the server has said so", which is
+    // what stops the run poll settling a turn the server hasn't admitted yet.
+    rec = { running: false, unread: false, updatedAt: 0, startedAt: 0, confirmed: false };
     opencodeStore.sessionActivity[sessionID] = rec;
   }
   return rec;
@@ -61,17 +64,23 @@ export function setUnread(sessionID, unread) {
 }
 
 // Mark a session as running from our own side, for the window between the
-// POST and the first event coming back.
-export function markRunning(sessionID) {
+// POST and the first event coming back. `confirmed` says whether the server is
+// the source of that belief — an event or a probe — because only then may its
+// absence from GET /session/active be read as "the run is over".
+export function markRunning(sessionID, confirmed = false) {
   if (!sessionID) return;
   const rec = activityRecord(sessionID);
+  if (!rec.running) rec.startedAt = Date.now();
   rec.running = true;
+  if (confirmed) rec.confirmed = true;
   rec.updatedAt = Date.now();
 }
 
 export function markStopped(sessionID) {
   if (!sessionID) return;
-  activityRecord(sessionID).running = false;
+  const rec = activityRecord(sessionID);
+  rec.running = false;
+  rec.confirmed = false;
 }
 
 // Fold one raw event into the activity map. Called for every event, BEFORE the
@@ -81,7 +90,8 @@ export function markStopped(sessionID) {
 // called from the same place.
 export function trackSessionActivity(type, sessionID) {
   if (!RUN_ACTIVE_EVENTS.has(type)) return;
-  markRunning(sessionID);
+  // An event for this session is the server saying the loop exists.
+  markRunning(sessionID, true);
   // Amber outranks green: a session that started working again has nothing
   // stale left to read.
   setUnread(sessionID, false);

@@ -3,7 +3,7 @@
 import { opencodeStore } from "./state.js";
 import { apiPost, errorMessage } from "../../lib/api.js";
 import { refreshActiveMessages } from "./messages.js";
-import { markStopped } from "./activity.js";
+import { settleRun } from "./run.js";
 
 // --- Revert ------------------------------------------------------------------
 // V2 has no session fork, and `revert/*` is the closest thing to "go back to
@@ -57,17 +57,27 @@ async function postRevert(sessionID, action, body) {
 // --- Other session actions ---------------------------------------------------
 
 // Interrupt active running execution (POST /api/session/:id/interrupt).
+//
+// Settles the run rather than just lowering the flags: stopping ends the turn,
+// so it owes the same reconciliation the natural end does — the transcript
+// refreshed against the server, and any admitted-but-unread steer dropped.
+// Without it, stop left whatever the stream had last delivered on screen, and
+// the answer only appeared on a page reload.
 export async function abortSession() {
   const sessionID = opencodeStore.activeSessionId;
   if (!sessionID) return;
 
+  // Immediately, so the composer responds to the click rather than to the
+  // round-trip; settleRun does it again for the rest of the state.
+  opencodeStore.isStreaming = false;
   try {
     await apiPost(`/session/${sessionID}/interrupt`);
   } catch (err) {
     console.error("Failed to interrupt session:", err);
   } finally {
-    opencodeStore.isStreaming = false;
-    markStopped(sessionID);
+    // Merged, not replaced: an interrupted step may never be flushed to the
+    // server, and the partial answer on screen is the only copy of it.
+    settleRun(sessionID, { merge: true });
   }
 }
 
