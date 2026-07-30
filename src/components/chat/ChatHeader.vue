@@ -23,8 +23,25 @@ import ModelFilterPopover from "../popovers/ModelFilterPopover.vue";
 import SshPopover from "../popovers/SshPopover.vue";
 import UsagePopover from "../popovers/UsagePopover.vue";
 import UsageDialog from "../dialogs/UsageDialog.vue";
+import WorkProfileDialog from "../dialogs/WorkProfileDialog.vue";
+import { activeProfile } from "../../stores/workprofile.js";
+import { categoryLabel } from "../../lib/workcategories.js";
 
 const showUsage = ref(false);
+const showProfile = ref(false);
+
+// What kind of work the chat on screen is, classified from the transcript
+// already in memory — no request, and it re-reads as the turn streams, so the
+// label moves while you work. `null` means the session is too new or too vague
+// to call, in which case the chip says so rather than picking a category at
+// random: a confident wrong label here is worse than an honest blank one.
+const work = computed(() => activeProfile());
+const workLabel = computed(() => (work.value?.top ? categoryLabel(work.value.top) : "profile"));
+const workTitle = computed(() => {
+  if (!work.value?.top) return "Work profile — what kind of work you've been doing";
+  const share = Math.round((work.value.scores[work.value.top] || 0) * 100);
+  return `This chat reads as ${categoryLabel(work.value.top).toLowerCase()} work (${share}%). Click for the whole profile.`;
+});
 
 // Title comes from the session record the server creates (auto-titled from the
 // first prompt), not a synthesised id label. Until that auto-title lands the
@@ -221,6 +238,26 @@ function scrollToRunningSubagent() {
         <span class="subagent-badge-dot"></span>
         {{ subagentBadge.count }} agent{{ subagentBadge.count === 1 ? "" : "s" }}
       </button>
+      <button
+        v-if="store.activeSessionId"
+        type="button"
+        class="work-chip"
+        :class="{ known: !!work?.top }"
+        :title="workTitle"
+        @click="showProfile = true"
+      >
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M8 1.5 14 5v6L8 14.5 2 11V5l6-3.5Z"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linejoin="round"
+          />
+          <path d="M8 4.5 11.5 6.5v3.5L8 12 4.5 10V6.5L8 4.5Z" fill="currentColor" opacity="0.45" />
+        </svg>
+        <span>{{ workLabel }}</span>
+      </button>
+      <WorkProfileDialog v-if="showProfile" @close="showProfile = false" />
       <UsagePopover class="header-usage" @open-usage="showUsage = true" />
       <UsageDialog v-if="showUsage" @close="showUsage = false" />
       <ModelFilterPopover />

@@ -218,6 +218,17 @@ A mock handover, written by test/mock-opencode.js.
 const PLAIN_REPLY = "Acknowledged.";
 const THINKING = "Let me check what was asked. It looks routine, so I will just answer it.";
 
+// The work-profile classifier (stores/workprofile.js) prompts a model and reads
+// JSON back out of the reply. Answering "Acknowledged." to it would exercise
+// only the give-up path, so the loop recognises the prompt — by the preamble in
+// lib/workcategories.js — and answers in the shape the real thing is asked for.
+//
+// Deliberately wrapped in a code fence: the prompt says not to, models do it
+// anyway, and parseClassifierReply is built to cope. A mock that always replies
+// perfectly would never have caught that.
+const CLASSIFIER_PREAMBLE = "You are a work classifier.";
+const CLASSIFIER_REPLY = '```json\n{"security": 70, "backend": 30}\n```';
+
 // --- The agent loop ----------------------------------------------------------
 //
 // Modelled on a real turn, captured from `opencode2 serve` 0.0.0-next-202606270058
@@ -277,7 +288,9 @@ function partIDs(kind, id) {
 let nextTime = 100;
 
 function replyFor(text) {
-  return /^Write a HANDOVER DOCUMENT/.test(text || "") ? HANDOVER_REPLY : PLAIN_REPLY;
+  if (/^Write a HANDOVER DOCUMENT/.test(text || "")) return HANDOVER_REPLY;
+  if ((text || "").startsWith(CLASSIFIER_PREAMBLE)) return CLASSIFIER_REPLY;
+  return PLAIN_REPLY;
 }
 
 // One step of the loop: think a little, answer, end the step.

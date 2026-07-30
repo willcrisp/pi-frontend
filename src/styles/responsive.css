@@ -55,6 +55,17 @@
     display: none;
   }
 
+  /* The work chip keeps its icon — that is the only way into the profile from
+     here — but loses its label, which is the widest thing in the header-right
+     group and the least load-bearing. */
+  .work-chip span {
+    display: none;
+  }
+
+  .work-chip {
+    padding: 2px 5px;
+  }
+
   header {
     padding: 10px 12px;
     gap: 8px;

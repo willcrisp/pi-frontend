@@ -4,6 +4,7 @@ import { connectToSession, opencodeStore, selectedModelRef } from "./opencode.js
 import { fetchBranches } from "./git.js";
 import { apiGet, apiPost, unwrap } from "../lib/api.js";
 import { readArray, writeJSON, readString, writeString } from "../lib/storage.js";
+import { CLASSIFIER_SESSION_KEY } from "../lib/workcategories.js";
 
 const LAST_SESSION_KEY = "opencode-web:lastSessionId";
 const ARCHIVED_KEY = "opencode-web:archivedProjects"; // string[] of directories
@@ -99,12 +100,19 @@ export function scheduleSessionsRefresh() {
   }, REFRESH_DEBOUNCE_MS);
 }
 
-// Sessions the user actually started. A session with a `parentID` is a
-// dispatched sub-agent: it belongs to its parent's transcript (as an expandable
-// card) and to the breadcrumb, never to the sidebar, where it would read as a
-// chat of its own and bury the real ones.
+// Sessions the user actually started. Two kinds are filtered out:
+//
+//   · a session with a `parentID` is a dispatched sub-agent — it belongs to its
+//     parent's transcript (as an expandable card) and to the breadcrumb, never
+//     to the sidebar, where it would read as a chat of its own and bury the
+//     real ones.
+//   · the work-profile classifier's session (stores/workprofile.js) is a
+//     machine's scratchpad, holding nothing but JSON asks and JSON answers. V2
+//     has no delete route, so it can never be cleared away — hiding it here is
+//     what keeps that from being the sidebar's problem forever.
 export function rootSessions() {
-  return projectsStore.sessions.filter((s) => !s.parentID);
+  const classifierID = readString(CLASSIFIER_SESSION_KEY);
+  return projectsStore.sessions.filter((s) => !s.parentID && s.id !== classifierID);
 }
 
 // The server's `parentID` is authoritative; the locally recorded link covers a

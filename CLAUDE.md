@@ -40,6 +40,7 @@ here rather than grepping the whole tree:
 | the `/handover` brief, or the chat it seeds | `stores/handover.js` |
 | TrueFoundry discovery, or the provider config written for it | `stores/providers.js` + `lib/truefoundry.js` — read `docs/truefoundry.md` first |
 | usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
+| what kind of work a session is (the radar, the header chip) | the taxonomy and its prompt are `lib/workcategories.js`, the tiers are `stores/workprofile.js` — read `docs/work-profile.md` first |
 | a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands
@@ -278,6 +279,14 @@ drawer, and whether that drawer is open — the breakpoint is shared with
   PAT read-through from `.env`. Read `docs/truefoundry.md` before changing any of
   it; the config keys OpenCode actually reads are not the obvious ones, and a
   wrong one fails silently.
+- `workprofile.js`: what KIND of work each session was — the radar in
+  `WorkProfileDialog.vue` and the header chip. Three tiers in ascending cost:
+  session titles (free), transcripts (a request each, and the files the tools
+  touched are the strongest signal there is), then a model for what those still
+  can't call (opt-in, costs tokens). The model pass runs in **one reused hidden
+  session**, because V2 has no delete and a scratch session per classification
+  could never be cleared away. `lib/workcategories.js` owns the taxonomy, the
+  match rules and the prompt; `docs/work-profile.md` is the design record.
 - `usage.js`: usage across sessions. Aggregated from the `cost`/`tokens` already
   on every `SessionV2.Info` — no extra request. `stores/opencode/context.js`
   still owns the *live* session's accounting; this is the historical view, and
@@ -345,6 +354,7 @@ Two traps worth knowing, both of which have bitten:
 | File | Use it for |
 |---|---|
 | `docs/opencode-api.md` | The API reference. Start here. |
+| `docs/work-profile.md` | The work-categorisation design: the eight categories, the three tiers that fill them in, the classifier session, and why the radar is scaled the way it is. Read before touching the taxonomy or the prompt. |
 | `docs/truefoundry.md` | TrueFoundry ground truth: gateway endpoints, the config shape OpenCode actually reads, PAT handling, claims marked [verified] vs [unverified]. Read before touching provider config or the TrueFoundry card. |
 | `docs/plan-truefoundry-usage.md` | Why the TrueFoundry and usage work is shaped the way it is, and what it corrected in the handover PDF that seeded it. |
 | `docs/subagents-alfuat.md` | Sub-agent ground truth for the real deployment target, claims marked [observed] vs [spec]. |
