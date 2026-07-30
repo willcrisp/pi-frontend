@@ -12,6 +12,9 @@
 //
 //   state.js      The reactive store itself. Imports no sibling, so anything
 //                 may read and write it without a cycle.
+//   errors.js     Reporting a turn's failure, and the one explanation worth
+//                 printing under it (a provider's credentials being rejected).
+//                 Imports state.js only, so it sits as high as anything needs.
 //   transport.js  POST /session/:id/prompt — delivery modes and the flat-vs-
 //                 wrapped body divergence between server builds.
 //   children.js   Linking a `subagent` tool call to the child session it
@@ -49,7 +52,8 @@ export { refreshSessionContext } from "./opencode/context.js";
 export { sessionStatus } from "./opencode/activity.js";
 export { pendingSteersFor, sendSteer } from "./opencode/steer.js";
 export { connectToSession, refreshActiveMessages } from "./opencode/messages.js";
-export { sendPrompt } from "./opencode/prompt.js";
+export { sendPrompt, retryLastPrompt } from "./opencode/prompt.js";
+export { errorHintFor } from "./opencode/errors.js";
 export {
   loadAgents,
   loadCommands,

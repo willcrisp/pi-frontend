@@ -26,6 +26,15 @@ export const opencodeStore = reactive({
   selectedAgent: "build",
   draft: "",
   error: null,
+  // An explanation for a turn's failure, as `{ message, hint }` — set only by
+  // errors.js#reportRunError and only when the failure was a provider
+  // credential rejection. Held with the message it explains so it can't outlive
+  // it; read it through errorHintFor(). See lib/autherror.js.
+  errorHint: null,
+  // The last prompt sent, as `{ sessionID, text, attachments }`, kept so a
+  // failed turn can be re-sent from the error banner. Overwritten by every
+  // send — see prompt.js#retryLastPrompt.
+  lastPrompt: null,
   // A staged (previewed, not yet committed) revert: { messageID } or null.
   // See session.js#stageRevert/commitRevert/clearRevert.
   revertStaged: null,

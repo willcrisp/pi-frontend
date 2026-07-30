@@ -36,6 +36,7 @@ here rather than grepping the whole tree:
 | a component's appearance | its partial in `src/styles/`, or its `<style scoped>` |
 | composer input, attachments, or the `/` and `@` menus | the matching `use*` in `src/composables/` |
 | what the sidebar dot shows | `stores/opencode/activity.js` |
+| what the error banner says a failure means | `lib/autherror.js` (the classifier), `stores/opencode/errors.js` (the reporter) |
 | sub-agent card behaviour | `stores/opencode/children.js` + `components/chat/SubagentView.vue` |
 | the `/handover` brief, or the chat it seeds | `stores/handover.js` |
 | a persisted preference | the owning store, via `lib/storage.js` |
@@ -179,6 +180,7 @@ each other, the shared part belongs lower down):
 | Module | Owns |
 |---|---|
 | `state.js` | the `reactive()` store; imports no sibling, so anything may use it |
+| `errors.js` | reporting a turn's failure, and explaining the credential-rejection case |
 | `transport.js` | `POST /session/:id/prompt` — delivery modes, flat-vs-wrapped body |
 | `children.js` | linking a `subagent` call to the child session it dispatched |
 | `models.js` | model + reasoning-effort selection and its persistence |

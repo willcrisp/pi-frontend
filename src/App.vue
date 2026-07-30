@@ -5,8 +5,15 @@
   unreachable server.
 -->
 <script setup>
-import { onMounted, ref } from "vue";
-import { opencodeStore, initOpenCode, commitRevert, clearRevert } from "./stores/opencode.js";
+import { computed, onMounted, ref } from "vue";
+import {
+  opencodeStore,
+  initOpenCode,
+  commitRevert,
+  clearRevert,
+  errorHintFor,
+  retryLastPrompt,
+} from "./stores/opencode.js";
 import { initProjects } from "./stores/projects.js";
 import { connectionStore, testConnection } from "./stores/ssh.js";
 import { permissionStore } from "./stores/permission.js";
@@ -28,6 +35,25 @@ import HandoverDialog from "./components/dialogs/HandoverDialog.vue";
 import { handoverStore } from "./stores/handover.js";
 
 const showProviders = ref(false);
+
+// An expired provider token reads as a bare "invalid auth header" from the
+// model provider, which says nothing about what to do. When the error on screen
+// is one of those, print the cause under it — see lib/autherror.js.
+const errorHint = computed(() => errorHintFor(opencodeStore.error));
+// Retrying is only honest while the failed prompt is still the one in hand and
+// nothing else is in flight.
+const canRetry = computed(
+  () =>
+    Boolean(errorHint.value) &&
+    Boolean(opencodeStore.lastPrompt) &&
+    opencodeStore.lastPrompt.sessionID === opencodeStore.activeSessionId &&
+    !opencodeStore.isStreaming
+);
+
+function dismissError() {
+  opencodeStore.error = null;
+  opencodeStore.errorHint = null;
+}
 
 async function boot() {
   connectionStore.status = "connecting";
@@ -82,8 +108,12 @@ onMounted(() => {
       <div v-if="opencodeStore.error" class="process-error-banner">
         <span class="process-error-text">
           {{ opencodeStore.error }}
+          <span v-if="errorHint" class="process-error-hint">{{ errorHint }}</span>
         </span>
-        <button type="button" class="process-error-dismiss" title="Dismiss" @click="opencodeStore.error = null">×</button>
+        <button v-if="canRetry" type="button" class="process-error-retry" @click="retryLastPrompt">
+          Retry
+        </button>
+        <button type="button" class="process-error-dismiss" title="Dismiss" @click="dismissError">×</button>
       </div>
       <!-- A staged revert is a preview: the transcript below already reflects
            it, but nothing is permanent until committed. Both exits stay on

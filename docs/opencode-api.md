@@ -398,3 +398,12 @@ You are a strict PR reviewer…
   `data.question`/`data.options` yields `undefined` and silently renders an
   empty dialog.
 - **Auth is basic and out-of-band.** The OpenAPI declares `security: []` on every op, but a request without the `Authorization: Basic ...` header returns 401. Password comes from `opencode2 service password`.
+- **A provider's credentials expire inside a running server, and nothing here
+  renews them.** GitHub Copilot is the one this bites: OpenCode exchanges the
+  GitHub OAuth token for a Copilot API token that lives ~30 minutes and caches
+  it, so a `opencode2 serve` that has been up longer starts failing prompts with
+  "invalid auth header" — while the same prompt from a fresh `opencode` process,
+  which performs the exchange again, works. There is no route above that forces
+  a re-exchange (the integration surface only *adds* credentials) and config
+  isn't hot-reloaded, so the fix is server-side: restart it. The frontend
+  recognises the failure and says so — `lib/autherror.js`.

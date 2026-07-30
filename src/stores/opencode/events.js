@@ -58,6 +58,7 @@ import { persistSelection, resolveVariant } from "./models.js";
 import { trackSessionActivity } from "./activity.js";
 import { resolveSteer } from "./steer.js";
 import { applyUsageUpdate, scheduleContextRefresh, updateSessionStats } from "./context.js";
+import { reportRunError } from "./errors.js";
 import { findOrCreateMessage, recomputeText, toolContentText } from "./messages.js";
 import { isRunEndEvent, runMayHaveEnded } from "./run.js";
 import { loadModels } from "./catalog.js";
@@ -165,7 +166,7 @@ const failRun = (readMessage) => ({ props, child }) => {
     child.endedAt = Date.now();
     return;
   }
-  opencodeStore.error = message;
+  reportRunError(message);
 };
 
 const ignore = () => {};

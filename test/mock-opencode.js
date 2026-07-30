@@ -197,6 +197,11 @@ const DEFAULT_CONTROL = {
   // mid-run, or a build with a lifecycle we don't know): the loop drains but
   // emits no step.ended, so only the run-state poll can settle it.
   dropTerminalEvents: false,
+  // A turn that dies on the model provider instead of answering: the step
+  // starts, then `session.error` carries the provider's own complaint and the
+  // loop stops. Set to the message to fail with, e.g. an expired GitHub Copilot
+  // token's "invalid auth header" — see test/auth-error.spec.js.
+  failWith: null,
   stepMs: 30,
 };
 
@@ -255,6 +260,16 @@ async function runStep(sessionID, text) {
 
   const base = { sessionID, assistantMessageID };
   emit(ev("step.started"), { ...base, agent: "build", model: { providerID: "acme", id: "sol-1" } });
+
+  // Failed before it said anything. The user message stays — it really was
+  // accepted — but the assistant entry recorded above is dropped again: a turn
+  // the provider rejected never produced one.
+  if (control.failWith) {
+    await sleep(control.stepMs);
+    list.pop();
+    emit("session.error", { sessionID, error: { name: "ProviderError", data: { message: control.failWith } } });
+    return;
+  }
 
   const reasoning = { ...base, ...partIDs("reasoning", 0) };
   emit(ev("reasoning.started"), reasoning);

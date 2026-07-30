@@ -10,6 +10,7 @@
 // which is what the composer's steer button reports.
 import { opencodeStore } from "./state.js";
 import { postPrompt, promptWithFiles } from "./transport.js";
+import { reportRunError } from "./errors.js";
 import { errorMessage } from "../../lib/api.js";
 
 let steerSeq = 0;
@@ -52,7 +53,7 @@ export async function sendSteer(text, files, delivery = "steer") {
     return true;
   } catch (err) {
     dropSteer(entry.id);
-    opencodeStore.error = err.message;
+    reportRunError(err.message);
     console.error("Error steering session:", err);
     return false;
   }

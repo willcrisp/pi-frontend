@@ -21,6 +21,31 @@
   word-break: break-word;
 }
 
+/* The explanation under a provider-credential failure: same banner, quieter,
+   so the server's own words stay the headline. */
+.process-error-hint {
+  display: block;
+  margin-top: 4px;
+  opacity: 0.75;
+}
+
+.process-error-retry {
+  flex-shrink: 0;
+  align-self: center;
+  background: none;
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  color: var(--error);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.process-error-retry:hover {
+  background: rgba(247, 118, 142, 0.18);
+}
+
 .process-error-dismiss {
   flex-shrink: 0;
   background: none;

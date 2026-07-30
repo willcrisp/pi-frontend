@@ -9,6 +9,7 @@ import { opencodeStore } from "./state.js";
 import { postPrompt, promptWithFiles } from "./transport.js";
 import { appendLocalUserMessage } from "./messages.js";
 import { markRunning, markStopped } from "./activity.js";
+import { reportRunError } from "./errors.js";
 import { errorMessage } from "../../lib/api.js";
 
 // `files` are composer attachments (paste/drop/picker), each `{ filename, mime,
@@ -21,6 +22,9 @@ export async function sendPrompt(text, files) {
   const sessionID = opencodeStore.activeSessionId;
 
   opencodeStore.draft = "";
+  // Kept for retryLastPrompt: a turn that dies on a provider's expired token
+  // fails through no fault of the prompt, and retyping it is pure friction.
+  opencodeStore.lastPrompt = { sessionID, text: promptText, attachments };
   appendLocalUserMessage(promptText, attachments);
   opencodeStore.isStreaming = true;
   markRunning(sessionID);
@@ -34,7 +38,23 @@ export async function sendPrompt(text, files) {
   } catch (err) {
     opencodeStore.isStreaming = false;
     markStopped(sessionID);
-    opencodeStore.error = err.message;
+    reportRunError(err.message);
     console.error("Error sending prompt to opencode:", err);
   }
+}
+
+// Re-send the last prompt. Offered by the error banner when a turn failed on
+// something a second attempt can clear — a provider token the server has since
+// renewed being the case it was built for.
+//
+// The user message from the failed attempt stays in the transcript: it really
+// was sent, and the server kept it. This adds a second one, which is what
+// sending it again honestly looks like.
+export async function retryLastPrompt() {
+  const last = opencodeStore.lastPrompt;
+  if (!last || opencodeStore.isStreaming) return;
+  if (last.sessionID !== opencodeStore.activeSessionId) return;
+  opencodeStore.error = null;
+  opencodeStore.errorHint = null;
+  await sendPrompt(last.text, last.attachments);
 }
