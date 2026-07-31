@@ -41,7 +41,8 @@ here rather than grepping the whole tree:
 | TrueFoundry discovery, or the provider config written for it | `stores/providers.js` + `lib/truefoundry.js` — read `docs/truefoundry.md` first |
 | usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
 | what kind of work a session is (the radar, the header chip) | the taxonomy and its prompt are `lib/workcategories.js`, the tiers are `stores/workprofile.js` — read `docs/work-profile.md` first |
-| how a project's creature evolves, branches or looks | `lib/creature.js` is the whole genome (pure); `stores/creatures.js` only assembles its input — read `docs/creatures.md` first |
+| how a project's creature evolves or branches | `lib/creature.js` is the genome (pure); `stores/creatures.js` only assembles its input — read `docs/creatures.md` first |
+| what a creature LOOKS like — bodies, horns, eyes, palettes | `lib/creatureparts.js`, the parts library. ⚠️ every choice table is exactly `VARIANTS_PER_BRANCH` long; appending to one re-indexes every existing creature |
 | a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands
@@ -293,8 +294,12 @@ drawer, and whether that drawer is open — the breakpoint is shared with
   is **derived, never stored**: re-computed from the session list every time, for
   zero requests, so there is no creature state to lose or migrate. Only the
   *timing* of an evolution is logged, being the one fact the session list can't
-  reproduce. `lib/creature.js` is pure and holds all of it; `docs/creatures.md`
-  is the design record.
+  reproduce. The pipeline is one-way and each seam is its own file — the genome
+  (`lib/creature.js`, pure) names a part per slot, the parts library
+  (`lib/creatureparts.js`) turns those names into voxels, and `lib/voxel.js`
+  projects them isometrically and culls the faces you can't see. Replacing the
+  placeholder art means editing the parts library and nothing else.
+  `docs/creatures.md` is the design record.
 - `usage.js`: usage across sessions. Aggregated from the `cost`/`tokens` already
   on every `SessionV2.Info` — no extra request. `stores/opencode/context.js`
   still owns the *live* session's accounting; this is the historical view, and

@@ -86,8 +86,9 @@ test("the same history always draws the same creature", async ({ page }) => {
   await expect(again.locator(".mg-name")).toHaveText(name);
   expect(await again.locator(".mg-portrait svg").innerHTML()).toBe(before);
   // And it is not an empty box: a deterministic nothing would also pass the
-  // comparison above.
-  expect(await again.locator(".mg-portrait svg rect").count()).toBeGreaterThan(20);
+  // comparison above. Faces, not cubes — lib/voxel.js culls every face that has
+  // a neighbour, so this is the count of what is actually visible.
+  expect(await again.locator(".mg-portrait svg polygon").count()).toBeGreaterThan(20);
 });
 
 test("every project gets its own animal", async ({ page }) => {
@@ -98,4 +99,8 @@ test("every project gets its own animal", async ({ page }) => {
   expect(await rows.count()).toBe(4);
   await expect(rows.first()).toContainText("atlas");
   expect(await dialog.locator(".mg-row svg").count()).toBe(4);
+
+  // Each is composited from the named parts its rolls chose, not drawn from a
+  // fixed sheet — the whole point of the parts library.
+  await expect(dialog.locator(".mg-parts")).toBeVisible();
 });

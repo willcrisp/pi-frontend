@@ -8,10 +8,20 @@ This is the design record. The code is:
 
 | Piece | File |
 |---|---|
-| the genome: stages, branches, rolls, names, sprite | `src/lib/creature.js` (pure) |
-| assembling a project's history into that input | `src/stores/creatures.js` |
-| the sprite renderer | `src/components/chat/CreatureSprite.vue` |
+| the genome: stages, branches, rolls, names, which part fills each slot | `src/lib/creature.js` (pure) |
+| **the art**: bodies, appendages, eyes, patterns, palettes, composition | `src/lib/creatureparts.js` |
+| isometric projection, face culling, shading | `src/lib/voxel.js` (generic) |
+| assembling a project's history into the genome's input | `src/stores/creatures.js` |
+| the renderer | `src/components/chat/CreatureSprite.vue` |
 | the menagerie | `src/components/dialogs/MenagerieDialog.vue` |
+
+The pipeline runs strictly one way, and the seams are where they are so that
+**replacing the placeholder art touches one file**:
+
+```
+genome  →  part names   →  voxel volume    →  culled faces  →  SVG
+creature.js  creatureparts.js   voxel.js       CreatureSprite.vue
+```
 
 It sits directly on top of the work profile (`docs/work-profile.md`): the profile
 answers "what kind of work was this session", and a creature is that answer
@@ -100,18 +110,67 @@ history can therefore be *corrected*. This is deliberate: the alternative is
 freezing a lineage against the weakest evidence the profile ever had — a
 title-only guess — forever. Better profile, truer animal.
 
-## The sprite
+## The art: a parts library, not a sprite sheet
 
-Deterministic 16×16, mirrored down the spine, drawn as SVG rects so one genome
-renders crisply at 14px in the header and 96px in the menagerie. Body size grows
-with the stage (the most legible signal that something evolved, before any detail
-is looked at); limbs appear at stage 2, crests at 3, a tail at 4; hue comes from
-the current branch and is decoration only — every creature is captioned with its
-type in words.
+**You never generate 46,656 creatures.** That is the size of the reachable space,
+not an asset count — and it is the *small* number: at stage 5 it is tens of
+millions, so anything costing one artifact per creature loses that race however
+cheap the artifact is. Composition costs one artifact per **part**, and the parts
+don't multiply when the tree does.
 
-The art is crude on purpose. It has to satisfy exactly two things: the same
-genome always draws the same body, and two lineages are visibly different animals
-rather than the same blob in another colour.
+So: **33 authored parts**, composited per genome.
+
+| Slot | Parts | Unlocks at | Chosen by |
+|---|---|---|---|
+| body plan × 4 size tiers | 16 | stage 1 | structure roll, stage 1 |
+| eyes | 4 | stage 1 | surface roll, stage 1 |
+| limbs | 4 | stage 2 | structure roll, stage 2 |
+| pattern | 4 | stage 2 | surface roll, stage 2 |
+| crest | 4 | stage 3 | structure roll, stage 3 |
+| tail | 4 | stage 4 | structure roll, stage 4 |
+| crown (replaces the crest) | 4 | stage 5 | structure roll, stage 5 |
+
+Each evolution rolls **twice** — once for structure, once for surface. With a
+single roll per stage a creature's eyes were a function of its body: four bodies
+meant four faces, and the library lost three quarters of the variety it was
+carrying.
+
+Bodies are stacks of 9×9 ASCII layers, read bottom-up, editable in any text
+editor without tooling. Appendages are short `[x, y, z]` offset lists anchored to
+the body's bounding box, so one horn fits every body tier instead of needing a
+copy per size. Eyes and patterns only *recolour* voxels that already exist, so
+neither can leave a feature floating in space.
+
+### The trap: choice tables are exactly `VARIANTS_PER_BRANCH` long
+
+A slot is filled with `TABLE[roll]`. Appending a fifth horn to a four-entry table
+re-indexes **every creature that already exists** — everyone's pet quietly
+changes. To grow the library: replace an entry (an art change, same creature), or
+add a whole slot reading a roll nothing else uses (existing creatures unchanged).
+Anything else means bumping `RENDER_VERSION` and accepting the redraw.
+
+### Rendering
+
+Isometric voxels: `sx = (x - z)·2`, `sy = (x + z) - 2y`, so exactly three faces of
+any cube can face the camera and the rest are culled before they are ever built —
+a solid creature comes out around 150 polygons. One authored colour per palette
+slot becomes three shades (top lit, +z mid, +x dark), which is what reads as
+volume. Every vertex lands on a whole unit, so with `shape-rendering: crispEdges`
+the cube edges stay hard at 16px in the header and 96px in the menagerie, from the
+same geometry.
+
+Two rules the placeholder art had to learn the hard way, both worth keeping:
+
+- **Count layers against the widest layer.** The first bodies were three layers
+  over a seven-wide footprint. Isometric compresses height and exaggerates
+  footprint, so they rendered as paving slabs.
+- **Eyes stand one cube proud, and pale.** Recolouring a surface cube dark shows
+  all three of its faces at once and reads as a *hole punched through the
+  creature*. Standing out gives an eye its own silhouette.
+
+The art is crude on purpose; the pipeline is the deliverable. It has to satisfy
+two things: the same genome always draws the same animal, and two lineages are
+visibly different creatures rather than the same blob in another colour.
 
 ## What is deliberately absent
 

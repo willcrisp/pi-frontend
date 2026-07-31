@@ -16,17 +16,30 @@
 //                              creature *during that stage* is the branch it
 //                              took — so the lineage is a record of what you
 //                              were doing while it grew, in order.
-//   LUCK decides the VARIANT.  A seeded roll per stage, plus a rare morph.
+//   LUCK decides the PARTS.    Two seeded rolls per stage — one for structure,
+//                              one for surface — plus a rare morph.
 //
 // A creature is therefore a PATH, not a node: `frontend → testing → security` is
 // a different animal from `security → testing → frontend`, and both are
-// different from `frontend → testing → frontend`. With nine branch options
-// (eight categories plus `mixed`) and four variants per link, stage 3 alone has
-// 9³ × 4³ = 46,656 forms before the morph roll, and the tree keeps branching to
-// stage 5. Hundreds was the ask; the arithmetic overshoots it on purpose,
-// because the interesting property is that TWO PEOPLE DOING THE SAME WORK GET
-// THE SAME LINEAGE — the rarity has to mean something or it is just noise.
+// different from `frontend → testing → frontend`. Nine branch options (eight
+// categories plus `mixed`) times the part slots each stage unlocks puts an Elder
+// at roughly 27 million forms — and none of them is a stored asset: they are
+// composited from 33 authored parts (lib/creatureparts.js) at render time.
+//
+// Overshooting the ask is not the point. The interesting property is the
+// opposite one: TWO PEOPLE DOING THE SAME WORK IN THE SAME ORDER GET THE SAME
+// LINEAGE. Rarity has to be earned or it is just noise.
 import { CATEGORIES, CATEGORY_IDS, categoryLabel, dominant } from "./workcategories.js";
+import {
+  BODY_PLANS,
+  CREST_KEYS,
+  CROWN_KEYS,
+  EYE_KEYS,
+  LIMB_KEYS,
+  PATTERN_KEYS,
+  TAIL_KEYS,
+  tierForStage,
+} from "./creatureparts.js";
 
 // --- Determinism -------------------------------------------------------------
 
@@ -100,21 +113,6 @@ export function branchLabel(branch) {
   return branch === MIXED_BRANCH ? "Mixed" : categoryLabel(branch);
 }
 
-// Hue per branch, for the sprite only. This is decoration, not data encoding —
-// every creature is captioned with its type in words, so nothing here is the
-// sole carrier of meaning.
-const BRANCH_HUE = {
-  frontend: 213,
-  backend: 145,
-  data: 41,
-  infra: 190,
-  security: 353,
-  testing: 275,
-  docs: 225,
-  tooling: 25,
-  [MIXED_BRANCH]: 300,
-};
-
 // Which branch a set of aggregated scores took.
 export function branchOf(scores) {
   const top = dominant(scores);
@@ -127,7 +125,17 @@ export function branchOf(scores) {
 // Body-plan variants per branch. Four is enough that two people on the same
 // lineage usually differ, and few enough that a variant stays recognisable as a
 // variant rather than a different species.
+//
+// ⚠️ Every choice table in creatureparts.js is exactly this long, because a slot
+// is picked with `TABLE[roll]`. Changing this number, or the length of any of
+// those tables, re-indexes every creature that already exists.
 export const VARIANTS_PER_BRANCH = 4;
+
+// Each evolution rolls TWICE — see the loop in deriveGenome: one roll for
+// structure (body plan, limbs, crest, tail) and one for surface (eyes,
+// pattern). A single roll per stage made a creature's eyes a function of its
+// body: four bodies meant four faces, and the parts library collapsed to a
+// quarter of the variety it was carrying.
 
 // Rare cosmetic morphs, rolled once per evolution. The weights are the point:
 // at ~1 in 11 per evolution, most creatures never get one, which is what makes
@@ -198,7 +206,8 @@ const CODA = ["", "a", "us", "ix"];
 // creature unique.
 function nameFor(lineage, variants) {
   if (!lineage.length) return "Unhatched";
-  const roll = hashSeed(`name:${lineage.map((l) => l.branch).join(">")}:${variants.join(",")}`);
+  const vector = variants.map((v) => `${v.variant}${v.decal}`).join(",");
+  const roll = hashSeed(`name:${lineage.map((l) => l.branch).join(">")}:${vector}`);
   const stem = STEMS[lineage[0].branch] || "Var";
   const tail = TAILS[lineage[lineage.length - 1].branch] || "oid";
   const infix = lineage.length > 1 ? INFIX[roll % INFIX.length] : "";
@@ -239,6 +248,51 @@ function traitsFor(input) {
   return traits;
 }
 
+// --- Parts selection ---------------------------------------------------------
+//
+// Which part fills each slot. This is genome logic — deterministic indexing off
+// the rolls — while what those parts LOOK like is creatureparts.js. The seam
+// matters: replacing the placeholder art touches that file and not this one.
+//
+// Slots unlock with the stage, so an evolution always adds something visible:
+//
+//   stage 1  body plan + eyes          the animal exists
+//   stage 2  limbs + pattern           it can move, and it has markings
+//   stage 3  crest, and a bigger body
+//   stage 4  tail, and a bigger body again
+//   stage 5  the crest is replaced by a crown
+//
+// Each slot reads a DIFFERENT roll, so the features are independent: a creature
+// whose body you recognise still surprises you at the horns.
+function partsFor(lineage, rolls, stage) {
+  if (!lineage.length) return null;
+  const roll = (index, key) => (rolls[index] ? rolls[index][key] : 0);
+  const crowned = stage >= MAX_STAGE;
+
+  return {
+    body: BODY_PLANS[roll(0, "variant") % BODY_PLANS.length],
+    tier: tierForStage(stage),
+    eyes: EYE_KEYS[roll(0, "decal") % EYE_KEYS.length],
+    limbs: stage >= 2 ? LIMB_KEYS[roll(1, "variant") % LIMB_KEYS.length] : null,
+    pattern: stage >= 2 ? PATTERN_KEYS[roll(1, "decal") % PATTERN_KEYS.length] : "none",
+    crest: crowned
+      ? CROWN_KEYS[roll(4, "variant") % CROWN_KEYS.length]
+      : stage >= 3
+        ? CREST_KEYS[roll(2, "variant") % CREST_KEYS.length]
+        : null,
+    crownSlot: crowned,
+    tail: stage >= 4 ? TAIL_KEYS[roll(3, "variant") % TAIL_KEYS.length] : null,
+  };
+}
+
+// How many of the six slots are actually filled at a stage — the exponent in the
+// "one shape in N" figure, so that number counts forms you could actually meet
+// rather than combinations of features that don't exist yet.
+function filledSlots(stage) {
+  if (stage <= 0) return 0;
+  return 2 + (stage >= 2 ? 2 : 0) + (stage >= 3 ? 1 : 0) + (stage >= 4 ? 1 : 0);
+}
+
 // --- The genome ---------------------------------------------------------------
 
 // Derive a creature.
@@ -276,7 +330,10 @@ export function deriveGenome(input) {
   for (let i = 0; i < current.stage; i++) {
     const window = input.windows[i] || { tokens: 0, scores: null };
     const branch = window.scores ? branchOf(window.scores) : MIXED_BRANCH;
-    const variant = Math.floor(next() * VARIANTS_PER_BRANCH);
+    const roll = {
+      variant: Math.floor(next() * VARIANTS_PER_BRANCH),
+      decal: Math.floor(next() * VARIANTS_PER_BRANCH),
+    };
     const rolled = rollMorph(next);
     // The newest morph wins, so a late mutation is visible rather than being
     // masked by one from three stages ago.
@@ -285,11 +342,11 @@ export function deriveGenome(input) {
       stage: i + 1,
       label: STAGES[i + 1].label,
       branch,
-      variant,
+      variant: roll.variant,
       tokens: window.tokens || 0,
       at: STAGES[i + 1].at,
     });
-    variants.push(variant);
+    variants.push(roll);
   }
 
   const nextStage = STAGES[current.stage + 1] || null;
@@ -312,9 +369,10 @@ export function deriveGenome(input) {
     variants,
     morph,
     path: lineage.map((l) => l.branch).join(" › "),
-    pathKey: lineage.map((l) => `${l.branch}${l.variant}`).join(">"),
+    pathKey: variants.map((v, i) => `${lineage[i].branch}${v.variant}${v.decal}`).join(">"),
     type: lineage.length ? lineage[lineage.length - 1].branch : null,
     name: nameFor(lineage, variants),
+    parts: partsFor(lineage, variants, current.stage),
     tokens,
     traits: traitsFor({
       tokens,
@@ -342,139 +400,14 @@ export function deriveGenome(input) {
           })),
         }
       : null,
-    // How many forms exist at this depth. Shown, not just computed: "one of
-    // 46,656" is the sentence that makes a lineage feel worth keeping.
-    space: Math.pow(BRANCH_IDS.length * VARIANTS_PER_BRANCH, current.stage),
+    // How many forms exist at this depth: every lineage that could reach it,
+    // times every combination of the part slots that are unlocked. Shown, not
+    // just computed — "one shape in 26 million" is the sentence that makes a
+    // lineage feel worth keeping.
+    space:
+      Math.pow(BRANCH_IDS.length, current.stage) *
+      Math.pow(VARIANTS_PER_BRANCH, filledSlots(current.stage)),
   };
-}
-
-// --- The sprite ---------------------------------------------------------------
-//
-// A deterministic 16×16 pixel creature, mirrored down the middle. The art is
-// crude on purpose — the ask was the evolution system, not the pixels — but it
-// has to satisfy two things to be worth drawing at all: the same genome must
-// always produce the same body, and two different lineages must be visibly
-// different animals rather than the same blob in another colour.
-export const SPRITE_SIZE = 16;
-
-// Palette slots the grid indexes into. Kept as indices rather than colours so a
-// caller can restyle without regenerating.
-export const PIXEL = { EMPTY: 0, BODY: 1, ACCENT: 2, EYE: 3, SHELL: 4 };
-
-export function spriteFor(genome) {
-  const grid = new Uint8Array(SPRITE_SIZE * SPRITE_SIZE);
-  const set = (x, y, value) => {
-    if (x < 0 || y < 0 || x >= SPRITE_SIZE || y >= SPRITE_SIZE) return;
-    grid[y * SPRITE_SIZE + x] = value;
-    // Mirror. A creature symmetrical about its spine reads as an animal; the
-    // same generator without this reads as static.
-    grid[y * SPRITE_SIZE + (SPRITE_SIZE - 1 - x)] = value;
-  };
-
-  if (!genome.lineage.length) return { grid, egg: true, palette: paletteFor(genome) };
-
-  const next = rng(hashSeed(`${genome.originID}::${genome.pathKey}::sprite`));
-  const stage = genome.stage;
-
-  // The body grows with the stage — the single most legible signal that
-  // something evolved, before any of the detail is even looked at.
-  const height = Math.min(4 + stage * 2, 13);
-  const width = Math.min(2 + stage, 7);
-  const top = Math.max(1, Math.floor((SPRITE_SIZE - height) / 2));
-  const midY = top + height / 2;
-
-  for (let y = top; y < top + height; y++) {
-    for (let x = SPRITE_SIZE / 2 - width; x < SPRITE_SIZE / 2; x++) {
-      const nx = (SPRITE_SIZE / 2 - x) / width;
-      const ny = Math.abs(y - midY) / (height / 2);
-      const r = Math.sqrt(nx * nx * 0.85 + ny * ny);
-      // A hard ellipse is a pill; the noise term is what gives each variant its
-      // own silhouette.
-      if (r < 0.72 + next() * 0.45) set(x, y, PIXEL.BODY);
-    }
-  }
-
-  // Appendages: limbs from stage 2, horns/crests from stage 3, a tail from 4.
-  // Each is rolled from the same stream, so a creature's fifth-stage crest is
-  // fixed the moment its lineage is.
-  const limbs = Math.max(0, stage - 1);
-  for (let i = 0; i < limbs; i++) {
-    const y = top + 1 + Math.floor(next() * (height - 2));
-    const reach = 1 + Math.floor(next() * 2);
-    for (let d = 1; d <= reach; d++) set(SPRITE_SIZE / 2 - width - d, y, PIXEL.ACCENT);
-  }
-  if (stage >= 3) {
-    const spikes = 1 + Math.floor(next() * 2);
-    for (let i = 0; i < spikes; i++) {
-      const x = SPRITE_SIZE / 2 - 1 - Math.floor(next() * width);
-      set(x, top - 1, PIXEL.ACCENT);
-    }
-  }
-  if (stage >= 4) {
-    const y = top + height;
-    set(SPRITE_SIZE / 2 - 1, y, PIXEL.ACCENT);
-    set(SPRITE_SIZE / 2 - 2, y, PIXEL.ACCENT);
-  }
-
-  // Eyes last, so nothing overwrites them. Placed in the upper third of the
-  // body and forced on even where the body pixel is missing — a creature
-  // without eyes stops being a creature.
-  const eyeY = Math.round(top + height * 0.32);
-  const eyeX = SPRITE_SIZE / 2 - Math.max(1, Math.min(width - 1, 2));
-  set(eyeX, eyeY, PIXEL.EYE);
-
-  return { grid, egg: false, palette: paletteFor(genome) };
-}
-
-// The egg has its own body, and cracks as it approaches hatching — the one bit
-// of state a stage-0 creature has to show, and the reason not to draw it as an
-// empty box.
-export function eggSprite(progress) {
-  const grid = new Uint8Array(SPRITE_SIZE * SPRITE_SIZE);
-  const set = (x, y, v) => {
-    grid[y * SPRITE_SIZE + x] = v;
-    grid[y * SPRITE_SIZE + (SPRITE_SIZE - 1 - x)] = v;
-  };
-  const top = 3;
-  const height = 10;
-  const width = 5;
-  for (let y = top; y < top + height; y++) {
-    for (let x = SPRITE_SIZE / 2 - width; x < SPRITE_SIZE / 2; x++) {
-      const nx = (SPRITE_SIZE / 2 - x) / width;
-      // Egg-shaped: narrower at the top than the bottom.
-      const taper = 0.72 + 0.28 * ((y - top) / height);
-      const ny = Math.abs(y - (top + height / 2)) / (height / 2);
-      if (Math.sqrt(nx * nx * 0.8 + ny * ny) < taper) set(x, y, PIXEL.SHELL);
-    }
-  }
-  if (progress > 0.5) {
-    set(SPRITE_SIZE / 2 - 1, top + 4, PIXEL.EMPTY);
-    set(SPRITE_SIZE / 2 - 2, top + 5, PIXEL.EMPTY);
-  }
-  if (progress > 0.8) {
-    set(SPRITE_SIZE / 2 - 3, top + 6, PIXEL.EMPTY);
-    set(SPRITE_SIZE / 2 - 1, top + 7, PIXEL.EMPTY);
-  }
-  return { grid, egg: true, palette: paletteFor({ type: null, morph: null }) };
-}
-
-function paletteFor(genome) {
-  const hue = BRANCH_HUE[genome.type] ?? 210;
-  const morph = genome.morph?.id;
-
-  if (morph === "pale") {
-    return ["transparent", `hsl(${hue} 22% 78%)`, `hsl(${hue} 30% 88%)`, "#10141a", "#6b7480"];
-  }
-  if (morph === "shadow") {
-    return ["transparent", `hsl(${hue} 32% 26%)`, `hsl(${hue} 60% 46%)`, "#e8ecf2", "#6b7480"];
-  }
-  if (morph === "gilded") {
-    return ["transparent", `hsl(${hue} 45% 52%)`, "#e8c26a", "#10141a", "#6b7480"];
-  }
-  if (morph === "prismatic") {
-    return ["transparent", `hsl(${hue} 62% 58%)`, `hsl(${(hue + 140) % 360} 62% 58%)`, "#10141a", "#6b7480"];
-  }
-  return ["transparent", `hsl(${hue} 48% 55%)`, `hsl(${hue} 62% 70%)`, "#10141a", "#6b7480"];
 }
 
 // A genome for a lineage truncated to `stage`, so the dialog can show what the
@@ -482,15 +415,19 @@ function paletteFor(genome) {
 // which is exactly what a real past is.
 export function genomeAtStage(genome, stage) {
   const lineage = genome.lineage.slice(0, stage);
+  const variants = genome.variants.slice(0, stage);
   return {
     ...genome,
     stage,
     stageLabel: STAGES[stage]?.label || genome.stageLabel,
     lineage,
-    variants: genome.variants.slice(0, stage),
-    pathKey: lineage.map((l) => `${l.branch}${l.variant}`).join(">"),
+    variants,
+    pathKey: variants.map((v, i) => `${lineage[i].branch}${v.variant}${v.decal}`).join(">"),
     type: lineage.length ? lineage[lineage.length - 1].branch : null,
-    name: nameFor(lineage, genome.variants),
+    name: nameFor(lineage, variants),
+    // Re-selected, not inherited: at a smaller stage it had fewer slots filled
+    // and a smaller body, which is the point of drawing the past at all.
+    parts: partsFor(lineage, variants, stage),
   };
 }
 

@@ -69,6 +69,17 @@ function percent(v) {
   return `${Math.round((v || 0) * 100)}%`;
 }
 
+// Which part filled each slot. Worth showing: it is the difference between "your
+// pet looks like that" and "your pet looks like that BECAUSE of these rolls",
+// and it makes two creatures with the same lineage comparable at a glance.
+const partsLabel = computed(() => {
+  const p = creature.value.parts;
+  if (!p) return "";
+  return [p.body, p.eyes, p.limbs, p.crest, p.tail, p.pattern !== "none" ? p.pattern : null]
+    .filter(Boolean)
+    .join(" · ");
+});
+
 function ago(ts) {
   if (!ts) return "";
   const days = Math.floor((Date.now() - ts) / 86_400_000);
@@ -120,6 +131,7 @@ const { onBackdrop } = useDialogEscape(() => emit("close"));
           <span class="mg-sub">{{ formatTokens(creature.tokens) }} tokens · {{ creature.sessionCount }}
             session{{ creature.sessionCount === 1 ? "" : "s" }}</span>
           <span v-if="creature.path" class="mg-path">{{ creature.path }}</span>
+          <span v-if="partsLabel" class="mg-sub mg-parts">{{ partsLabel }}</span>
           <span v-if="creature.stage" class="mg-rarity">
             one shape in {{ creature.space.toLocaleString() }} at this depth
           </span>
@@ -261,6 +273,11 @@ const { onBackdrop } = useDialogEscape(() => emit("close"));
 
 .mg-path {
   color: var(--fg);
+}
+
+.mg-parts {
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .mg-morph {
