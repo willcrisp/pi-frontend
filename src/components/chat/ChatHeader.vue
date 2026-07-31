@@ -24,11 +24,15 @@ import SshPopover from "../popovers/SshPopover.vue";
 import UsagePopover from "../popovers/UsagePopover.vue";
 import UsageDialog from "../dialogs/UsageDialog.vue";
 import WorkProfileDialog from "../dialogs/WorkProfileDialog.vue";
+import MenagerieDialog from "../dialogs/MenagerieDialog.vue";
+import CreatureSprite from "./CreatureSprite.vue";
 import { activeProfile } from "../../stores/workprofile.js";
+import { activeCreature, formatTokens } from "../../stores/creatures.js";
 import { categoryLabel } from "../../lib/workcategories.js";
 
 const showUsage = ref(false);
 const showProfile = ref(false);
+const showMenagerie = ref(false);
 
 // What kind of work the chat on screen is, classified from the transcript
 // already in memory — no request, and it re-reads as the turn streams, so the
@@ -109,6 +113,18 @@ const titleText = computed(() =>
 );
 
 const directory = computed(() => activeSessionDirectory());
+
+// This project's creature, re-derived from the session list (no request, no
+// stored state — see stores/creatures.js). It changes when the list refreshes
+// after a turn, which is exactly when its tokens moved.
+const creature = computed(() => activeCreature(directory.value));
+const creatureTitle = computed(() => {
+  const c = creature.value;
+  const next = c.next
+    ? `${formatTokens(c.next.remaining)} tokens to ${c.next.label}, branching ${c.next.leading}`
+    : "fully grown";
+  return `${c.name} · ${c.stageLabel} · ${next}`;
+});
 const git = computed(() => (directory.value ? gitStore.byDirectory[directory.value] : null));
 const branchOpen = ref(false);
 
@@ -258,6 +274,29 @@ function scrollToRunningSubagent() {
         <span>{{ workLabel }}</span>
       </button>
       <WorkProfileDialog v-if="showProfile" @close="showProfile = false" />
+
+      <button
+        v-if="store.activeSessionId"
+        type="button"
+        class="creature-chip"
+        :title="creatureTitle"
+        aria-label="Menagerie"
+        @click="showMenagerie = true"
+      >
+        <CreatureSprite
+          :genome="creature"
+          :size="16"
+          :progress="creature.next ? creature.next.progress : 0"
+        />
+      </button>
+      <MenagerieDialog
+        v-if="showMenagerie"
+        @close="showMenagerie = false"
+        @open-profile="
+          showMenagerie = false;
+          showProfile = true;
+        "
+      />
       <UsagePopover class="header-usage" @open-usage="showUsage = true" />
       <UsageDialog v-if="showUsage" @close="showUsage = false" />
       <ModelFilterPopover />

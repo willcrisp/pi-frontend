@@ -240,3 +240,26 @@ header .wordmark {
   border-color: #2c3540;
   color: var(--fg);
 }
+
+/* The creature chip: this project's pet, at 16px, and the way into the
+   menagerie. Same reason as .work-chip for living here rather than in a scoped
+   block — responsive.css shrinks it, and a scoped selector would out-specify
+   the media query. */
+.creature-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.creature-chip:hover {
+  border-color: #2c3540;
+  background: var(--bg-raised);
+}

@@ -41,6 +41,7 @@ here rather than grepping the whole tree:
 | TrueFoundry discovery, or the provider config written for it | `stores/providers.js` + `lib/truefoundry.js` — read `docs/truefoundry.md` first |
 | usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
 | what kind of work a session is (the radar, the header chip) | the taxonomy and its prompt are `lib/workcategories.js`, the tiers are `stores/workprofile.js` — read `docs/work-profile.md` first |
+| how a project's creature evolves, branches or looks | `lib/creature.js` is the whole genome (pure); `stores/creatures.js` only assembles its input — read `docs/creatures.md` first |
 | a persisted preference | the owning store, via `lib/storage.js` |
 
 ## Development Commands
@@ -287,6 +288,13 @@ drawer, and whether that drawer is open — the breakpoint is shared with
   session**, because V2 has no delete and a scratch session per classification
   could never be cleared away. `lib/workcategories.js` owns the taxonomy, the
   match rules and the prompt; `docs/work-profile.md` is the design record.
+- `creatures.js`: a pixel creature per project — tokens decide its stage, the
+  work profile decides each branch it took, a seeded roll decides its body. It
+  is **derived, never stored**: re-computed from the session list every time, for
+  zero requests, so there is no creature state to lose or migrate. Only the
+  *timing* of an evolution is logged, being the one fact the session list can't
+  reproduce. `lib/creature.js` is pure and holds all of it; `docs/creatures.md`
+  is the design record.
 - `usage.js`: usage across sessions. Aggregated from the `cost`/`tokens` already
   on every `SessionV2.Info` — no extra request. `stores/opencode/context.js`
   still owns the *live* session's accounting; this is the historical view, and
@@ -355,6 +363,7 @@ Two traps worth knowing, both of which have bitten:
 |---|---|
 | `docs/opencode-api.md` | The API reference. Start here. |
 | `docs/work-profile.md` | The work-categorisation design: the eight categories, the three tiers that fill them in, the classifier session, and why the radar is scaled the way it is. Read before touching the taxonomy or the prompt. |
+| `docs/creatures.md` | The creature system: stage thresholds, how branches are chosen (and why a session spanning one is split), the seeded rolls, and why nothing is persisted. Read before changing the genome. |
 | `docs/truefoundry.md` | TrueFoundry ground truth: gateway endpoints, the config shape OpenCode actually reads, PAT handling, claims marked [verified] vs [unverified]. Read before touching provider config or the TrueFoundry card. |
 | `docs/plan-truefoundry-usage.md` | Why the TrueFoundry and usage work is shaped the way it is, and what it corrected in the handover PDF that seeded it. |
 | `docs/subagents-alfuat.md` | Sub-agent ground truth for the real deployment target, claims marked [observed] vs [spec]. |

@@ -78,6 +78,52 @@ const EXTRA_SESSIONS = [
   },
 }));
 
+// A project with enough tokens on it to actually evolve a creature, added only
+// when a test asks for it via /api/mock/control {creatureHistory: true}.
+//
+// The order and the sizes are the fixture: the creature's stage comes from the
+// running token total, and each branch comes from the work that fed the stage it
+// was in. So these are laid out to grow one deliberate lineage —
+//
+//   0 →  25k   frontend   two small UI sessions
+//   25k → 150k security   the credential audit
+//   150k → 750k data      the schema work
+//   750k → 3m  testing    a long fight with the suite
+//   3m →       docs       what it is eating now, so the NEXT branch is docs
+//
+// — which is the assertion in test/creatures.spec.js. Titles are chosen to be
+// callable by the free title pass, since these sessions have no transcript.
+const CREATURE_DIR = "/home/user/atlas";
+const CREATURE_SESSIONS = [
+  ["Rebuild the settings UI component", 12_000, 30],
+  ["Restyle the dashboard layout", 16_000, 29],
+  ["Audit the leaked credentials", 40_000, 27],
+  ["Harden the session cookie", 45_000, 26],
+  ["Encrypt the stored secrets", 40_000, 25],
+  ["Add the migration for the events schema", 200_000, 22],
+  ["Index the analytics queries", 220_000, 21],
+  ["Backfill the warehouse dataset", 200_000, 20],
+  ["Chase the flaky spec suite", 600_000, 16],
+  ["Add coverage for the parser tests", 700_000, 15],
+  ["Fix the fixture teardown in the e2e specs", 500_000, 14],
+  ["Stabilise the assertion helpers", 500_000, 13],
+  ["Write the release notes", 100_000, 8],
+  ["Document the handover guide", 90_000, 7],
+].map(([title, total, daysAgo], i) => ({
+  id: `ses_crt${i + 1}`,
+  title,
+  time: { created: NOW - (daysAgo + 1) * DAY, updated: NOW - daysAgo * DAY },
+  location: { directory: CREATURE_DIR },
+  cost: total / 400_000,
+  // Cache-heavy, the way a real long session is — which is also what earns the
+  // "Efficient" trait, so the trait row has something in it.
+  tokens: {
+    input: Math.round(total * 0.25),
+    output: Math.round(total * 0.05),
+    cache: { read: Math.round(total * 0.65), write: Math.round(total * 0.05) },
+  },
+}));
+
 // Two models so the picker has something to rank and colour: MODEL_RANK puts
 // "sol" above "luna", and only Sol carries variants.
 const MODELS = [
@@ -156,6 +202,10 @@ const seed = {
   // Adds EXTRA_SESSIONS to the session list, so the usage view has a history
   // worth charting. Off by default: specs count the sidebar's rows.
   richHistory: false,
+  // Adds CREATURE_SESSIONS — a project with millions of tokens on it, which is
+  // what a creature needs to be past its first stage. Same reasoning: off by
+  // default so it doesn't move every other spec's counts.
+  creatureHistory: false,
 };
 
 function resetCreatedSessions() {
@@ -421,7 +471,13 @@ const server = http.createServer((req, res) => {
   if (url === "/api/session")
     return req.method === "POST"
       ? createSession(res)
-      : json(res, { data: seed.richHistory ? [...SESSIONS, ...EXTRA_SESSIONS] : SESSIONS });
+      : json(res, {
+          data: [
+            ...SESSIONS,
+            ...(seed.richHistory ? EXTRA_SESSIONS : []),
+            ...(seed.creatureHistory ? CREATURE_SESSIONS : []),
+          ],
+        });
   // The run-state probe: every session whose agent loop is running right now.
   // "Sessions absent from the result are inactive" — this is what tells the
   // frontend a turn is over, since no event does. See stores/opencode/run.js.
@@ -458,8 +514,9 @@ const server = http.createServer((req, res) => {
     return readBody(req).then((body) => {
       // Seed keys are routed to `seed`, which survives a stream reconnect;
       // everything else is stream behaviour and lives in `control`.
-      const { richHistory, ...rest } = body;
+      const { richHistory, creatureHistory, ...rest } = body;
       if (richHistory !== undefined) seed.richHistory = richHistory;
+      if (creatureHistory !== undefined) seed.creatureHistory = creatureHistory;
       Object.assign(control, rest);
       json(res, { data: { ...control, ...seed } });
     });
