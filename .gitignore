@@ -5,3 +5,9 @@ dist/
 # Playwright run output (see playwright.config.js)
 test-results/
 playwright-report/
+
+# Local env. `.env.example` is deliberately NOT matched — it is the documentation
+# of what these files may contain, and is meant to be committed.
+.env
+.env.local
+.env.*.local
