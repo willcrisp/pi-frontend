@@ -64,7 +64,7 @@ function scopeDirs(projectDirectory) {
 }
 
 // Canonical directory a newly saved definition is written to.
-export function writeDirFor(scope, projectDirectory) {
+function writeDirFor(scope, projectDirectory) {
   if (scope === "project") {
     const root = (projectDirectory || "").replace(/\/+$/, "");
     return root ? `${root}/${PROJECT_DIR}` : "";
@@ -109,7 +109,7 @@ function quoteScalar(value) {
 }
 
 // Split "---\n…\n---\n<body>" into frontmatter entries and body.
-export function parseAgentFile(text) {
+function parseAgentFile(text) {
   const normalized = (text || "").replace(/\r\n/g, "\n");
   const match = normalized.match(/^---[ \t]*\n([\s\S]*?)\n?---[ \t]*(?:\n([\s\S]*))?$/);
   if (!match) {
@@ -181,7 +181,7 @@ function parseTools(entries) {
 
 // Rebuild a file from a definition, preserving every frontmatter key this
 // editor doesn't manage (in its original position).
-export function serializeAgentFile(def) {
+function serializeAgentFile(def) {
   const managed = {
     description: def.description ? def.description.replace(/\s*\n\s*/g, " ").trim() : "",
     mode: "subagent",
@@ -370,7 +370,7 @@ async function refresh() {
 
 // --- Live roster join --------------------------------------------------------
 
-export function rosterEntry(id) {
+function rosterEntry(id) {
   return opencodeStore.subagentRoster.find((a) => (a.id || a.name) === id) || null;
 }
 

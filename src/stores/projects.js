@@ -109,14 +109,10 @@ export function rootSessions() {
 
 // The server's `parentID` is authoritative; the locally recorded link covers a
 // child too new to be in the session list yet.
-export function parentSessionId(sessionID) {
+function parentSessionId(sessionID) {
   if (!sessionID) return "";
   const session = projectsStore.sessions.find((s) => s.id === sessionID);
   return session?.parentID || projectsStore.subagentParents[sessionID] || "";
-}
-
-export function isSubagentSession(sessionID) {
-  return !!parentSessionId(sessionID);
 }
 
 // Ancestor chain for the breadcrumb, outermost session first. Walks the parent

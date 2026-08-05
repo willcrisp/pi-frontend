@@ -15,6 +15,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const props = defineProps({
   // The `.messages` element to search within (a plain DOM node, not a Vue
@@ -168,13 +169,12 @@ watch(messagesSignature, () => {
   debounceTimer = setTimeout(() => runSearch(true), 150);
 });
 
+// Enter only. Escape reaches the shared stack by bubbling to its window
+// listener, which closes the bar whether or not the input has focus.
 function onInputKeydown(e) {
   if (e.key === "Enter") {
     e.preventDefault();
     step(e.shiftKey ? -1 : 1);
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    closeBar();
   }
 }
 
@@ -193,9 +193,6 @@ function onGlobalKey(e) {
     } else {
       openBar();
     }
-  } else if (open.value && e.key === "Escape") {
-    e.preventDefault();
-    closeBar();
   }
 }
 
@@ -205,6 +202,10 @@ onBeforeUnmount(() => {
   clearTimeout(debounceTimer);
   clearHighlights();
 });
+
+// Mounted permanently to own Ctrl/Cmd+Shift+F, so `open` is what makes the bar
+// the surface an Escape belongs to.
+useDialogEscape(() => closeBar(), { open });
 </script>
 
 <template>

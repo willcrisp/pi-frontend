@@ -80,14 +80,15 @@ First run on a fresh machine needs a browser: `npx playwright install chromium`.
 Where a sandbox or CI image already ships a Chromium that doesn't match this
 package's build number, point at it instead — `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium npm test`.
 
-Ten specs, ~67 tests. The core is `src/composables/` — the composer's autosize,
-attachments, the `/` and `@` menus, and the model picker (`composer.spec.js`,
-`mentions.spec.js`) — because that is the most stateful UI in the repo. Around it:
-the run lifecycle (`run-lifecycle.spec.js`), the thinking quote
-(`thinking.spec.js`), transcript rendering (`transcript.spec.js`, the largest at
-16), the permission gate (`permission.spec.js`), providers and TrueFoundry
-(`providers.spec.js`), usage totals (`usage.spec.js`), the handover brief
-(`handover.spec.js`), and `.env` parsing (`dotenv.spec.js`).
+Eleven specs, ~72 tests. The core is `src/composables/` — the composer's
+autosize, attachments, the `/` and `@` menus, and the model picker
+(`composer.spec.js`, `mentions.spec.js`) — because that is the most stateful UI in
+the repo. Around it: the run lifecycle (`run-lifecycle.spec.js`), the thinking
+quote (`thinking.spec.js`), transcript rendering (`transcript.spec.js`, the
+largest at 16), the permission gate (`permission.spec.js`), the shared Escape
+contract (`escape.spec.js`), providers and TrueFoundry (`providers.spec.js`),
+usage totals (`usage.spec.js`), the handover brief (`handover.spec.js`), and
+`.env` parsing (`dotenv.spec.js`).
 
 Still a smoke suite, not a regression net for everything — `QuestionDialog`, the
 sidebar and the sub-agent dialogs have no coverage:
@@ -276,6 +277,15 @@ than `opencodeStore.messages` so a child's transcript lands on the child.
   only lists what the server knew at startup, so a command file added since it
   booted is real on disk and invisible to that route.
 
+- `mcp.js`: MCP server *names*, from `GET /mcp`, so `MessageView` can recognise a
+  `<server>_<tool>` call and strip the prefix. Loaded at boot and on each stream
+  reconnect (config is read at server startup, so a reconnect is the cue it may
+  have changed). Failure and a 404 both mean "no servers" with no error raised —
+  it only decides how a tool call is labelled. `McpDialog` fetches the route
+  itself rather than reading this, because it needs the per-server status and a
+  404 told apart from a failure. The name list was a literal in `MessageView`
+  (`["serena"]`), which worked for exactly one install.
+
 **Client-only UI state** — `theme.js` (color profile, font sizes, content width,
 applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
 `filepreview.js`, `shortcuts.js` (whether the shortcut reference is open), and
@@ -298,6 +308,12 @@ cards, the thinking quote, find bar), `components/dialogs/` (connect, permission
 question, sub-agents, providers, command palette), `components/popovers/`,
 `components/sidebar/`.
 
+`ProvidersDialog.vue` is the integrations list only; the TrueFoundry setup flow
+is `TrueFoundryCard.vue` beside it, and `docs/truefoundry.md` is required reading
+before touching it. The two shared a file until every TrueFoundry symbol in it
+carried a hand-written `tf` prefix to keep them apart — if you find yourself
+prefixing to namespace within a component, that is the signal it should be two.
+
 A reasoning part renders as `ThinkingBlock.vue`: collapsed to its newest line
 while it streams, its opening line once it's finished, and the whole thing on a
 click. Left fully expanded it buried the answer; hidden, there was no way to tell
@@ -311,11 +327,27 @@ shortcuts), and `useListMenu` — the keyboard behaviour the two autocomplete
 menus share. `Composer.vue` is wiring plus the template.
 
 `useDialogEscape` lives here too but isn't the composer's: it is the
-Escape/backdrop close contract every modal is supposed to honour, and a new
-dialog gets it by calling one function. Read its header before adding a dialog —
-four of them used to have no key listener at all while the shortcuts reference
-advertised Escape, and two more put `@keydown.escape` on a non-focusable
-backdrop `<div>`, which worked only by luck of focus.
+Escape/backdrop close contract every dismissible surface honours — 20 of them,
+dialogs and popovers and the sidebar drawer alike. **Anything that closes on
+Escape must register here**, and a new one gets the behaviour by calling one
+function. Read its header before adding a dialog.
+
+Two rules that are not obvious:
+
+- **Pass `open` if the component stays mounted while closed** (the palette owns
+  Ctrl+K, so it has to keep listening). The stack is ordered by *when a surface
+  opened*, and only a passed `open` can tell it that; a dialog mounted under a
+  `v-if` by its parent can leave it alone. Getting this wrong makes a permanently
+  mounted component permanently top-of-stack, swallowing Escape app-wide.
+- **Don't hand-roll a `window` keydown for Escape.** There is one shared listener
+  precisely so two surfaces can't act on one press — that bug rejected a
+  permission ask with the same press that closed the dialog under it. If a
+  component owns other keys (number keys, Ctrl+K, `?`), keep that listener and
+  check `e.defaultPrevented` in it.
+
+Anything else that wants Escape asks `escapeIsOwned()` rather than inspecting the
+DOM — `Composer.vue`'s Escape-to-interrupt is the one caller, and it is
+deliberately the lowest-priority claim on the key.
 
 Composables return refs; **destructure them at the top of `<script setup>`** so
 the template auto-unwraps (`attachments`, not `files.attachments.value`).
@@ -334,6 +366,20 @@ global rules with many equal-specificity selectors, so ties resolve by source
 order. Edit the partial that owns the component; a genuinely new component gets
 a new partial imported at the *end* of the list. Self-contained components are
 better off with a `<style scoped>` block, which wins over all of it.
+
+`styles/modal.css` is the exception to "named after the component it styles": it
+is the shared dialog chrome (`.connect-backdrop` / `-panel` / `-head` / `-close` /
+`-error` / `-filter` / `-hint` / `-secondary` / `-actions`) that eleven dialogs
+build on, so no single component owns it. Pair it with `useDialogEscape()` and a
+new dialog gets the app's look and its close contract without writing either. It
+was `connect-dialog.css` until `ConnectDialog.vue` moved to `<style scoped>` and
+stopped using any of it — the `.connect-` prefix survives because that is what
+eleven components already say in their markup.
+
+**When a component moves to `<style scoped>`, delete the rules it left behind.**
+That move stranded 16 unused selectors in the old partial, and a file named after
+a component that no longer used it; both went unnoticed for months because
+nothing errors on dead CSS.
 
 `styles/responsive.css` is the narrow-window behaviour of the shell (sidebar
 drawer, header, composer) and **must stay the last import** — it overrides the

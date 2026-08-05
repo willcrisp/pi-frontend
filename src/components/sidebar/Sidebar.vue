@@ -27,6 +27,7 @@ import {
 import { listDirectories } from "../../stores/filesearch.js";
 import { confirmDialog } from "../../stores/confirm.js";
 import { closeSidebar, closeSidebarIfDrawer, layoutStore } from "../../stores/layout.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
 import SubagentsDialog from "../dialogs/SubagentsDialog.vue";
 import SavedPermissionsDialog from "../dialogs/SavedPermissionsDialog.vue";
@@ -191,6 +192,9 @@ function onPathKeydown(e) {
       pickSuggestion(picked);
     }
   } else if (e.key === "Escape") {
+    // Claim the key so the shared Escape stack doesn't also close the drawer
+    // this input sits in (see composables/useDialogEscape.js).
+    e.preventDefault();
     showSuggestions.value = false;
   }
 }
@@ -227,6 +231,14 @@ async function newSessionIn(directory) {
     // surfaced in console; keep the sidebar quiet for per-group creates
   }
 }
+
+// The narrow-layout drawer is a dismissible surface like any other. It had no
+// Escape handling — it appeared in the composer's old ESCAPE_OWNERS list purely
+// to stop the key interrupting the run behind it. Docked (wide) the sidebar
+// isn't dismissible, so it only registers as open while it's a drawer.
+useDialogEscape(closeSidebar, {
+  open: () => layoutStore.narrow && layoutStore.sidebarOpen,
+});
 </script>
 
 <template>

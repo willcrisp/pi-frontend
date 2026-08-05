@@ -19,7 +19,7 @@ const SESSION_MODEL_KEY = "oc.sessionModels";
 // models that don't offer "low" fall back to their first variant.
 const DEFAULT_VARIANT = "low";
 
-export function modelInfo(model) {
+function modelInfo(model) {
   if (!model) return null;
   return (
     opencodeStore.availableModels.find(

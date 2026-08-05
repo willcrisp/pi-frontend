@@ -30,6 +30,7 @@ import { useFileMentions } from "../../composables/useFileMentions.js";
 import { useSlashCommands } from "../../composables/useSlashCommands.js";
 import { useModelPicker } from "../../composables/useModelPicker.js";
 import { listMenuKeydown } from "../../composables/useListMenu.js";
+import { escapeIsOwned } from "../../composables/useDialogEscape.js";
 import D20Die from "./D20Die.vue";
 import SelectMenu from "./SelectMenu.vue";
 import SteerButton from "./SteerButton.vue";
@@ -151,35 +152,25 @@ function onKeydown(e) {
   }
 }
 
-// Every surface that owns Escape ahead of the run: each closes on Escape itself,
-// so interrupting as well would do two things with one key.
-//
-// Each selector must match ONLY while that surface is open. `.select-panel` and
-// `.ssh-popover-panel.open` are the open states of the model/agent selects and
-// the connection popover — their wrappers (`.select-menu`, `.ssh-trigger-wrap`)
-// are in the DOM permanently, and matching one of those silently disabled this
-// shortcut altogether.
-const ESCAPE_OWNERS = [
-  ".connect-backdrop", // every dialog
-  ".palette-backdrop", // CommandPalette
-  ".shortcuts-backdrop", // ShortcutsDialog
-  ".find-bar", // v-if'd
-  ".select-panel", // an open SelectMenu, not its trigger
-  ".ssh-popover-panel.open",
-  ".colors-popover-panel.open",
-  ".model-filter-menu", // v-if'd
-  ".sidebar.open", // the narrow-layout drawer
-].join(", ");
-
 // Esc interrupts the run. Stopping an agent was mouse-only, which is an odd gap
 // in an app that ships a shortcuts dialog — but Escape is contended, so this is
 // deliberately the lowest-priority claim on it: it fires only when nothing else
 // on screen would have used the key.
+//
+// `escapeIsOwned()` is that check. It used to be a hand-maintained list of nine
+// CSS selectors queried against the DOM, which meant every new dialog needed an
+// edit here to avoid stopping the agent by accident — and each selector had to
+// match ONLY while its surface was open, a distinction that had already been got
+// wrong once (`.select-menu` matches the composer's permanently-mounted trigger;
+// `.select-panel` is the open menu), silently disabling this shortcut altogether.
+// Dismissible surfaces now register themselves, so asking the stack is both
+// correct and self-maintaining. The composer's own two menus aren't in it —
+// they're local state, checked directly.
 function onGlobalKeydown(e) {
   if (e.key !== "Escape" || e.defaultPrevented) return;
   if (!store.isStreaming || store.interrupting) return;
   if (mentionOpen.value || slashOpen.value) return;
-  if (document.querySelector(ESCAPE_OWNERS)) return;
+  if (escapeIsOwned()) return;
   abortSession();
 }
 

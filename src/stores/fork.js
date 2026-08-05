@@ -53,7 +53,7 @@ function transcript(messages) {
   return blocks.join("\n\n");
 }
 
-export function forkPromptText(priorMessages, promptText) {
+function forkPromptText(priorMessages, promptText) {
   const context = transcript(priorMessages);
   if (!context) return promptText;
   return [

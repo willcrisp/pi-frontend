@@ -27,6 +27,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { permissionStore, respond } from "../../stores/permission.js";
 import { opencodeStore } from "../../stores/opencode.js";
 import { projectsStore } from "../../stores/projects.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const current = computed(() => permissionStore.queue[0] || null);
 const waiting = computed(() => permissionStore.queue.length);
@@ -70,16 +71,10 @@ function respondCurrent(reply) {
   respond(current.value.id, reply);
 }
 
-// 1/2/3 mirror the button order, Escape denies (the only safe direction for a
-// stray keypress — it can never grant anything). Enter is left to the focused
-// button, which is "Allow once".
+// 1/2/3 mirror the button order. Enter is left to the focused button, which is
+// "Allow once".
 function onKeydown(e) {
-  if (!current.value) return;
-  if (e.key === "Escape") {
-    e.preventDefault();
-    respondCurrent("reject");
-    return;
-  }
+  if (!current.value || e.defaultPrevented) return;
   const byNumber = { 1: "once", 2: "always", 3: "reject" }[e.key];
   if (byNumber) {
     e.preventDefault();
@@ -89,6 +84,14 @@ function onKeydown(e) {
 
 onMounted(() => window.addEventListener("keydown", onKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+
+// Escape denies — the only safe direction for a stray keypress, since it can
+// never grant anything. Through the shared stack, not a listener of its own:
+// this modal is mounted on top of whatever was already open, and a hand-rolled
+// listener meant one press both denied the request and closed the dialog under
+// it. No backdrop handler is taken; a gating decision shouldn't be made by a
+// click that misses the panel.
+useDialogEscape(() => respondCurrent("reject"));
 
 // Focus the least-consequential affirmative, so a reflexive Enter grants once
 // rather than forever. Re-run per request: answering one advances the queue to

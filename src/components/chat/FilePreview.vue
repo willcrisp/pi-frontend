@@ -5,20 +5,18 @@
 -->
 <script setup>
 import { previewStore, closePreview } from "../../stores/filepreview.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
-function onKeydown(e) {
-  if (e.key === "Escape") closePreview();
-}
+// This used to be `@keydown` on the backdrop <div> with `tabindex="-1"`, which
+// only worked while something inside happened to hold focus — clicking the
+// backdrop once killed it. Mounted permanently, so `open` decides.
+const { onBackdrop } = useDialogEscape(() => closePreview(), {
+  open: () => previewStore.open,
+});
 </script>
 
 <template>
-  <div
-    v-if="previewStore.open"
-    class="connect-backdrop"
-    tabindex="-1"
-    @keydown="onKeydown"
-    @mousedown="(e) => e.target === e.currentTarget && closePreview()"
-  >
+  <div v-if="previewStore.open" class="connect-backdrop" @mousedown="onBackdrop">
     <div class="connect-panel file-preview-panel">
       <div class="connect-head">
         <span class="file-preview-path" :title="previewStore.path">{{ previewStore.path }}</span>

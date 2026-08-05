@@ -22,6 +22,7 @@ import { collapseRows, editDiffInfo, lineDiff } from "../../lib/diff.js";
 import { isSubagentPart, opencodeStore as store, stageRevert } from "../../stores/opencode.js";
 import { filePathFromToolInput, openPreview } from "../../stores/filepreview.js";
 import { handoverForMessage, isHandoverRequest } from "../../stores/handover.js";
+import { mcpServerOf } from "../../stores/mcp.js";
 import SubagentView from "./SubagentView.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import QuestionPart from "./QuestionPart.vue";
@@ -170,15 +171,14 @@ function webSearchSources(part) {
 }
 
 // MCP tool calls are named `<server>_<tool>` by the server (e.g.
-// `serena_find_referencing_symbols`), so the prefix identifies which MCP
-// server a call came from. Listed servers get a per-server accent colour (see
-// styles/tool-calls.css) so they stand out from built-in tools at a glance.
-const MCP_SERVERS = ["serena"];
-function mcpServerOf(toolName) {
-  if (!toolName) return null;
-  for (const s of MCP_SERVERS) if (toolName.startsWith(s + "_")) return s;
-  return null;
-}
+// `serena_find_referencing_symbols`), so the prefix identifies which MCP server
+// a call came from — and the display name drops it, since the card already says
+// which server. Which prefixes are servers comes from stores/mcp.js (`GET /mcp`)
+// rather than a literal here: this list was `["serena"]` hardcoded, so the
+// stripping and the accent worked for exactly one install.
+//
+// A server with a `tool-mcp-<name>` rule in styles/tool-calls.css also gets an
+// accent colour; the rest just get their prefix tidied.
 function mcpToolClass(part) {
   const s = mcpServerOf(part.tool);
   return s ? `tool-mcp-${s}` : "";

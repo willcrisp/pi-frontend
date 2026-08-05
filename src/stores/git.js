@@ -75,7 +75,3 @@ export function fetchBranches(directory) {
       state.error = err.message || "git branch failed";
     });
 }
-
-export function gitStateFor(directory) {
-  return entry(directory);
-}

@@ -1,0 +1,103 @@
+/* --- Shared modal chrome ------------------------------------------------- *
+ *
+ * The backdrop, panel, header, close button and the few text/field helpers that
+ * every dialog in the app is built from — eleven components at last count
+ * (Confirm, FilePreview, Handover, ImageAnnotator, Mcp, Permission, Providers,
+ * Question, SavedPermissions, Subagents, Usage). Pair it with
+ * `useDialogEscape()` and a dialog gets the app's look and its close contract
+ * without writing either.
+ *
+ * These rules were `styles/connect-dialog.css`, named for the one dialog that no
+ * longer uses them: ConnectDialog.vue moved to `<style scoped>` with its own
+ * `.connect-screen`/`.connect-card` and left this behind as the de facto shared
+ * base. Nothing owned it, so `confirm-dialog.css` opened with a comment
+ * explaining that it borrows from "the connect-model dialog above" — a note
+ * describing the workaround rather than the rule. The `.connect-` prefix is kept
+ * because it is what eleven components already say in their markup; the file
+ * name is what changed.
+ *
+ * Ordering note (see style.css): this is imported where connect-dialog.css was,
+ * so the cascade is unchanged. It must stay ahead of the per-dialog partials
+ * that override it.
+ */
+
+.connect-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.connect-panel {
+  width: 460px;
+  max-width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.connect-close {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  padding: 2px 6px;
+  font-size: 13px;
+}
+
+.connect-close:hover {
+  color: var(--fg);
+}
+
+.connect-error {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.connect-filter {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.connect-filter:focus {
+  border-color: #2c3540;
+}
+
+.connect-hint {
+  color: var(--dim);
+  padding: 6px 2px;
+}
+
+.connect-secondary {
+  color: var(--dim);
+}
+
+.connect-actions {
+  display: flex;
+  gap: 6px;
+}

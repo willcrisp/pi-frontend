@@ -1,7 +1,7 @@
 /* --- Confirm/alert dialog (ConfirmDialog.vue) ---------------------------- */
-/* Reuses .connect-backdrop/.connect-panel/.connect-head/.connect-close/
-   .connect-actions/.connect-secondary from the connect-model dialog above —
-   only the bits unique to this dialog are defined here. */
+/* Builds on the shared modal chrome in styles/modal.css (.connect-backdrop /
+   -panel / -head / -close / -actions / -secondary); only the bits unique to this
+   dialog are defined here. */
 
 .confirm-panel {
   width: 380px;

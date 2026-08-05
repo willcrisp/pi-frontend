@@ -5,6 +5,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { opencodeStore as store, reconnectStream, loadCatalogs } from "../../stores/opencode.js";
 import { connectionStore, testConnection, setConnection, setCredentials } from "../../stores/ssh.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const root = ref(null);
 const open = ref(false);
@@ -18,19 +19,12 @@ function onDocClick(e) {
   }
 }
 
-function onKeydown(e) {
-  if (e.key === "Escape") open.value = false;
-}
+onMounted(() => document.addEventListener("click", onDocClick));
+onUnmounted(() => document.removeEventListener("click", onDocClick));
 
-onMounted(() => {
-  document.addEventListener("click", onDocClick);
-  document.addEventListener("keydown", onKeydown);
-});
-
-onUnmounted(() => {
-  document.removeEventListener("click", onDocClick);
-  document.removeEventListener("keydown", onKeydown);
-});
+// Mounted permanently in the header, so `open` is what makes this the surface an
+// Escape belongs to.
+useDialogEscape(() => (open.value = false), { open });
 
 async function onTest() {
   setCredentials(username.value, password.value);

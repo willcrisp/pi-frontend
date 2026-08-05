@@ -7,6 +7,7 @@
 -->
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 import {
   COLOR_FIELDS,
   colorProfile,
@@ -31,19 +32,12 @@ function onDocClick(e) {
   }
 }
 
-function onKeydown(e) {
-  if (e.key === "Escape") open.value = false;
-}
+onMounted(() => document.addEventListener("click", onDocClick));
+onUnmounted(() => document.removeEventListener("click", onDocClick));
 
-onMounted(() => {
-  document.addEventListener("click", onDocClick);
-  document.addEventListener("keydown", onKeydown);
-});
-
-onUnmounted(() => {
-  document.removeEventListener("click", onDocClick);
-  document.removeEventListener("keydown", onKeydown);
-});
+// Mounted permanently in the header, so `open` is what makes this the surface an
+// Escape belongs to.
+useDialogEscape(() => (open.value = false), { open });
 </script>
 
 <template>

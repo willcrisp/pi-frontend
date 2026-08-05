@@ -19,6 +19,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { questionStore, reply, reject } from "../../stores/question.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const current = computed(() => questionStore.queue[0] || null);
 
@@ -124,16 +125,13 @@ function skip() {
   if (current.value && !current.value.busy) reject(current.value.id);
 }
 
-// Number keys pick an option, Enter continues, Escape skips the whole ask.
+// Number keys pick an option, Enter continues. Escape skips the whole ask, via
+// the shared stack below rather than here — a listener of its own meant one
+// press both skipped the ask and closed whatever dialog was open underneath.
 // Bail out while the free-text box has focus so typing "1" stays a "1".
 function onKeydown(event) {
-  if (!current.value) return;
+  if (!current.value || event.defaultPrevented) return;
   const typing = event.target === customInput.value;
-  if (event.key === "Escape") {
-    event.preventDefault();
-    skip();
-    return;
-  }
   if (event.key === "Enter" && !typing) {
     event.preventDefault();
     advance();
@@ -151,6 +149,8 @@ function onKeydown(event) {
 
 onMounted(() => window.addEventListener("keydown", onKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+
+useDialogEscape(() => skip());
 
 // Focus the box when free text is the only way to answer.
 watch(

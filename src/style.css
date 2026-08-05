@@ -30,7 +30,7 @@
 @import "./styles/d20.css"; /* D20Die fidget die */
 @import "./styles/select-menu.css"; /* SelectMenu themed popover */
 @import "./styles/model-filter.css"; /* ModelFilterPopover funnel + checkboxes */
-@import "./styles/connect-dialog.css"; /* ConnectDialog and its sidebar trigger */
+@import "./styles/modal.css"; /* Shared dialog chrome: backdrop, panel, head, close. Must precede the per-dialog partials that override it. */
 @import "./styles/subagents-dialog.css"; /* SubagentsDialog: agent definition editor */
 @import "./styles/steer.css"; /* Queued steering/follow-up pills in the composer */
 @import "./styles/code-copy.css"; /* The copy button in rendered markdown code blocks */

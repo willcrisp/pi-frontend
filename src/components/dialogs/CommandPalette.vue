@@ -14,6 +14,7 @@ import {
 import { filesFor, refreshFiles } from "../../stores/filesearch.js";
 import { openPreview } from "../../stores/filepreview.js";
 import { fuzzyScore } from "../../lib/fuzzy.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const open = ref(false);
 const query = ref("");
@@ -33,18 +34,20 @@ function close() {
   open.value = false;
 }
 
+// Ctrl/Cmd+K only. Escape goes through the shared stack (`open` is passed, since
+// this component stays mounted while closed to keep listening for the hotkey),
+// so a palette opened over another dialog closes just the palette.
 function onGlobalKey(e) {
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
     open.value ? close() : openPalette();
-  } else if (open.value && e.key === "Escape") {
-    e.preventDefault();
-    close();
   }
 }
 
 onMounted(() => window.addEventListener("keydown", onGlobalKey));
 onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
+
+const { onBackdrop } = useDialogEscape(close, { open });
 
 const items = computed(() => {
   const out = [];
@@ -110,10 +113,6 @@ function onInputKeydown(e) {
     e.preventDefault();
     choose(matches.value[index.value]);
   }
-}
-
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) close();
 }
 </script>
 

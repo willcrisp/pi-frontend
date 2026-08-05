@@ -12,6 +12,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted } from "vue";
 import { shortcutsStore } from "../../stores/shortcuts.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 // ⌘ on Apple hardware, Ctrl everywhere else. `navigator.platform` is deprecated
 // but still the most reliable signal here, and the fallback is merely a label.
@@ -75,24 +76,22 @@ function isTyping(target) {
   return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
 }
 
+// "?" only — Escape is the shared stack's, via useDialogEscape below. Like the
+// palette, this component stays mounted while closed to keep owning its hotkey,
+// so it passes `open` rather than relying on mount order.
 function onGlobalKey(e) {
-  if (shortcutsStore.open && e.key === "Escape") {
-    e.preventDefault();
-    shortcutsStore.open = false;
-    return;
-  }
   if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey) return;
   if (isTyping(e.target)) return;
   e.preventDefault();
   shortcutsStore.open = !shortcutsStore.open;
 }
 
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) shortcutsStore.open = false;
-}
-
 onMounted(() => window.addEventListener("keydown", onGlobalKey));
 onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
+
+const { onBackdrop } = useDialogEscape(() => (shortcutsStore.open = false), {
+  open: () => shortcutsStore.open,
+});
 </script>
 
 <template>

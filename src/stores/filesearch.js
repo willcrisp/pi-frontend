@@ -8,7 +8,7 @@ import { readJSON } from "../lib/storage.js";
 const CACHE_KEY = "opencode-web:files-cache"; // { [directory]: { files, fetchedAt } }
 const MAX_CACHED_FILES = 20000;
 
-export const fileSearchStore = reactive({
+const fileSearchStore = reactive({
   // directory -> { files: string[], loading, error }
   byDirectory: {},
 });

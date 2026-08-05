@@ -153,7 +153,7 @@ help after it. Begin your reply with the "# Handover:" line.`;
 // The document out of the agent's reply. It is asked for the document alone, so
 // the usual case is the whole text; slicing to the heading covers a build or a
 // model that prefixes a line of chat anyway.
-export function extractDocument(text) {
+function extractDocument(text) {
   const body = (text || "").trim();
   const at = body.search(/^#\s+Handover\b/im);
   const doc = at > 0 ? body.slice(at) : body;
@@ -296,7 +296,7 @@ export function closeHandover() {
 // The seed prompt for the new chat: the document, framed so the agent knows what
 // it is reading and does not mistake a plan for something already done, plus
 // whatever the user typed into the dialog.
-export function handoverSeedText(record, extra) {
+function handoverSeedText(record, extra) {
   const notes = (extra || "").trim();
   const from = [
     record.title ? `the session "${record.title}"` : "an earlier session",

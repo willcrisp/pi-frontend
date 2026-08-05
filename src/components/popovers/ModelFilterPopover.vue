@@ -7,8 +7,14 @@
 import { computed, ref } from "vue";
 import { opencodeStore as store } from "../../stores/opencode.js";
 import { hiddenModels, modelKey, toggleModelHidden } from "../../stores/modelfilter.js";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const filterOpen = ref(false);
+
+// This popover had no Escape handling at all — it appeared in the composer's old
+// ESCAPE_OWNERS list only to stop the key interrupting the run, so it suppressed
+// the shortcut while not honouring the contract the shortcuts dialog advertises.
+useDialogEscape(() => (filterOpen.value = false), { open: filterOpen });
 
 const allModelsByProvider = computed(() => {
   const groups = new Map();

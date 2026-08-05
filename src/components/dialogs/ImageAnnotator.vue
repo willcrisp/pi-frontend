@@ -11,6 +11,7 @@
 -->
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const props = defineProps({
   src: { type: String, required: true },
@@ -104,21 +105,16 @@ function save() {
   emit("save", canvasEl.value.toDataURL("image/png"));
 }
 
+// Undo only — Escape (and the backdrop) are the shared contract's, below.
 function onKeydown(e) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    emit("cancel");
-    return;
-  }
+  if (e.defaultPrevented) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
     e.preventDefault();
     undo();
   }
 }
 
-function onBackdrop(e) {
-  if (e.target === e.currentTarget) emit("cancel");
-}
+const { onBackdrop } = useDialogEscape(() => emit("cancel"));
 
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);

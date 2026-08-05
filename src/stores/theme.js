@@ -148,8 +148,8 @@ export const [fontSize, setFontSize] = numericPreference({
 });
 
 // Thinking text size as a percentage of the regular message size.
-export const THINKING_SIZE_MIN = 60;
-export const THINKING_SIZE_MAX = 100;
+const THINKING_SIZE_MIN = 60;
+const THINKING_SIZE_MAX = 100;
 export const [thinkingSize, setThinkingSize] = numericPreference({
   key: "pi-web:thinking-size",
   min: THINKING_SIZE_MIN,

@@ -9,6 +9,7 @@
 -->
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
+import { useDialogEscape } from "../../composables/useDialogEscape.js";
 
 const props = defineProps({
   groups: { type: Array, required: true },
@@ -61,11 +62,10 @@ function onDocClick(e) {
   if (open.value && root.value && !root.value.contains(e.target)) open.value = false;
 }
 
+// Escape is the shared stack's (below); this owns the list navigation.
 function onKeydown(e) {
-  if (!open.value) return;
-  if (e.key === "Escape") {
-    open.value = false;
-  } else if (e.key === "ArrowUp") {
+  if (!open.value || e.defaultPrevented) return;
+  if (e.key === "ArrowUp") {
     e.preventDefault();
     step(-1);
   } else if (e.key === "ArrowDown") {
@@ -86,6 +86,10 @@ onUnmounted(() => {
   document.removeEventListener("click", onDocClick);
   document.removeEventListener("keydown", onKeydown);
 });
+
+// Mounted permanently as the composer's trigger, so `open` is what decides
+// whether this menu is the surface an Escape belongs to.
+useDialogEscape(() => (open.value = false), { open });
 </script>
 
 <template>

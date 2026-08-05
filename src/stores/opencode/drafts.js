@@ -31,7 +31,7 @@ function persist(sessionID, text) {
   writeJSON(DRAFTS_KEY, map);
 }
 
-export function loadDraft(sessionID) {
+function loadDraft(sessionID) {
   const stored = allDrafts()[sessionID];
   return typeof stored === "string" ? stored : "";
 }
@@ -40,7 +40,7 @@ let timer = null;
 
 // Flush any pending debounced write immediately. Called before a session
 // switch, so the outgoing chat's draft is on disk before `draft` is overwritten.
-export function flushDraft() {
+function flushDraft() {
   if (!timer) return;
   clearTimeout(timer);
   timer = null;

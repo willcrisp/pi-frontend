@@ -288,7 +288,7 @@ function cacheModels(gateway, models) {
 
 // Normalize and validate a user-typed gateway URL. The trailing slash goes so
 // endpoint paths append cleanly.
-export function gatewayURL(value) {
+function gatewayURL(value) {
   const url = new URL(String(value || "").trim());
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error("Gateway URL must use http or https");

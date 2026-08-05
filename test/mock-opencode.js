@@ -676,6 +676,15 @@ const server = http.createServer((req, res) => {
     return json(res, { data: [{ name: "compact", description: "compact the session" }] });
   if (url === "/api/skill")
     return json(res, { data: [{ id: "pdf", name: "pdf", description: "read pdfs" }] });
+  // Configured MCP servers. stores/mcp.js loads this at boot to learn which
+  // `<server>_<tool>` prefixes are servers, so a tool call can be attributed and
+  // its prefix stripped for display. A 404 here is legitimate on some builds and
+  // the store treats it as "no servers", so this route exists to exercise the
+  // other path.
+  if (url === "/api/mcp")
+    return json(res, {
+      data: [{ name: "serena", enabled: true, status: "connected", tools: 12 }],
+    });
   if (url === "/api/session")
     return req.method === "POST"
       ? createSession(res)

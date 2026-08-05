@@ -8,6 +8,7 @@ import { apiUrl, apiGet } from "../../lib/api.js";
 import { authHeaders } from "../ssh.js";
 import { handleServerEvent } from "./events.js";
 import { loadCatalogs } from "./catalog.js";
+import { loadMcpServers } from "../mcp.js";
 import { reconcileRunState, resetRunProbe } from "./run.js";
 import { loadPendingQuestions } from "../question.js";
 import { loadPendingPermissions } from "../permission.js";
@@ -38,6 +39,7 @@ function setupEventStream() {
         resetRunProbe();
         reconcileRunState();
         loadCatalogs({ force: true });
+        loadMcpServers();
         return;
       }
       opencodeStore.connected = false;
@@ -95,5 +97,8 @@ export async function initOpenCode() {
   }
 
   await loadCatalogs({ force: true });
+  // Not awaited: it only decides how a tool call is labelled, and the route is
+  // absent on some builds. Nothing should wait on it to show the transcript.
+  loadMcpServers();
   setupEventStream();
 }
