@@ -80,11 +80,17 @@ First run on a fresh machine needs a browser: `npx playwright install chromium`.
 Where a sandbox or CI image already ships a Chromium that doesn't match this
 package's build number, point at it instead — `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium npm test`.
 
-The suite covers `src/composables/` — the composer's autosize, attachments,
-the `/` and `@` menus, and the model picker — because that is the most stateful
-UI in the repo, plus the run lifecycle (`run-lifecycle.spec.js`) and the thinking
-quote (`thinking.spec.js`). It is a smoke suite, not a regression net for
-everything:
+Ten specs, ~67 tests. The core is `src/composables/` — the composer's autosize,
+attachments, the `/` and `@` menus, and the model picker (`composer.spec.js`,
+`mentions.spec.js`) — because that is the most stateful UI in the repo. Around it:
+the run lifecycle (`run-lifecycle.spec.js`), the thinking quote
+(`thinking.spec.js`), transcript rendering (`transcript.spec.js`, the largest at
+16), the permission gate (`permission.spec.js`), providers and TrueFoundry
+(`providers.spec.js`), usage totals (`usage.spec.js`), the handover brief
+(`handover.spec.js`), and `.env` parsing (`dotenv.spec.js`).
+
+Still a smoke suite, not a regression net for everything — `QuestionDialog`, the
+sidebar and the sub-agent dialogs have no coverage:
 
 - Prefer driving the real component to stubbing at the network layer. If a test
   needs a route the mock lacks, add it to `mock-opencode.js`.
@@ -265,6 +271,10 @@ than `opencodeStore.messages` so a child's transcript lands on the child.
   a stray click would mutate a tree an agent may be mid-task in).
 - `filesearch.js`: recursive file list for the palette via `fdfind`/`fd`/
   `git ls-files`. `GET /api/fs/list` is single-level, so it can't serve this.
+- `localCommands.js`: command files on disk for the composer's `/` menu, read
+  over PTY the same way `subagents.js` reads agent definitions. `GET /api/command`
+  only lists what the server knew at startup, so a command file added since it
+  booted is real on disk and invisible to that route.
 
 **Client-only UI state** — `theme.js` (color profile, font sizes, content width,
 applied as CSS custom properties), `modelfilter.js`, `confirm.js`,
@@ -312,7 +322,10 @@ the template auto-unwraps (`attachments`, not `files.attachments.value`).
 
 **Shared helpers** — `lib/api.js` (every server call; see above), `lib/storage.js`
 (every persisted preference), plus the dependency-free `markdown.js`, `diff.js`,
-`fuzzy.js`.
+`fuzzy.js`. Also `codeCopy.js` (the copy button attached to rendered code
+blocks), `dotenv.js` (parsing a remote `.env` for the TrueFoundry PAT),
+`placeholders.js` and `thinkingPhrases.js` (the composer's rotating placeholder
+and the thinking quote — copy, no behaviour).
 
 **Styles** — `src/style.css` is an ordered list of `@import`s; the rules
 live in `src/styles/*.css`, one partial per feature, named after the
@@ -350,6 +363,8 @@ Two traps worth knowing, both of which have bitten:
 | `docs/subagents-alfuat.md` | Sub-agent ground truth for the real deployment target, claims marked [observed] vs [spec]. |
 | `docs/subagents-v2.md` | A *different* build, explicitly **not** the target. Kept only as a record of how far builds diverge. |
 | `docs/handover.md` | General project status (snapshot as of an older `main`). |
+| `docs/audit-2026-07.md` | Feature/UX audit: ten findings, driven in the real app. All essentially fixed — kept for the reasoning behind the fixes. |
+| `docs/audit-2026-08.md` | Maintainability pass: what held, what accumulated, and the open items. Start here before a refactor. |
 | `docs/handover-subagents.md` | Pickup point for the inline sub-agent rendering work. |
 
 ⚠️ Both handover docs predate the store/style split, so the file paths in them

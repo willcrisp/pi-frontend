@@ -19,8 +19,23 @@
 //   <div class="connect-backdrop" @mousedown="onBackdrop"> …
 //
 // `enabled` opts out per-dialog for a modal that must not be dismissible by a
-// stray keypress — PermissionDialog uses it so a gating decision is never made
-// by accident.
+// stray keypress. No caller passes it today.
+//
+// ⚠️ ADOPTION IS PARTIAL, AND THE GAP HAS TEETH. Seven dialogs call this;
+// CommandPalette, ShortcutsDialog, ImageAnnotator, QuestionDialog and
+// PermissionDialog still hand-roll their own `window` keydown listener and so
+// are invisible to the stack below. None of them checks `defaultPrevented`
+// either, so Escape with two such surfaces open acts on both — a permission
+// prompt arriving over an open dialog is rejected by the same press that closes
+// the dialog. Worse, window listeners fire in registration (mount) order, so the
+// dialog opened *first* wins, which is backwards.
+//
+// Composer.vue compensates for the same gap from the other end: its
+// Escape-to-interrupt consults a hand-maintained `ESCAPE_OWNERS` list of nine CSS
+// selectors to guess whether some other surface owns the key. That list is the
+// coupling this composable exists to delete — a new dialog should not require
+// editing a selector list in an unrelated component. Routing the five hold-outs
+// through this stack retires it.
 import { onBeforeUnmount, onMounted } from "vue";
 
 // Only the topmost dialog should react, so a dialog opened from another dialog
