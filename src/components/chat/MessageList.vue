@@ -9,8 +9,9 @@
   since that is the user asking for the newest output.
 -->
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { opencodeStore as store, loadSessionTranscript } from "../../stores/opencode.js";
+import { questionStore } from "../../stores/question.js";
 import { randomThinkingPhrase } from "../../lib/thinkingPhrases.js";
 import MessageView from "./MessageView.vue";
 import MessageRail from "./MessageRail.vue";
@@ -87,6 +88,22 @@ const THINKING_ROTATE_MS = 4000;
 const thinkingPhrase = ref(randomThinkingPhrase());
 let thinkingTimer = null;
 
+// A question reply resumes the same assistant turn, so the last transcript item
+// remains a tool part until the model emits its next reasoning or text part.
+// Keep visible activity in that gap instead of making the resumed run look hung.
+const showThinkingIndicator = computed(() => {
+  if (!store.isStreaming) return false;
+  const message = store.messages.at(-1);
+  if (!message || message.role === "user") return true;
+
+  const part = message.parts?.at(-1);
+  if (part?.type !== "tool" || part.tool !== "question") return false;
+  const stillWaiting = questionStore.queue.some(
+    (request) => request.tool?.callID === part.callID
+  );
+  return !stillWaiting;
+});
+
 function stopThinkingRotation() {
   if (thinkingTimer) {
     clearInterval(thinkingTimer);
@@ -105,6 +122,8 @@ watch(
     }, THINKING_ROTATE_MS);
   }
 );
+
+watch(showThinkingIndicator, followStream);
 
 // A failed load is a dead end unless there's a way out of it that isn't
 // "reload the page".
@@ -151,7 +170,7 @@ onBeforeUnmount(() => {
             :key="msg.id || i"
             :message="msg"
           />
-          <div v-if="store.isStreaming && (!store.messages.length || store.messages.at(-1)?.role === 'user')" key="thinking" class="thinking-indicator">
+          <div v-if="showThinkingIndicator" key="thinking" class="thinking-indicator">
             <span class="thinking-dots"><span></span><span></span><span></span></span>
             {{ thinkingPhrase }}…
           </div>

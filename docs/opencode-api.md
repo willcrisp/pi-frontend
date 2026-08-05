@@ -152,9 +152,9 @@ gets re-introduced on the next build bump.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/permission/request` | Not wired. Poll for all pending requests (fallback for missed SSE) |
-| GET | `/api/permission/saved` | Not wired. List always-allow rules |
-| DELETE | `/api/permission/saved/{id}` | Not wired. Revoke a saved rule |
+| GET | `/api/permission/request` | Wired: `permission.js#loadPendingPermissions`. Poll for all pending requests — the fallback for a missed `asked` SSE event; called on stream (re)connect and on the run poll (`run.js`) |
+| GET | `/api/permission/saved` | Wired: `permission.js#loadSavedPermissions` (SavedPermissionsDialog). List always-allow rules |
+| DELETE | `/api/permission/saved/{id}` | Wired: `permission.js#revokeSavedPermission` (SavedPermissionsDialog). Revoke a saved rule |
 | GET | `/api/session/{sessionID}/permission/{requestID}` | Not wired. Fetch specific request |
 | POST | `/api/session/{sessionID}/permission/{requestID}/reply` | Wired: `permission.js#respond`. Body `{reply: "once"\|"always"\|"reject", message?}` |
 | POST | `/api/session/{sessionID}/permission` | Not wired. Server-side create — probably not caller-facing |
@@ -293,6 +293,16 @@ The ALF-UAT target emits the same shapes under `session.<x>` and adds a
 `session.execution.*` lifecycle. `events.js#canonicalType` drops the `next.`
 infix so one handler table serves both; the streaming part id is `ordinal` on one
 and `textID`/`reasoningID` on the other, so `partKey` takes whichever came.
+
+**Tool result `content` is an array of typed blocks** (`Tool.Content` in the
+server source): `{type: "text", text}` or `{type: "file", uri, mime, name?}`.
+A `read` of an image file returns a text sentinel plus the image as a file
+block — `[{type:"text", text:"Image read successfully"}, {type:"file",
+uri:"data:image/png;base64,…", mime:"image/png", name: path}]` (PDFs the same,
+with `application/pdf`). The same array is what REST stores on the completed
+tool state (`Session.Message.ToolState.Completed.content`), so both ingest
+paths land it on `part.state.content` — MessageView renders those image blocks
+inline (toolImages).
 
 **The end of a turn is `step.ended` with a terminal `finish` reason** ("stop",
 not "tool-calls" — that one means another step follows). And even that is not

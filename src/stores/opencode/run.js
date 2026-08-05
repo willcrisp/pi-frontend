@@ -54,6 +54,8 @@ import { getJSON } from "../../lib/api.js";
 import { activityRecord, setUnread } from "./activity.js";
 import { clearSteers } from "./steer.js";
 import { refreshActiveMessages } from "./messages.js";
+import { loadPendingQuestions } from "../question.js";
+import { loadPendingPermissions } from "../permission.js";
 
 // How often to ask while a run is believed to be in flight. Nothing is polled
 // while everything is idle.
@@ -214,6 +216,11 @@ function startPolling() {
   pollTimer = setInterval(() => {
     if (!probeUsable()) return stopPolling();
     reconcileRunState();
+    // A question or permission asked while the stream was down blocks the
+    // run the same way an unending run does; reconcile those against the
+    // server too (each no-ops when nothing is pending).
+    loadPendingQuestions();
+    loadPendingPermissions();
   }, POLL_MS);
 }
 

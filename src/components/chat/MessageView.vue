@@ -8,6 +8,11 @@
   A tool call whose arguments look like a file edit renders as a diff instead of
   a wall of raw output — see lib/diff.js for the detection, which goes by
   argument shape rather than a tool-name list.
+
+  A tool call whose result carries image blocks (a `read` of an image file is
+  the common case) renders those images inline beneath the tool row — see
+  toolImages(), which reads blocks both ingest paths already retain on
+  part.state.content, so this is purely a render change.
 -->
 <script setup>
 import { computed } from "vue";
@@ -19,7 +24,9 @@ import { filePathFromToolInput, openPreview } from "../../stores/filepreview.js"
 import { handoverForMessage, isHandoverRequest } from "../../stores/handover.js";
 import SubagentView from "./SubagentView.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
+import QuestionPart from "./QuestionPart.vue";
 import HandoverChip from "./HandoverChip.vue";
+import WebSearchPart from "./WebSearchPart.vue";
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -67,6 +74,118 @@ function isLivePart(index) {
 function truncate(text) {
   if (!text) return "";
   return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
+}
+
+function toolInputText(input) {
+  if (input == null || input === "") return "";
+  if (typeof input === "string") return input;
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+function toolOutputText(part) {
+  const state = part.state || {};
+  const value = state.output || state.result || (state.content && (Array.isArray(state.content)
+    ? state.content.map((item) => item?.text || "").filter(Boolean).join("\n")
+    : state.content));
+  if (!value) return "";
+  return typeof value === "string" ? value : toolInputText(value);
+}
+
+// --- tool calls that return images ------------------------------------------
+
+// A block's URL only goes into <img src>/<a href> for schemes that render an
+// image. The content comes from tool results — and an MCP server is third
+// party — so anything else (javascript: is the dangerous one) is dropped.
+const SAFE_IMAGE_URL = /^(data:image\/|https?:|blob:)/i;
+
+// One content block's image URL, or null when it isn't an image block. The V2
+// `read` tool on an image file returns
+//   [{type:"text", text:"Image read successfully"},
+//    {type:"file", uri:"data:image/png;base64,…", mime:"image/png", name: path}]
+// (see docs/opencode-api.md), but other tools spell blocks differently (MCP
+// screenshot tools use image/media blocks with data+mimeType), so this is
+// tolerant rather than matching one shape exactly.
+function imageBlockUrl(item) {
+  if (!item || typeof item !== "object") return null;
+  if (!["file", "image", "media"].includes(item.type)) return null;
+  const mime = item.mime || item.mimeType || item.mediaType || "";
+  if (mime && !String(mime).startsWith("image/")) return null;
+  // A `file` block without an image mime is an attachment, not a picture.
+  if (item.type === "file" && !mime) return null;
+  let url = typeof item.uri === "string" ? item.uri : typeof item.url === "string" ? item.url : "";
+  if (!url) {
+    const data =
+      typeof item.data === "string" ? item.data : typeof item.image === "string" ? item.image : "";
+    if (data) url = SAFE_IMAGE_URL.test(data) ? data : `data:${mime || "image/png"};base64,${data}`;
+  }
+  return url && SAFE_IMAGE_URL.test(url) ? url : null;
+}
+
+// The images a tool call returned, read from part.state.content — which both
+// ingest paths (SSE session.tool.success and REST history normalization)
+// already retain on the part, so no wire-level change was needed.
+function toolImages(part) {
+  const content = part.state && part.state.content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .map((item) => {
+      const url = imageBlockUrl(item);
+      return url ? { url, name: typeof item.name === "string" ? item.name : "" } : null;
+    })
+    .filter(Boolean);
+}
+
+function isWebSearchPart(part) {
+  return part.tool === "websearch" || part.tool === "web_search";
+}
+
+function webSearchSources(part) {
+  if (!isWebSearchPart(part)) return [];
+  const text = toolOutputText(part);
+  if (!text) return [];
+  const sources = [];
+  const seen = new Set();
+  const markdown = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  let match;
+  while ((match = markdown.exec(text))) {
+    const url = match[2].replace(/[.,;:]+$/, "");
+    if (!seen.has(url)) {
+      seen.add(url);
+      sources.push({ title: match[1], url });
+    }
+  }
+  const urls = text.match(/https?:\/\/[^\s<>'"`)\]]+/g) || [];
+  for (const raw of urls) {
+    const url = raw.replace(/[.,;:]+$/, "");
+    if (!seen.has(url)) {
+      seen.add(url);
+      sources.push({ title: "", url });
+    }
+  }
+  return sources;
+}
+
+// MCP tool calls are named `<server>_<tool>` by the server (e.g.
+// `serena_find_referencing_symbols`), so the prefix identifies which MCP
+// server a call came from. Listed servers get a per-server accent colour (see
+// styles/tool-calls.css) so they stand out from built-in tools at a glance.
+const MCP_SERVERS = ["serena"];
+function mcpServerOf(toolName) {
+  if (!toolName) return null;
+  for (const s of MCP_SERVERS) if (toolName.startsWith(s + "_")) return s;
+  return null;
+}
+function mcpToolClass(part) {
+  const s = mcpServerOf(part.tool);
+  return s ? `tool-mcp-${s}` : "";
+}
+function displayToolName(part) {
+  const s = mcpServerOf(part.tool);
+  return s ? part.tool.slice(s.length + 1) : part.tool;
 }
 
 // --- edit/write tool calls as diffs -----------------------------------------
@@ -170,16 +289,32 @@ function revertToHere() {
           :state="part.state"
         />
 
+        <!-- question: the agent asked a structured question mid-execution.
+             Rendered as an inline Q&A card — clickable options while it waits
+             for an answer, checked-off answers once it settles. -->
+        <QuestionPart
+          v-else-if="part.type === 'tool' && part.tool === 'question'"
+          :part="part"
+        />
+
+        <!-- Searches stay visible while they run and render their sources as
+             browsable pages instead of a generic tool payload. -->
+        <WebSearchPart
+          v-else-if="part.type === 'tool' && isWebSearchPart(part)"
+          :part="part"
+        />
+
         <!-- edit/write tool call: rendered as a diff rather than raw output.
              Detection is by argument shape (lib/diff.js), so a custom
              edit-like tool gets the same treatment as the built-in one. -->
         <details
           v-else-if="part.type === 'tool' && diffFor(part)"
           class="tool tool-diff"
-          :class="{ error: part.state?.status === 'error' }"
+          :class="[ { error: part.state?.status === 'error' }, mcpToolClass(part) ]"
         >
           <summary title="Click to expand/collapse">
-            <span class="tool-name" :title="part.tool">{{ part.tool }}</span>
+            <span v-if="mcpServerOf(part.tool)" class="mcp-chip">{{ mcpServerOf(part.tool) }}</span>
+            <span class="tool-name" :title="part.tool">{{ displayToolName(part) }}</span>
             <button
               v-if="diffFor(part).path"
               class="diff-path"
@@ -212,26 +347,46 @@ function revertToHere() {
         </details>
 
         <!-- tool -->
-        <details v-else-if="part.type === 'tool'" class="tool" :class="{ error: part.state?.status === 'error' }">
-          <summary title="Click to expand/collapse">
-            <span class="tool-name" :title="part.tool">{{ part.tool }}</span>
-            <!-- Tool calls that name a file get a shortcut into the preview
-                 pane, so following a reference doesn't mean leaving the app.
-                 .stop keeps the click from toggling the <details>. -->
-            <button
-              v-if="filePathFromToolInput(part.input)"
-              class="tool-file-link"
-              type="button"
-              :title="`Preview ${filePathFromToolInput(part.input)}`"
-              @click.stop.prevent="openPreview(filePathFromToolInput(part.input))"
+        <template v-else-if="part.type === 'tool'">
+          <details class="tool" :class="[ { error: part.state?.status === 'error' }, mcpToolClass(part) ]">
+            <summary title="Click to expand/collapse">
+              <span v-if="mcpServerOf(part.tool)" class="mcp-chip">{{ mcpServerOf(part.tool) }}</span>
+              <span class="tool-name" :title="part.tool">{{ displayToolName(part) }}</span>
+              <!-- Tool calls that name a file get a shortcut into the preview
+                   pane, so following a reference doesn't mean leaving the app.
+                   .stop keeps the click from toggling the <details>. -->
+              <button
+                v-if="filePathFromToolInput(part.input)"
+                class="tool-file-link"
+                type="button"
+                :title="`Preview ${filePathFromToolInput(part.input)}`"
+                @click.stop.prevent="openPreview(filePathFromToolInput(part.input))"
+              >
+                {{ filePathFromToolInput(part.input) }}
+              </button>
+              <span v-if="part.state?.status === 'running' || part.state?.status === 'pending'" class="running" title="Running">⋯</span>
+            </summary>
+            <pre v-if="part.state?.status === 'completed'">{{ truncate(toolOutputText(part)) }}</pre>
+            <pre v-else-if="part.state?.status === 'error'">{{ truncate(part.state.error) }}</pre>
+            <pre v-else-if="part.input">{{ truncate(toolInputText(part.input)) }}</pre>
+          </details>
+          <!-- Images the call returned (a `read` of an image file, a
+               screenshot MCP tool) render inline beneath the row — visible
+               without expanding, like user-attached images (.msg-image). -->
+          <div v-if="toolImages(part).length" class="tool-images">
+            <a
+              v-for="(img, ii) in toolImages(part)"
+              :key="ii"
+              class="tool-image"
+              :href="img.url"
+              :title="img.name || 'Open image'"
+              target="_blank"
+              rel="noopener noreferrer"
             >
-              {{ filePathFromToolInput(part.input) }}
-            </button>
-            <span v-if="part.state?.status === 'running' || part.state?.status === 'pending'" class="running" title="Running">⋯</span>
-          </summary>
-          <pre v-if="part.state?.status === 'completed'">{{ truncate(part.state.output) }}</pre>
-          <pre v-else-if="part.state?.status === 'error'">{{ truncate(part.state.error) }}</pre>
-        </details>
+              <img :src="img.url" :alt="img.name || 'Tool image'" loading="lazy" />
+            </a>
+          </div>
+        </template>
 
         <!-- file: images render as a thumbnail, anything else as a name chip -->
         <a
@@ -256,7 +411,9 @@ function revertToHere() {
 
         <!-- step-start / step-finish: no visual representation -->
       </template>
+      <div v-if="!isUser && message.error" class="msg-error">{{ message.error }}</div>
     </template>
+    <div v-else-if="!isUser && message.error" class="msg-error">{{ message.error }}</div>
 
     <template v-else>
       <div v-if="isUser" class="user-text">{{ message.text }}</div>
@@ -403,5 +560,37 @@ function revertToHere() {
 a.msg-file:hover {
   color: var(--fg);
   border-color: #2c3540;
+}
+
+.msg-error {
+  margin: 6px 0;
+  padding: 7px 10px;
+  background: rgba(247, 118, 142, 0.08);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  color: var(--error);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid rgba(224, 175, 104, 0.45);
+  border-radius: 999px;
+  background: rgba(224, 175, 104, 0.1);
+  color: var(--msg-tool-serena);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
 }
 </style>

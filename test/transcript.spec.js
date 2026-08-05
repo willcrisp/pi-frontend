@@ -74,6 +74,101 @@ test.describe("prompt rail", () => {
   });
 });
 
+test.describe("serena mcp chip", () => {
+  test("serena tool calls render with a chip and stripped prefix", async ({ page }) => {
+    const chip = page.locator(".mcp-chip");
+    await expect(chip).toHaveCount(1);
+    await expect(chip).toHaveText("serena");
+
+    // The displayed name drops the serena_ prefix; the full name is on the title.
+    const name = page.locator(".tool-mcp-serena .tool-name");
+    await expect(name).toHaveText("find_referencing_symbols");
+    await expect(name).toHaveAttribute("title", "serena_find_referencing_symbols");
+  });
+
+  test("serena tool call gets amber border and accent", async ({ page }) => {
+    const tool = page.locator(".tool.tool-mcp-serena");
+    await expect(tool).toHaveCount(1);
+
+    const borderColor = await tool.evaluate((el) => getComputedStyle(el).borderColor);
+    // rgba(224, 175, 104, 0.35)
+    expect(borderColor).toMatch(/224,\s*175,\s*104/);
+
+    const nameColor = await tool.locator(".tool-name").evaluate(
+      (el) => getComputedStyle(el).color
+    );
+    // var(--msg-tool-serena) = #e0af68
+    expect(nameColor).toMatch(/224,\s*175,\s*104/);
+  });
+});
+
+test("web searches show the query and linked pages without expanding a tool payload", async ({ page }) => {
+  const search = page.locator(".web-search");
+  await expect(search).toHaveCount(1);
+  await expect(search.locator(".web-search-term")).toHaveText("OpenCode reasoning levels");
+  const result = search.locator(".web-search-result");
+  await expect(result).toHaveCount(1);
+  await expect(result).toContainText("OpenCode documentation");
+  await expect(result).toHaveAttribute("href", "https://opencode.ai/docs/");
+});
+
+test.describe("live web searches", () => {
+  async function control(request, body) {
+    await request.post("http://127.0.0.1:4096/api/mock/control", { data: body });
+  }
+
+  async function prompt(page, text) {
+    await page.locator("textarea").fill(text);
+    await page.locator("textarea").press("Enter");
+  }
+
+  test("shows provider progress and a page while the search is still running", async ({ page, request }) => {
+    await control(request, { webSearch: true, webSearchDelay: 1000 });
+    await prompt(page, "find Serena documentation");
+
+    const search = page.locator(".web-search").last();
+    await expect(search.locator(".web-search-progress")).toContainText("Checking official documentation");
+    await expect(search.locator(".web-search-result")).toContainText("Serena - The coding agent toolkit");
+    await expect(search.locator(".web-search-result")).toHaveAttribute("href", "https://oraios.github.io/serena/");
+  });
+
+  test("makes an aborted provider response visible", async ({ page, request }) => {
+    await control(request, { webSearch: true, webSearchAborted: true });
+    await prompt(page, "find Serena documentation");
+
+    const search = page.locator(".web-search").last();
+    await expect(search.locator(".web-search-status")).toHaveText("Interrupted");
+    await expect(search.locator(".web-search-error-text")).toHaveText("Step interrupted");
+  });
+});
+
+test.describe("tool images", () => {
+  // The seeded transcript carries a `read` of a PNG with the real tool's
+  // content shape (text sentinel + file block with a data URI).
+  test("a stored image read renders the image inline beneath the tool row", async ({ page }) => {
+    const img = page.locator(".tool-image img");
+    await expect(img).toHaveCount(1);
+    await expect(img).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect(img).toHaveAttribute("alt", /screenshot\.png/);
+    // The row itself stays a collapsed <details> — the image is not hidden
+    // inside it.
+    const row = page.locator(".tool", { has: page.locator(".tool-name", { hasText: "read" }) });
+    await expect(row).toHaveCount(1);
+    await expect(row).not.toHaveAttribute("open", "");
+  });
+
+  test("a live image read renders as the call settles", async ({ page, request }) => {
+    await request.post("http://127.0.0.1:4096/api/mock/control", { data: { readImage: true } });
+    await page.locator("textarea").fill("look at this png");
+    await page.locator("textarea").press("Enter");
+
+    // The seeded transcript already has one image read; this adds a second.
+    const imgs = page.locator(".tool-image img");
+    await expect(imgs).toHaveCount(2);
+    await expect(imgs.last()).toHaveAttribute("src", /^data:image\/png;base64,/);
+  });
+});
+
 test.describe("FindBar", () => {
   test("Ctrl+Shift+F opens it and counts matches", async ({ page }) => {
     await expect(page.locator(".find-bar")).toHaveCount(0);

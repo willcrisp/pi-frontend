@@ -1,5 +1,10 @@
 # Project Instructions
 
+## Testing
+
+Do not run Playwright tests or `npm test` unless the user explicitly asks for
+them. Use `npm run build` for the normal verification check.
+
 ## Search tools
 
 `ast-grep` (`sg`) is installed — prefer it over grep/rg for structural/AST-aware

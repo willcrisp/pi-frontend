@@ -103,3 +103,44 @@ test("a run whose ending is never announced is recovered from server state", asy
   await expect(stop(page)).toBeVisible();
   await expect(send(page)).toBeVisible({ timeout: 20000 });
 });
+
+test("a run parked on a question the stream never announced is recovered by the poll", async ({
+  page,
+  request,
+}) => {
+  // The agent is blocked mid-step waiting on an answer, but the
+  // question.v2.asked event never arrived: the transcript goes quiet, yet
+  // /session/active keeps reporting the run — so without the pending-question
+  // poll the dialog never shows and the composer sits on stop forever.
+  await control(request, { holdForQuestion: true });
+
+  await prompt(page, "need my input");
+  await expect(stop(page)).toBeVisible();
+
+  // The poll re-pulls pending questions every few seconds and the dialog
+  // surfaces off that, not off the (missing) event.
+  await expect(page.locator(".question-panel")).toBeVisible({ timeout: 15000 });
+  await page.locator(".question-option", { hasText: "Left" }).click();
+
+  // Answered: the loop drains, the dialog clears, and the composer comes back.
+  await expect(page.locator(".question-panel")).toHaveCount(0);
+  await expect(page.locator(".msg-assistant").last()).toContainText("Acknowledged.");
+  await expect(send(page)).toBeVisible({ timeout: 15000 });
+});
+
+test("a rate-limited turn shows the error on the message", async ({
+  page,
+  request,
+}) => {
+  await control(request, { failTurn: true });
+
+  await prompt(page, "try anyway");
+  await expect(stop(page)).toBeVisible();
+
+  // The run settles and the message-level error renders.
+  await expect(page.locator(".msg-error")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".msg-error")).toContainText("Rate limit exceeded");
+
+  // The red square clears — the run is over.
+  await expect(send(page)).toBeVisible({ timeout: 15000 });
+});

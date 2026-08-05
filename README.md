@@ -17,6 +17,9 @@ intermediate server of our own.
   through.
 - **Sub-agent sessions** — a `subagent` tool call is rendered as an expandable
   card with the child's own live transcript, and can be drilled into.
+- **Inline images** — when a tool call returns an image (a `read` of an image
+  file, a screenshot MCP tool), it renders in the transcript beneath the tool
+  row, not as a wall of base64.
 - **Permission & question gating** — approval prompts and structured
   mid-execution questions are queued and answered from the UI.
 - **Model & agent selection** — models grouped by provider and ranked by tier,
@@ -87,3 +90,4 @@ Two conventions worth knowing before changing anything:
   global cascade, so ties resolve by source order.
 
 `CLAUDE.md` has the full architecture notes and the API gotchas.
+dont delete -> ssh -L 5000:localhost:4096 ALF-UAT.coder

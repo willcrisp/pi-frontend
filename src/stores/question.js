@@ -1,30 +1,27 @@
 // Interactive Q&A store. A tool can stop mid-execution and ask the user one or
-// more structured questions; the ask arrives as the `question.v2.asked` SSE
-// event (see opencode.js#handleServerEvent) and queues here until answered.
-// Mirrors stores/permission.js — same FIFO-queue shape, same dialog contract.
+// more structured questions.
 //
-// Shapes below are verified against a live `opencode2 serve` `/openapi.json`
-// (see docs/opencode-api.md § Questions). The two that matter:
+// Two SSE event families exist across builds:
+//   1. `question.v2.*` / `question.*` — the documented shape (question.js handles)
+//   2. `form.*` — the current build (0.0.0-next-16573) emits forms, with
+//      metadata.kind === "question" marking ones the question tool created.
 //
-//   QuestionV2.Request = {id: "que_...", sessionID, questions: Info[], tool?}
-//   QuestionV2.Info    = {question, header, options: [{label, description}],
-//                         multiple?, custom?}
-//   QuestionV2.Reply   = {answers: string[][]}
+// The queue normalises both into one shape so QuestionDialog and QuestionPart
+// have one source of truth:
 //
-// Note what options do NOT have: an id. An answer identifies its choice by
-// the option's `label` verbatim, and `answers` is positional — one entry per
-// question in `questions` order, each entry a list of chosen labels (a list
-// because `multiple` questions accept several).
+//   entry = {id, sessionID, questions: [{question, header, options,
+//            multiple, custom}], tool: {messageID, callID}?, receivedAt, error,
+//            busy}
+//
+// Reply and cancel route to the right endpoint depending on how the entry
+// entered the queue (question vs form).
 import { reactive } from "vue";
 import { apiGet, apiPost, unwrap } from "../lib/api.js";
 
 export const questionStore = reactive({
-  queue: [], // [{ id, sessionID, questions, tool, receivedAt, error, busy }]
+  queue: [], // [{ id, sessionID, questions, tool, _kind, receivedAt, error, busy }]
 });
 
-// `QuestionV2.Option` requires both keys, but a missing description is far
-// less bad than a dropped option, so only a labelless option is discarded —
-// it would be an unanswerable button.
 function normalizeOption(opt) {
   if (typeof opt === "string") return opt ? { label: opt, description: "" } : null;
   if (!opt || typeof opt !== "object") return null;
@@ -46,9 +43,6 @@ function normalizeQuestion(info) {
     header: info.header || "",
     options,
     multiple: info.multiple === true,
-    // With no options there is nothing to click, so free text is the only way
-    // to answer at all — treat that as custom regardless of the flag, rather
-    // than rendering a dead end.
     custom: info.custom === true || options.length === 0,
   };
 }
@@ -63,6 +57,54 @@ function normalizeRequest(data) {
     sessionID: data.sessionID || "",
     questions,
     tool: data.tool || null,
+    _kind: "question",
+    receivedAt: Date.now(),
+    error: null,
+    busy: false,
+  };
+}
+
+// --- Form → question normalisation ------------------------------------------
+
+// Form.Event.Created payload = {form: Form.Info}
+// Form.Info = {id, sessionID, title, metadata?, fields: Field[]}
+// Form.Field = {key, title?, description?, type, options?, custom?}
+//   - "string" type with options renders as single-select
+//   - "multiselect" renders as checkbox group
+//   - type without options still gets a free-text input (custom)
+
+function formFieldToQuestion(f) {
+  if (!f || typeof f !== "object") return null;
+  const type = f.type === "multiselect" ? "multiselect" : "string";
+  const opts = Array.isArray(f.options)
+    ? f.options.map((o) =>
+        normalizeOption({
+          label: o.label || o.value || "",
+          description: o.description || "",
+        })
+      ).filter(Boolean)
+    : [];
+  return {
+    question: f.description || "",
+    header: f.title || "",
+    options: opts,
+    multiple: type === "multiselect",
+    custom: f.custom === true || opts.length === 0,
+  };
+}
+
+function fromFormCreated(data) {
+  const form = (data && data.form) || data;
+  if (!form || form.metadata?.kind !== "question" || !Array.isArray(form.fields))
+    return null;
+  const questions = form.fields.map(formFieldToQuestion).filter(Boolean);
+  if (!form.id || !questions.length) return null;
+  return {
+    id: form.id,
+    sessionID: form.sessionID || "",
+    questions,
+    tool: (form.metadata && form.metadata.tool) || null,
+    _kind: "form",
     receivedAt: Date.now(),
     error: null,
     busy: false,
@@ -76,40 +118,75 @@ function enqueue(data) {
   if (entry) questionStore.queue.push(entry);
 }
 
+function enqueueForm(data) {
+  if (!data) return;
+  const entry = fromFormCreated(data);
+  if (entry) {
+    if (questionStore.queue.some((q) => q.id === entry.id)) return;
+    questionStore.queue.push(entry);
+  }
+}
+
 function dequeue(id) {
   if (!id) return;
   questionStore.queue = questionStore.queue.filter((q) => q.id !== id);
 }
 
-// Only `question.v2.asked` enqueues. `.replied` and `.rejected` are the
-// outbound confirmations and clear the entry — the same asked/settled pairing
-// permission.js uses. Both settle events key the request as `requestID`
-// (`id` on those payloads is the event's own evt_ id, not the question's).
+// question.* / question.v2.* — older/alternate builds.
 export function handleQuestionEvent(event) {
   const type = event && event.type;
   const data = (event && event.data) || {};
 
-  if (type === "question.v2.asked") {
+  const name = (type || "").replace(/^question\.v2\./, "question.");
+
+  if (name === "question.asked") {
     enqueue(data);
     return;
   }
 
-  if (type === "question.v2.replied" || type === "question.v2.rejected") {
+  if (name === "question.replied" || name === "question.rejected") {
     dequeue(data.requestID);
   }
 }
 
-// GET /api/question/request — pending asks for the current location, across
-// sessions. A dropped `asked` event (SSE reconnect, a tab opened after the
-// ask) otherwise leaves the agent blocked forever on a question the UI never
-// shows, so reconcile against the server rather than trusting the stream.
+// form.* — the current build. Only metadata.kind === "question" forms
+// are tracked here; other forms (MCP elicitation etc.) don't block a run.
+export function handleFormEvent(event) {
+  const type = event && event.type;
+  const data = (event && event.data) || {};
+
+  if (type === "form.created") {
+    enqueueForm(data);
+    return;
+  }
+
+  // form.replied / form.cancelled carry {id} (not requestID)
+  if (type === "form.replied" || type === "form.cancelled") {
+    dequeue(data.id);
+  }
+}
+
+// GET /api/form/request — pending forms across sessions. Filters to
+// metadata.kind === "question" so only question-tool forms enter the queue.
+// Also hits /question/request for builds that still use the question routes.
 export async function loadPendingQuestions() {
   try {
-    const res = await apiGet("/question/request");
-    if (!res.ok) return;
-    for (const request of unwrap(await res.json())) enqueue(request);
+    const res = await apiGet("/form/request");
+    if (res.ok) {
+      for (const form of unwrap(await res.json())) enqueueForm({ form });
+    }
   } catch {
-    // Best-effort reconciliation — the SSE stream is the primary path.
+    // Best-effort — the SSE stream is the primary path.
+  }
+
+  // Fallback for older builds with question.* routes.
+  try {
+    const qres = await apiGet("/question/request");
+    if (qres.ok) {
+      for (const request of unwrap(await qres.json())) enqueue(request);
+    }
+  } catch {
+    // Best-effort.
   }
 }
 
@@ -117,24 +194,80 @@ export async function loadPendingQuestions() {
 // `answers` is positional: answers[i] holds the labels chosen for
 // questions[i]. Returns 204 on success.
 export async function reply(requestID, answers) {
-  await send(requestID, "reply", { answers });
-}
-
-// POST /api/session/{sessionID}/question/{requestID}/reject — the user
-// declining to answer, which lets the tool proceed (or fail) on its own.
-// Takes no body.
-export async function reject(requestID) {
-  await send(requestID, "reject", null);
-}
-
-async function send(requestID, path, body) {
   const entry = questionStore.queue.find((q) => q.id === requestID);
   if (!entry || entry.busy) return;
+
+  if (entry._kind === "form") {
+    await replyForm(entry, answers);
+    return;
+  }
+  await sendQuestion(requestID, entry, "reply", { answers });
+}
+
+// POST /api/session/{sessionID}/question/{requestID}/reject
+export async function reject(requestID) {
+  const entry = questionStore.queue.find((q) => q.id === requestID);
+  if (!entry || entry.busy) return;
+
+  if (entry._kind === "form") {
+    await cancelForm(entry);
+    return;
+  }
+  await sendQuestion(requestID, entry, "reject", null);
+}
+
+async function replyForm(entry, answers) {
+  entry.busy = true;
+  entry.error = null;
+  // Form.Reply = {answer: {q0: string, q1: string[]}}
+  const fields = entry.questions;
+  const answer = {};
+  for (let i = 0; i < fields.length; i++) {
+    const key = `q${i}`;
+    const val = answers[i] || [];
+    answer[key] = fields[i].multiple ? val : (val[0] || "");
+  }
+  try {
+    const res = await apiPost(
+      `/session/${entry.sessionID}/form/${entry.id}/reply`,
+      { answer }
+    );
+    if (res.ok) {
+      dequeue(entry.id);
+      return;
+    }
+    entry.error = await errorMessage(res, "reply");
+  } catch (err) {
+    entry.error = err.message || "Failed to reply to form";
+  } finally {
+    entry.busy = false;
+  }
+}
+
+async function cancelForm(entry) {
   entry.busy = true;
   entry.error = null;
   try {
-    // `reject` takes no body at all, so pass undefined rather than null —
-    // apiPost only sets a Content-Type when there is something to send.
+    const res = await apiPost(
+      `/session/${entry.sessionID}/form/${entry.id}/cancel`,
+      undefined
+    );
+    if (res.ok) {
+      dequeue(entry.id);
+      return;
+    }
+    entry.error = await errorMessage(res, "cancel");
+  } catch (err) {
+    entry.error = err.message || "Failed to cancel form";
+  } finally {
+    entry.busy = false;
+  }
+}
+
+async function sendQuestion(requestID, entry, path, body) {
+  entry.busy = true;
+  entry.error = null;
+  try {
     const res = await apiPost(
       `/session/${entry.sessionID}/question/${requestID}/${path}`,
       body ?? undefined
@@ -143,8 +276,6 @@ async function send(requestID, path, body) {
       dequeue(requestID);
       return;
     }
-    // The server explains a rejected answer precisely (which key, which
-    // question); surface that instead of a bare status.
     entry.error = await errorMessage(res, path);
   } catch (err) {
     entry.error = err.message || `Failed to ${path} question`;

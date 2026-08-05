@@ -91,11 +91,12 @@ export async function readTextFile(cwd, path) {
 // Every `*.md` under each of `dirs`, as { path, text }. Directories that don't
 // exist contribute nothing. One PTY round-trip for the whole set — a per-file
 // read costs a create/connect/teardown each and adds up fast.
-export async function readMarkdownDirs(cwd, dirs) {
+export async function readMarkdownDirs(cwd, dirs, { recursive = false } = {}) {
   if (!dirs.length) return [];
-  const globs = dirs.map((d) => `${quotePath(`${d}/`)}*.md`).join(" ");
-  const script =
-    `for f in ${globs}; do\n` +
+  const globs = recursive
+    ? dirs.map((d) => `find ${quotePath(d)} -type f -name '*.md' -print`).join("; ")
+    : `printf '%s\\n' ${dirs.map((d) => `${quotePath(`${d}/`)}*.md`).join(" ")}`;
+  const script = `for f in $(${globs}); do\n` +
     `[ -f "$f" ] || continue\n` +
     `printf '\\n__OC%sFILE__%s__\\n' _ "$f"\n` +
     `${dumpCommand('"$f"')}\n` +

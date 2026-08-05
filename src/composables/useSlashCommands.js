@@ -7,6 +7,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { opencodeStore as store } from "../stores/opencode.js";
 import { activeSessionDirectory, startNewChat } from "../stores/projects.js";
 import { requestHandover } from "../stores/handover.js";
+import { localCommandsStore } from "../stores/localCommands.js";
 
 // Builtins run against the harness itself instead of going to the server.
 const BUILTIN_SLASH_COMMANDS = [
@@ -38,8 +39,13 @@ export function useSlashCommands(input, textareaEl) {
       description: s.description || "",
       source: "skill",
     }));
+    const local = localCommandsStore.commands.map((c) => ({
+      name: c.name,
+      description: c.description || "",
+      source: "command-file",
+    }));
     const builtin = BUILTIN_SLASH_COMMANDS.map((c) => ({ ...c, source: "builtin" }));
-    return [...dynamic, ...skills, ...builtin];
+    return [...dynamic, ...skills, ...local, ...builtin];
   });
 
   const matches = computed(() => {

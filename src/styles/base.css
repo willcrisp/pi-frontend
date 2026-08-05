@@ -17,6 +17,7 @@
   --msg-tool: var(--accent);
   --msg-tool-error: var(--error);
   --msg-subagent: #bb9af7;
+  --msg-tool-serena: #e0af68;
 }
 
 * {

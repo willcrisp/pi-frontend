@@ -14,10 +14,10 @@ This file provides guidance when working with code in this repository.
   authenticated SSE stream). Markdown rendering and diffing are hand-rolled in
   `src/lib/` rather than pulled in — keep it that way unless there's a reason.
 - No linter or formatter is configured. The check to run is `npm run build` — a
-  broken import or bad template is otherwise a runtime-only failure. `npm test`
-  (the Playwright suite) is slow and takes over the machine's browser, so **do
-  not run it unless asked**; write the test alongside the change and leave it
-  for the next explicit test run.
+  broken import or bad template is otherwise a runtime-only failure. **Do not
+  run Playwright tests (`npm test`) unless the user explicitly asks for them.**
+  The suite is slow and takes over the machine's browser; write the test
+  alongside the change and leave it for the next explicit test run.
 - **Show the change before explaining it.** For a small feature or a visual
   tweak, drive the app and send back a screenshot first, then describe what
   changed. A paragraph about a button is no substitute for a picture of it.
@@ -48,7 +48,7 @@ here rather than grepping the whole tree:
 npm install
 npm run dev     # Vite dev server on http://localhost:5173
 npm run build   # Production build to dist/
-npm test        # Playwright composer tests (starts its own servers) — only when asked
+  npm test        # Playwright composer tests — only when explicitly requested
 ```
 
 You also need an OpenCode V2 server to point at:

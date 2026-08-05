@@ -30,6 +30,7 @@ import { closeSidebar, closeSidebarIfDrawer, layoutStore } from "../../stores/la
 import ProvidersDialog from "../dialogs/ProvidersDialog.vue";
 import SubagentsDialog from "../dialogs/SubagentsDialog.vue";
 import SavedPermissionsDialog from "../dialogs/SavedPermissionsDialog.vue";
+import McpDialog from "../dialogs/McpDialog.vue";
 
 const activeSessionId = computed(() => opencodeStore.activeSessionId);
 
@@ -37,6 +38,7 @@ const showArchived = ref(false);
 const showProviders = ref(false);
 const showSubagents = ref(false);
 const showSavedPermissions = ref(false);
+const showMcp = ref(false);
 
 // Sub-agent sessions are deliberately absent here: they live as expandable
 // cards inside their parent's transcript, and you drill into them from there.
@@ -296,6 +298,14 @@ async function newSessionIn(directory) {
           </svg>
         </button>
         <button class="icon-btn" title="Providers" @click="showProviders = true">⚙</button>
+        <button class="icon-btn" title="MCP servers" @click="showMcp = true">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="3.5" r="2" stroke="currentColor" stroke-width="1.2" />
+            <circle cx="3.5" cy="12" r="2" stroke="currentColor" stroke-width="1.2" />
+            <circle cx="12.5" cy="12" r="2" stroke="currentColor" stroke-width="1.2" />
+            <path d="M8 5.5v3M8 8.5L4 10M8 8.5l4 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          </svg>
+        </button>
         <button class="icon-btn" title="New project" @click="showAddForm = !showAddForm">+</button>
       </div>
     </div>
@@ -306,6 +316,7 @@ async function newSessionIn(directory) {
       v-if="showSavedPermissions"
       @close="showSavedPermissions = false"
     />
+    <McpDialog v-if="showMcp" @close="showMcp = false" />
 
     <form v-if="showAddForm" class="add-project-form" @submit.prevent="submitAdd">
       <div class="path-input-wrap">

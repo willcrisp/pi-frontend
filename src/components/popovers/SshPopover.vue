@@ -3,7 +3,7 @@
 -->
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { opencodeStore as store } from "../../stores/opencode.js";
+import { opencodeStore as store, reconnectStream, loadCatalogs } from "../../stores/opencode.js";
 import { connectionStore, testConnection, setConnection, setCredentials } from "../../stores/ssh.js";
 
 const root = ref(null);
@@ -41,7 +41,9 @@ function onSave() {
   setConnection(portInput.value);
   setCredentials(username.value, password.value);
   open.value = false;
-  window.location.reload();
+  store.error = null;
+  reconnectStream();
+  loadCatalogs({ force: true });
 }
 </script>
 

@@ -231,7 +231,8 @@
   flex-shrink: 0;
 }
 
-.project-row:hover .remove-btn {
+.project-row:hover .remove-btn,
+.chat-row:hover .remove-btn {
   opacity: 1;
 }
 

@@ -23,7 +23,7 @@ import {
   setThinkingLevel,
   runCommand,
 } from "../../stores/opencode.js";
-import { EMPTY_CHAT_PLACEHOLDER, randomPlaceholder } from "../../lib/placeholders.js";
+import { randomPlaceholder } from "../../lib/placeholders.js";
 import { useAttachments } from "../../composables/useAttachments.js";
 import { useAutosize } from "../../composables/useAutosize.js";
 import { useFileMentions } from "../../composables/useFileMentions.js";
@@ -97,13 +97,9 @@ const {
   thinkingColor,
 } = useModelPicker();
 
-// An empty chat gets the instruction; once there's a transcript the quote takes
-// over, because by then the user has seen the box work and the flavour is the
-// point. One quote per mount, so it doesn't reshuffle under the cursor.
+// One quote per mount, so it doesn't reshuffle under the cursor.
 const quote = ref(randomPlaceholder());
-const composerPlaceholder = computed(() =>
-  store.messages.length ? quote.value : EMPTY_CHAT_PLACEHOLDER
-);
+const composerPlaceholder = quote;
 const canSend = computed(() => !!(input.value.trim() || attachments.value.length));
 
 // Mid-run, the same box steers instead of being dead: the prompt is admitted

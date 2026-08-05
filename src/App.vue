@@ -5,15 +5,17 @@
   unreachable server.
 -->
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   opencodeStore,
   initOpenCode,
   commitRevert,
   clearRevert,
   loadCatalogs,
+  reconnectStream,
 } from "./stores/opencode.js";
-import { initProjects } from "./stores/projects.js";
+import { activeSessionDirectory, initProjects } from "./stores/projects.js";
+import { loadLocalCommands } from "./stores/localCommands.js";
 import { connectionStore, testConnection } from "./stores/ssh.js";
 import { permissionStore } from "./stores/permission.js";
 import { questionStore } from "./stores/question.js";
@@ -36,6 +38,21 @@ import { toggleSidebar } from "./stores/layout.js";
 
 const showProviders = ref(false);
 
+// The queue head can be answered inline in the transcript when its tool
+// call part is on screen (QuestionPart.vue). The modal is the fallback for
+// asks from a different session, a sub-agent's turn, or a part the stream
+// never delivered.
+const inlineQuestion = computed(() => {
+  const head = questionStore.queue[0];
+  const callID = head && head.tool && head.tool.callID;
+  if (!callID) return false;
+  return opencodeStore.messages.some(
+    (m) =>
+      Array.isArray(m.parts) &&
+      m.parts.some((p) => p.type === "tool" && p.callID === callID)
+  );
+});
+
 async function boot() {
   connectionStore.status = "connecting";
   const ok = await testConnection(connectionStore.port);
@@ -46,12 +63,29 @@ async function boot() {
   connectionStore.status = "connected";
   await initOpenCode();
   await initProjects();
+  loadLocalCommands().catch((err) => console.warn("Could not load local commands:", err));
 }
+
+watch(
+  activeSessionDirectory,
+  (directory, previousDirectory) => {
+    if (directory && directory !== previousDirectory) {
+      loadLocalCommands().catch((err) => console.warn("Could not load local commands:", err));
+    }
+  }
+);
 
 // The empty state's escape hatch when the catalogs couldn't be fetched: a fresh
 // set of retry attempts, so the user never has to reload the page by hand.
 function retryCatalogs() {
   loadCatalogs({ force: true });
+}
+
+function onReconnect() {
+  opencodeStore.error = null;
+  reconnectStream();
+  loadCatalogs({ force: true });
+  loadLocalCommands().catch((err) => console.warn("Could not load local commands:", err));
 }
 
 onMounted(() => {
@@ -64,7 +98,7 @@ onMounted(() => {
 
   <template v-else>
     <PermissionDialog v-if="permissionStore.queue.length" />
-    <QuestionDialog v-else-if="questionStore.queue.length" />
+    <QuestionDialog v-else-if="questionStore.queue.length && !inlineQuestion" />
     <FilePreview />
     <!-- Owns its own Ctrl/Cmd+K listener, so it mounts unconditionally. -->
     <CommandPalette />
@@ -132,6 +166,7 @@ onMounted(() => {
         <span class="process-error-text">
           {{ opencodeStore.error }}
         </span>
+        <button v-if="!opencodeStore.connected" type="button" class="process-error-retry" @click="onReconnect">Reconnect</button>
         <button type="button" class="process-error-dismiss" title="Dismiss" @click="opencodeStore.error = null">×</button>
       </div>
       <!-- A staged revert is a preview: the transcript below already reflects

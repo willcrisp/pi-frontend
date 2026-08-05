@@ -14,7 +14,7 @@ import { getJSON, unwrap } from "../../lib/api.js";
 import { isSubagentPart, upsertChild } from "./children.js";
 import { restoreSessionModel } from "./models.js";
 import { setUnread } from "./activity.js";
-import { refreshSessionContext, resetContextUsage } from "./context.js";
+import { refreshSessionContext, resetContextUsage, resetSessionStats } from "./context.js";
 import { switchDraft } from "./drafts.js";
 
 // Find or create a message shell by id in `list` — the active session's
@@ -60,6 +60,7 @@ export async function connectToSession(sessionID) {
   // active session); the ones left here belong to the chat being left.
   opencodeStore.pendingSteers = [];
   resetContextUsage();
+  resetSessionStats();
   restoreSessionModel(sessionID);
 
   await loadSessionTranscript(sessionID);
@@ -322,6 +323,9 @@ function normalizeContentItem(item) {
 function normalizeRestToolState(state) {
   if (!state) return { status: "pending" };
   const out = { status: state.status };
+  // Retain rich provider blocks: web search results often store titles, URLs and
+  // snippets outside a plain text block.
+  if (state.content) out.content = state.content;
   if (state.status === "completed") out.output = toolContentText(state.content);
   else if (state.status === "error") out.error = (state.error && state.error.message) || "error";
   // A `subagent` call stores its child session id here — the history-side half

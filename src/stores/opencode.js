@@ -71,4 +71,4 @@ export {
   stageRevert,
 } from "./opencode/session.js";
 export { handleServerEvent } from "./opencode/events.js";
-export { initOpenCode } from "./opencode/stream.js";
+export { initOpenCode, reconnectStream } from "./opencode/stream.js";

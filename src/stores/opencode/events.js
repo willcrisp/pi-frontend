@@ -62,7 +62,7 @@ import { findOrCreateMessage, recomputeText, toolContentText } from "./messages.
 import { isRunEndEvent, runMayHaveEnded } from "./run.js";
 import { loadModels } from "./catalog.js";
 import { handlePermissionEvent } from "../permission.js";
-import { handleQuestionEvent } from "../question.js";
+import { handleQuestionEvent, handleFormEvent } from "../question.js";
 import { loadIntegrations } from "../providers.js";
 import { scheduleSessionsRefresh } from "../projects.js";
 
@@ -104,10 +104,27 @@ function assistantMessageFor(list, props) {
   return msg;
 }
 
+// Event payloads are not consistent across server builds. In particular,
+// continuation/terminal events may carry the session on a nested part or use
+// the camel-case spelling, so do not let those events strand the run as active.
+function eventSessionID(props) {
+  return (
+    props.sessionID ||
+    props.sessionId ||
+    props.part?.sessionID ||
+    props.part?.sessionId ||
+    props.info?.sessionID ||
+    props.info?.sessionId ||
+    props.session?.id ||
+    ""
+  );
+}
+
 // True when session-wide state should follow this event: it isn't a sub-agent's,
 // and it isn't addressed to some other session.
 function ownsSession(child, props) {
-  return !child && (!props.sessionID || props.sessionID === opencodeStore.activeSessionId);
+  const sessionID = eventSessionID(props);
+  return !child && (!sessionID || sessionID === opencodeStore.activeSessionId);
 }
 
 // A single credential change fires several integration events; coalesce them
@@ -296,7 +313,14 @@ const HANDLERS = {
 
   "session.tool.progress": ({ props, messages }) => {
     const msg = assistantMessageFor(messages, props);
-    upsertPart(msg, `tool:${props.callID}`, { state: { status: "running" } });
+    const existing = msg.parts.find((p) => p.id === `tool:${props.callID}`);
+    const state = { ...(existing?.state || {}), status: "running" };
+    if (props.content !== undefined) state.content = props.content;
+    else if (props.output !== undefined) state.content = props.output;
+    else if (props.result !== undefined) state.content = props.result;
+    if (props.progress !== undefined) state.progress = props.progress;
+    else if (props.message !== undefined) state.progress = props.message;
+    upsertPart(msg, `tool:${props.callID}`, { state });
     // For a `subagent` call this is where the live link between the dispatching
     // tool call and its child session usually arrives.
     linkFromToolMetadata(props);
@@ -304,10 +328,12 @@ const HANDLERS = {
 
   "session.tool.success": ({ props, messages }) => {
     const msg = assistantMessageFor(messages, props);
+    const content = props.content ?? props.output ?? props.result;
     upsertPart(msg, `tool:${props.callID}`, {
       state: {
         status: "completed",
-        output: toolContentText(props.content),
+        output: toolContentText(content),
+        content,
         // Keep the linkage on the part itself: the card reads it, and a later
         // history refresh reconciles against the same field.
         metadata: (props.metadata && props.metadata.metadata) || undefined,
@@ -456,16 +482,22 @@ export function handleServerEvent(event) {
     handlePermissionEvent(event);
     return;
   }
-  // question.v2.* — structured mid-execution asks, same contract.
-  if (type.startsWith("question.v2.")) {
+  // question.v2.* / question.* — structured mid-execution asks. The v2 prefix
+  // is present on some builds and absent on others; accept both so neither
+  // leaves the agent parked on an unanswerable question.
+  if (type.startsWith("question.v2.") || type.startsWith("question.")) {
     handleQuestionEvent(event);
     return;
   }
+  // form.* — the current build wraps question asks in a generic form with
+  // metadata.kind === "question". Route here so the queue is populated and
+  // the form's reply/cancel endpoints are used.
+  if (type.startsWith("form.")) {
+    handleFormEvent(event);
+    return;
+  }
 
-  const sessionID =
-    (props.part && props.part.sessionID) ||
-    (props.info && props.info.sessionID) ||
-    props.sessionID;
+  const sessionID = eventSessionID(props);
 
   // Run state first: the sidebar dot is driven for every session, and settling a
   // run has to happen even for one we aren't looking at — both would be lost to

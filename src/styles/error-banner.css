@@ -21,6 +21,23 @@
   word-break: break-word;
 }
 
+.process-error-retry {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--error);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.process-error-retry:hover {
+  background: rgba(247, 118, 142, 0.15);
+}
+
 .process-error-dismiss {
   flex-shrink: 0;
   background: none;

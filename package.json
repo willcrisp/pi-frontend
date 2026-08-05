@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_OPTIONS='--no-deprecation' vite",
     "build": "vite build",
     "test": "playwright test"
   },

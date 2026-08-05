@@ -40,3 +40,74 @@
 .tool .running {
   color: var(--accent);
 }
+
+.tool-sources {
+  display: grid;
+  gap: 1px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.tool-source {
+  display: grid;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.tool-source:hover {
+  background: var(--bg-raised);
+}
+
+.tool-source-title {
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-source-url {
+  overflow: hidden;
+  color: var(--dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Images a tool call returned (a `read` of an image file, a screenshot MCP
+   tool): rendered inline beneath the tool row — the transcript equivalent of
+   the .msg-image treatment user attachments get in MessageView.vue. */
+.tool-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+
+.tool-image {
+  display: block;
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* MCP server tool calls: accent by server so they stand out from built-ins.
+   Tool names arrive as `<server>_<tool>`; MessageView.mcpToolClass adds
+   `tool-mcp-<server>` to the <details>. Serena gets amber, distinct from the
+   default blue accent and the purple subagent colour. */
+.tool.tool-mcp-serena {
+  border-color: rgba(224, 175, 104, 0.35);
+}
+.tool.tool-mcp-serena summary .tool-name {
+  color: var(--msg-tool-serena);
+}

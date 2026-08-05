@@ -77,6 +77,12 @@ export function resetContextUsage() {
   opencodeStore.sessionStats.contextUsage = { percent: 0, used: null, limit: null, fromServer: false };
 }
 
+// Zero out token/cost stats so a new session doesn't inherit the previous one's.
+export function resetSessionStats() {
+  opencodeStore.sessionStats.tokens = { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
+  opencodeStore.sessionStats.cost = 0;
+}
+
 // GET /api/session/{id}/context — the context/token accounting the server
 // actually applies. The response shape is not pinned down in the spec beyond
 // being an object of counts, so read it tolerantly and only take it over the

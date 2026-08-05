@@ -41,6 +41,23 @@ export function handlePermissionEvent(event) {
   }
 }
 
+// GET /api/permission/request — pending asks across sessions. The fallback for
+// a dropped `asked` event: an approval the UI never shows blocks the tool call
+// (and with it the whole run) indefinitely — /session/active keeps reporting
+// "running", so the run poll alone never ends it. Reconcile against the server
+// rather than trusting the stream. Mirrors question.js#loadPendingQuestions.
+export async function loadPendingPermissions() {
+  try {
+    const res = await apiGet("/permission/request");
+    if (!res.ok) return;
+    for (const request of unwrap(await res.json())) {
+      handlePermissionEvent({ type: "permission.v2.asked", data: request });
+    }
+  } catch {
+    // Best-effort reconciliation — the SSE stream is the primary path.
+  }
+}
+
 // GET /api/permission/saved — the persisted always-allow rules.
 export async function loadSavedPermissions() {
   permissionStore.savedLoading = true;
