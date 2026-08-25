@@ -20,6 +20,7 @@ import {
   refreshActiveMessages,
 } from "../stores/opencode.js";
 import { fetchSessions, initProjects, projectsStore } from "../stores/projects.js";
+import { setAppVisible, startWatching } from "./lib/nativeWatch.js";
 import { permissionStore } from "../stores/permission.js";
 import { questionStore } from "../stores/question.js";
 import ConnectScreen from "./components/ConnectScreen.vue";
@@ -55,6 +56,9 @@ async function boot() {
   screen.value = opencodeStore.activeSessionId ? "chat" : "sessions";
   booting.value = false;
   syncHistory();
+  // Hand the connection to the native watcher, which keeps its own stream open
+  // while the app is backgrounded and the WebView is frozen. A no-op off-device.
+  startWatching(document.visibilityState === "visible");
 }
 
 // Put the history stack where `screen` ended up. Needed because boot restores
@@ -106,7 +110,11 @@ function onPopState() {
 // "working" until it was force-quit. Re-establish the stream and re-read what
 // was missed, rather than trusting what is on screen.
 function onVisibility() {
-  if (document.visibilityState !== "visible") return;
+  const visible = document.visibilityState === "visible";
+  // Told on the way out as well as the way in: the service stays silent while
+  // the app is on screen, and this is the only signal it gets.
+  setAppVisible(visible);
+  if (!visible) return;
   if (booting.value || screen.value === "connect") return;
   reconnectStream();
   fetchSessions().catch(() => {});

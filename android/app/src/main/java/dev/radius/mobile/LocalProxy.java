@@ -64,6 +64,9 @@ public class LocalProxy {
      */
     public static final int PORT = 47653;
 
+    /** Reserved for app-to-native calls; never proxied, never an asset. */
+    private static final String CONTROL_PREFIX = "/_radius/";
+
     /** Mirrors API_PREFIX in vite.config.js. Every part is mandatory. */
     private static final Pattern API_PREFIX =
             Pattern.compile("^/api/(https?)/([A-Za-z0-9._\\-]+):(\\d+)(/.*)$");
@@ -75,7 +78,24 @@ public class LocalProxy {
         InputStream open(String path) throws IOException;
     }
 
+    /**
+     * Handles the app's own control calls, under {@link #CONTROL_PREFIX}.
+     *
+     * <p>This is how the web app talks to native code without a Capacitor
+     * bridge. The bridge is not available here — the app is loaded from this
+     * proxy's URL rather than from Capacitor's asset scheme — and the same trick
+     * that keeps the proxy stateless works again: the JS already speaks HTTP to
+     * this origin, so a path the proxy answers itself is a channel that needs no
+     * plugin, no permission and no extra moving parts.
+     *
+     * @return a short response body, or null to answer 404
+     */
+    public interface ControlHandler {
+        String onControl(String path, String body);
+    }
+
     private final AssetSource assets;
+    private volatile ControlHandler controlHandler;
     private ServerSocket server;
     /** Unbounded: a connection here is nearly all blocked-on-IO time, and the
      *  long-lived ones (the SSE stream, a PTY socket) hold their thread for the
@@ -84,6 +104,11 @@ public class LocalProxy {
 
     public LocalProxy(AssetSource assets) {
         this.assets = assets;
+    }
+
+    /** Optional; without one the control routes simply 404 (as in the tests). */
+    public void setControlHandler(ControlHandler handler) {
+        this.controlHandler = handler;
     }
 
     public void start() throws IOException {
@@ -131,6 +156,11 @@ public class LocalProxy {
             String method = parts[0];
             String target = parts[1];
 
+            if (target.startsWith(CONTROL_PREFIX)) {
+                control(client, in, headText, target);
+                return;
+            }
+
             Matcher m = API_PREFIX.matcher(target);
             if (m.matches()) {
                 boolean tls = m.group(1).equals("https");
@@ -143,6 +173,57 @@ public class LocalProxy {
         } catch (IOException e) {
             closeQuietly(client);
         }
+    }
+
+    // ── Control calls ───────────────────────────────────────────────────────
+
+    private void control(Socket client, InputStream in, String headText, String target)
+            throws IOException {
+        ControlHandler handler = controlHandler;
+        if (handler == null) {
+            writeSimple(client, 404, "text/plain", "no control handler".getBytes(StandardCharsets.UTF_8));
+            closeQuietly(client);
+            return;
+        }
+        String body = readBody(in, headText);
+        String reply;
+        try {
+            reply = handler.onControl(target, body);
+        } catch (RuntimeException e) {
+            // A control call is a convenience; it must never take the proxy —
+            // and with it the whole app — down.
+            reply = null;
+        }
+        if (reply == null) {
+            writeSimple(client, 404, "text/plain", "unknown control route".getBytes(StandardCharsets.UTF_8));
+        } else {
+            writeSimple(client, 200, "application/json; charset=utf-8", reply.getBytes(StandardCharsets.UTF_8));
+        }
+        closeQuietly(client);
+    }
+
+    /** Read exactly Content-Length bytes. These bodies are small and local. */
+    private static String readBody(InputStream in, String headText) throws IOException {
+        int length = 0;
+        for (String line : splitHeaderLines(headText)) {
+            if (line.toLowerCase(Locale.ROOT).startsWith("content-length:")) {
+                try {
+                    length = Integer.parseInt(line.substring(15).trim());
+                } catch (NumberFormatException ignored) {
+                    return "";
+                }
+                break;
+            }
+        }
+        if (length <= 0 || length > 64 * 1024) return "";
+        byte[] buf = new byte[length];
+        int read = 0;
+        while (read < length) {
+            int n = in.read(buf, read, length - read);
+            if (n == -1) break;
+            read += n;
+        }
+        return new String(buf, 0, read, StandardCharsets.UTF_8);
     }
 
     // ── Proxying ────────────────────────────────────────────────────────────

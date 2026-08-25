@@ -33,6 +33,11 @@
 
         </activity>
 
+        <service
+            android:name=".NotificationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -47,4 +52,13 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- A foreground service is the only way to keep a connection to the server
+         while the app is backgrounded: Android freezes the WebView, so the app's
+         own event stream dies and no JavaScript runs again until you reopen it —
+         which is exactly when a notification would no longer be useful. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+ makes posting notifications a runtime permission. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

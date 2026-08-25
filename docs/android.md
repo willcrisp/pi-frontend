@@ -225,6 +225,89 @@ The in-app alternatives were investigated and all are worse here:
 No microphone permission is declared, deliberately: a sideloaded app asking for
 one it never uses is a bad signal.
 
+## Notifications
+
+The phone buzzes for three things, and only while the app is **not** on screen:
+
+| | Channel | Why that importance |
+|---|---|---|
+| An agent needs approval | Waiting on you (high) | The run is stopped until you answer. An approval nobody sees stalls it indefinitely — `/session/active` keeps reporting "running" forever. |
+| An agent has a question | Waiting on you (high) | Same: blocked mid-turn. |
+| A turn finished | Turn finished (default) | Worth knowing, not worth interrupting for. |
+
+### Why this needed native code
+
+Android freezes a backgrounded WebView. The app's own SSE connection dies with
+it and no JavaScript runs again until you reopen the app — which is exactly when
+a notification would no longer be useful. So the watching happens in a
+**foreground service** holding its own connection to the server, entirely outside
+the WebView.
+
+The cost is the ongoing notification Android requires in return. It is on a
+MIN-importance channel, so it sits silently at the bottom of the shade rather
+than buzzing.
+
+### How it is put together
+
+`EventWatcher.java` has **no Android imports**, like `LocalProxy.java` and for a
+sharper version of the same reason: a background service that quietly fails to
+notify is close to undebuggable on a phone — there is no console, and "it didn't
+buzz" is the only symptom a dozen different causes share. So every decision lives
+there and is tested off-device; `NotificationService.java` is glue that turns
+listener calls into system notifications.
+
+**The run-end rule is copied from `stores/opencode/run.js` and must stay in step
+with it.** No event reliably says a run finished: a terminal event is a
+*candidate*, confirmed against `GET /session/active`, because a steered prompt
+keeps the same agent loop going past a `step.ended`. Announcing "finished" on the
+first one would fire mid-turn. Sub-agent sessions are skipped too — a dispatched
+child ending is not your turn ending.
+
+`Json.java` is a small hand-written parser rather than a regex over the payload,
+and that is not fussiness: **the assistant's own text streams through it.** A
+model writing about this codebase emits exactly the bytes `"type":"session.idle"`
+inside a string, so anything that ignores string boundaries eventually fires a
+notification because the agent typed one. There is a test for that specific case.
+
+### How the web app configures it
+
+Through a plain `POST` to `/_radius/*` on the app's own origin, answered natively
+by `LocalProxy`'s control handler:
+
+```
+POST /_radius/watch       {scheme, host, port, auth, visible}   start / reconfigure
+POST /_radius/visibility  {visible}                             go quiet / speak up
+POST /_radius/stop        {}                                    stop watching
+```
+
+No Capacitor bridge is involved — there is none here, since the app loads from
+the proxy's URL rather than Capacitor's asset scheme — and none is needed: the JS
+already speaks HTTP to that origin. It is the same trick as encoding the upstream
+address in the URL.
+
+In a browser those paths 404, `nativeWatch.js` latches that on the first call and
+stops trying, and the app is otherwise unaffected — which is what `npm run
+dev:mobile` and the bundle-serving test both run as.
+
+### Testing it
+
+```sh
+MOCK_PORT=4097 node test/mock-opencode.js &
+javac -d /tmp/pt android/app/src/main/java/dev/radius/mobile/Json.java \
+      android/app/src/main/java/dev/radius/mobile/EventWatcher.java \
+      android/app/src/main/java/dev/radius/mobile/LocalProxy.java mobile/proxy-test/*.java
+java -cp /tmp/pt dev.radius.mobile.WatcherTest 4097
+```
+
+21 checks: the JSON parser against payloads with quotes nested inside strings,
+the run-end rule in both directions, `session.next.*` normalization, what does and
+does not deserve a notification, silence while the app is in the foreground, and
+— running the real loop against the mock server — an event pushed over an actual
+SSE connection arriving as a notification with the session's title on it.
+
+Note the compile list: only the three Android-free classes. `MainActivity` and
+`NotificationService` do not compile off-device, by design.
+
 ## Mobile conventions
 
 Things a phone app is expected to do, and where each is handled:
@@ -271,11 +354,13 @@ Known gaps worth naming:
   server-side rule; the list that revokes it is a desktop screen. It stays
   available anyway, because approving every file read one at a time on a phone is
   unusable.
-- **No background execution.** Android suspends the WebView when the app is
-  backgrounded, so the SSE stream drops and reconnects on return. The run keeps
-  going server-side — `GET /session/active` is what the app trusts on reconnect —
-  so nothing is lost but live updates while away.
-- **No push notifications.** A finished turn is visible when you open the app.
+- **The WebView still suspends** when backgrounded, so the app's own SSE stream
+  drops and reconnects on return. The run keeps going server-side, and the
+  notification service watches independently — see **Notifications** above.
+- **Notifications are not push.** The service holds an open connection, so they
+  arrive only while it is running and the phone has a route to the server. A
+  doze-killed service means a missed buzz, not a missed message: the transcript
+  is still there when you open the app.
 - **The proxy's port (47653) is fixed**, because `capacitor.config.json`'s
   `server.url` names it at build time. Nothing else should be on it; if something
   is, the app fails to start and says so in logcat.

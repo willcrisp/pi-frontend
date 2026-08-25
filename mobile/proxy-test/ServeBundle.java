@@ -20,6 +20,14 @@ public class ServeBundle {
             if (!f.isFile()) throw new IOException("no such asset " + path);
             return new FileInputStream(f);
         });
+        // Stands in for MainActivity's control handler, so the JS side of the
+        // native-watch contract can be exercised in a browser: every call the app
+        // makes is echoed here, which is how the payload it sends is checked
+        // against what NotificationService expects.
+        proxy.setControlHandler((path, body) -> {
+            System.out.println("CONTROL " + path + " " + body);
+            return "{\"ok\":true}";
+        });
         proxy.start();
         System.out.println("serving " + root + " on http://127.0.0.1:" + LocalProxy.PORT);
         Thread.sleep(Long.MAX_VALUE);

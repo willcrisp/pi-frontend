@@ -122,6 +122,35 @@ public class ProxyTest {
         check("101 keeps Connection: Upgrade", upgraded.toLowerCase().contains("connection: upgrade"));
         check("bytes after the 101 are spliced through", upgraded.contains("FRAME"));
 
+        // ── Control routes (the app-to-native channel) ──────────────────────
+        // /_radius/* is answered by the app itself, never proxied and never
+        // treated as an asset — that is how the web app configures the
+        // notification service without a Capacitor bridge.
+        String noHandler = request("POST /_radius/watch HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}");
+        check("a control route 404s with no handler installed", noHandler.startsWith("HTTP/1.1 404"));
+
+        final StringBuilder seen = new StringBuilder();
+        proxy.setControlHandler((path, body) -> {
+            seen.append(path).append(" ").append(body);
+            return "{\"ok\":true}";
+        });
+        String handled = request(
+                "POST /_radius/watch HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                        + "Content-Length: 28\r\n\r\n{\"host\":\"h\",\"visible\":false}");
+        check("a control route reaches the handler with its body",
+                seen.toString().equals("/_radius/watch {\"host\":\"h\",\"visible\":false}"));
+        check("a control route answers the handler's reply", handled.contains("{\"ok\":true}"));
+
+        // A handler that throws must not take the proxy down with it — the whole
+        // app is served through this socket.
+        proxy.setControlHandler((path, body) -> { throw new RuntimeException("boom"); });
+        String threw = request("POST /_radius/watch HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}");
+        check("a throwing control handler answers 404 rather than killing the proxy",
+                threw.startsWith("HTTP/1.1 404"));
+        String stillServing = request("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        check("the proxy still serves assets after a handler threw", stillServing.contains("<title>radius</title>"));
+        proxy.setControlHandler(null);
+
         // ── TLS upstream (a Coder port-forward URL) ─────────────────────────
         // Against a real HTTPS server with a self-signed cert. The test JVM
         // trusts it via -Djavax.net.ssl.trustStore; see docs/android.md.

@@ -49,6 +49,7 @@ here rather than grepping the whole tree:
 | a persisted preference | the owning store, via `lib/storage.js` |
 | anything in the Android app's UI | `src/mobile/` — it does **not** share components with the desktop, only stores |
 | the Android build's tooling (entry, Vite config, proxy test) | `mobile/` — but `android/` and `capacitor.config.json` are pinned to the root by Capacitor |
+| what the Android app notifies about | `EventWatcher.java` — its run-end rule mirrors `stores/opencode/run.js`, so the two move together |
 | how either build reaches the server | `apiBase()` in `stores/ssh.js`, **and** both proxies — see below |
 
 ## Development Commands
