@@ -4,6 +4,7 @@ import { readNumber, readString, writeString } from "../lib/storage.js";
 
 const PORT_KEY = "opencode-web:port";
 const HOST_KEY = "opencode-web:host";
+const SECURE_KEY = "opencode-web:secure";
 const MODE_KEY = "opencode-web:mode";
 const USERNAME_KEY = "opencode-web:username";
 const PASSWORD_KEY = "opencode-web:password";
@@ -16,6 +17,10 @@ export const connectionStore = reactive({
   // behaviour identical.
   host: readString(HOST_KEY, "127.0.0.1"),
   port: readNumber(PORT_KEY, 4096),
+  // Whether the server is reached over TLS. False for the tunnelled desktop
+  // workflow and a LAN address; true for a Coder port-forward URL, which is
+  // https on 443 with the port encoded in the hostname.
+  secure: readString(SECURE_KEY, "") === "1",
   mode: readString(MODE_KEY, "local"), // "local" | "remote"
   status: "unknown", // "unknown" | "connecting" | "connected" | "failed"
   testing: false,
@@ -28,9 +33,9 @@ export const connectionStore = reactive({
 // Proxy routing prefix + the opencode2 server's own `/api` route prefix. The
 // forwarded path becomes `/api/...` on the server.
 //
-// The prefix encodes the whole upstream address — `/api/<host>:<port>` — rather
-// than just the port, and that is deliberate: it means the proxy is stateless
-// and needs no configuration channel of its own. The web build's Vite proxy
+// The prefix encodes the whole upstream address — `/api/<scheme>/<host>:<port>`
+// — rather than just the port, and that is deliberate: it means the proxy is
+// stateless and needs no configuration channel of its own. The web build's Vite proxy
 // (vite.config.js) and the Android build's in-app proxy (LocalProxy.java) both
 // read the target straight off the URL, so the JS never has to tell either one
 // where to connect.
@@ -42,7 +47,7 @@ export const connectionStore = reactive({
 // makes every request same-origin, which additionally keeps SSE streaming and
 // keeps the PTY connect-token's same-origin check satisfied.
 export function apiBase() {
-  return `/api/${connectionStore.host}:${connectionStore.port}/api`;
+  return `/api/${connectionStore.secure ? "https" : "http"}/${connectionStore.host}:${connectionStore.port}/api`;
 }
 
 // UTF-8-safe base64 basic-auth header; empty when no password (server has no auth).
@@ -68,14 +73,17 @@ export function setCredentials(username, password) {
 // the URL and headers by hand instead of going through lib/api.js: apiBase() and
 // authHeaders() read the *current* connection, which is precisely not what is
 // being tested here.
-export async function testConnection(port, username, password, host) {
+export async function testConnection(port, username, password, host, secure) {
   connectionStore.testing = true;
   connectionStore.testResult = null;
   const u = username !== undefined ? username : connectionStore.username;
   const p = password !== undefined ? password : connectionStore.password;
   const h = host !== undefined && host !== "" ? host : connectionStore.host;
+  const scheme = (secure !== undefined ? secure : connectionStore.secure) ? "https" : "http";
   try {
-    const res = await fetch(`/api/${h}:${port}/api/health`, { headers: buildAuthHeaders(u, p) });
+    const res = await fetch(`/api/${scheme}/${h}:${port}/api/health`, {
+      headers: buildAuthHeaders(u, p),
+    });
     if (res.ok) {
       connectionStore.testResult = { ok: true, message: "Connected to OpenCode V2!" };
       return true;
@@ -94,12 +102,16 @@ export async function testConnection(port, username, password, host) {
   }
 }
 
-export function setConnection(port, mode, host) {
+export function setConnection(port, mode, host, secure) {
   connectionStore.port = Number(port) || 4096;
   if (mode) connectionStore.mode = mode;
   if (host !== undefined) {
     connectionStore.host = String(host || "").trim() || "127.0.0.1";
     writeString(HOST_KEY, connectionStore.host);
+  }
+  if (secure !== undefined) {
+    connectionStore.secure = !!secure;
+    writeString(SECURE_KEY, connectionStore.secure ? "1" : "0");
   }
   writeString(PORT_KEY, connectionStore.port);
   writeString(MODE_KEY, connectionStore.mode);

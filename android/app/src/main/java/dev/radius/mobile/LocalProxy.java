@@ -12,6 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,10 +36,16 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <p>It is the same thing the Vite dev proxy does in vite.config.js, and it reads
- * the upstream address off the URL in the same format — {@code /api/<host>:<port>/…}
- * — so the JavaScript never has to tell either proxy anything. See apiBase() in
- * src/stores/ssh.js. Keeping the two in step matters: a change to that prefix is a
- * change in three places.
+ * the upstream address off the URL in the same format —
+ * {@code /api/<scheme>/<host>:<port>/…} — so the JavaScript never has to tell
+ * either proxy anything. See apiBase() in src/stores/ssh.js. Keeping the two in
+ * step matters: a change to that prefix is a change in three places.
+ *
+ * <p>The scheme is part of the address because the two ways of reaching a server
+ * differ on it: a tunnelled or LAN server is plain http, while a Coder
+ * port-forward URL is https on 443 with the port encoded in the hostname. The
+ * proxy terminates that TLS, which is also why the page it serves can stay plain
+ * http on loopback without any mixed-content problem.
  *
  * <p>Everything not under /api/ is served from the APK's bundled web assets.
  *
@@ -55,9 +64,9 @@ public class LocalProxy {
      */
     public static final int PORT = 47653;
 
-    /** Mirrors API_PREFIX in vite.config.js. The host part is optional. */
+    /** Mirrors API_PREFIX in vite.config.js. Every part is mandatory. */
     private static final Pattern API_PREFIX =
-            Pattern.compile("^/api/(?:([A-Za-z0-9._\\-]+):)?(\\d+)(/.*)$");
+            Pattern.compile("^/api/(https?)/([A-Za-z0-9._\\-]+):(\\d+)(/.*)$");
 
     private static final int UPSTREAM_CONNECT_TIMEOUT_MS = 8000;
 
@@ -124,9 +133,10 @@ public class LocalProxy {
 
             Matcher m = API_PREFIX.matcher(target);
             if (m.matches()) {
-                String host = m.group(1) == null ? "127.0.0.1" : m.group(1);
-                int port = Integer.parseInt(m.group(2));
-                proxy(client, in, headText, method, m.group(3), host, port);
+                boolean tls = m.group(1).equals("https");
+                String host = m.group(2);
+                int port = Integer.parseInt(m.group(3));
+                proxy(client, in, headText, method, m.group(4), host, port, tls);
             } else {
                 serveAsset(client, target);
             }
@@ -144,23 +154,28 @@ public class LocalProxy {
             String method,
             String path,
             String host,
-            int port)
+            int port,
+            boolean tls)
             throws IOException {
-        Socket upstream = new Socket();
+        Socket upstream;
         try {
-            upstream.connect(new InetSocketAddress(host, port), UPSTREAM_CONNECT_TIMEOUT_MS);
+            upstream = connectUpstream(host, port, tls);
         } catch (IOException e) {
             // A phone changes networks constantly, so a dead upstream is routine
             // rather than exceptional. Answering with a status the app can show
             // beats dropping the socket, which surfaces as an opaque "load
             // failed" with nothing to act on.
-            writeSimple(client, 502, "text/plain", ("cannot reach " + host + ":" + port).getBytes(StandardCharsets.UTF_8));
+            // The message reaches the connect screen, and a failed TLS handshake
+            // is a different problem from an unreachable host — one is the wrong
+            // address, the other a certificate the device won't accept.
+            String why = e instanceof javax.net.ssl.SSLException ? "TLS handshake failed with " : "cannot reach ";
+            writeSimple(client, 502, "text/plain", (why + host + ":" + port).getBytes(StandardCharsets.UTF_8));
             closeQuietly(client);
             return;
         }
 
         OutputStream up = upstream.getOutputStream();
-        up.write(rewriteRequestHead(headText, method, path, host, port).getBytes(StandardCharsets.ISO_8859_1));
+        up.write(rewriteRequestHead(headText, method, path, host, port, tls).getBytes(StandardCharsets.ISO_8859_1));
         up.flush();
 
         // Body (a POST) and anything the client sends later on this connection —
@@ -185,6 +200,45 @@ public class LocalProxy {
     }
 
     /**
+     * Open the upstream connection, wrapping it in TLS when the address asked for
+     * https.
+     *
+     * <p>The plain socket is connected first so the connect timeout applies, then
+     * handed to the SSL factory. Two things are set explicitly on the result and
+     * both matter:
+     *
+     * <ul>
+     *   <li>{@code setEndpointIdentificationAlgorithm("HTTPS")} turns on hostname
+     *       verification. Wrapping an already-connected socket does NOT enable it
+     *       by default — without this line any certificate from any issuer for
+     *       any name would be accepted, which is most of the point of TLS gone.
+     *   <li>{@code startHandshake()} is called here so a certificate problem
+     *       surfaces as an SSLException on this line, where it can be reported as
+     *       a 502 the connect screen shows, rather than midway through a later
+     *       read.
+     * </ul>
+     */
+    private Socket connectUpstream(String host, int port, boolean tls) throws IOException {
+        Socket plain = new Socket();
+        plain.connect(new InetSocketAddress(host, port), UPSTREAM_CONNECT_TIMEOUT_MS);
+        if (!tls) return plain;
+
+        SSLSocket ssl = null;
+        try {
+            ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault())
+                    .createSocket(plain, host, port, true);
+            SSLParameters params = ssl.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            ssl.setSSLParameters(params);
+            ssl.startHandshake();
+            return ssl;
+        } catch (IOException e) {
+            closeQuietly(ssl == null ? plain : ssl);
+            throw e;
+        }
+    }
+
+    /**
      * Strip the proxy prefix off the path, point Host at the real upstream, and
      * force the connection closed after this exchange.
      *
@@ -195,7 +249,8 @@ public class LocalProxy {
      * rewrite above. Long-lived streams (SSE, a PTY WebSocket) are unaffected:
      * they are one request that simply never ends.
      */
-    private String rewriteRequestHead(String headText, String method, String path, String host, int port) {
+    private String rewriteRequestHead(
+            String headText, String method, String path, String host, int port, boolean tls) {
         StringBuilder out = new StringBuilder();
         out.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
         boolean upgrade = headText.toLowerCase(Locale.ROOT).contains("upgrade: websocket");
@@ -213,7 +268,13 @@ public class LocalProxy {
             }
             out.append(line).append("\r\n");
         }
-        out.append("Host: ").append(host).append(':').append(port).append("\r\n");
+        // The default port is left off the Host header. A name-based router — which
+        // is exactly what a Coder workspace URL is fronted by — can match on the
+        // bare hostname and be thrown by an explicit ":443".
+        boolean defaultPort = (tls && port == 443) || (!tls && port == 80);
+        out.append("Host: ").append(host);
+        if (!defaultPort) out.append(':').append(port);
+        out.append("\r\n");
         // A WebSocket handshake must keep its own Connection: Upgrade, or the
         // upgrade never happens and the PTY routes stop working.
         out.append(upgrade ? "Connection: Upgrade\r\n" : "Connection: close\r\n");

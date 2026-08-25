@@ -55,19 +55,31 @@ opencode2 serve --hostname 0.0.0.0 --port 4096
 opencode2 service password
 ```
 
-Then in the app: host, port, password. The host is a LAN address, a Tailscale
-address, or any name the phone can resolve.
+Then in the app: one address field, and the password. The field takes either
+form and fills in the rest — what it resolved to is echoed underneath before you
+connect.
 
-**The phone needs a route to the machine.** This is the part that doesn't come in
-the APK. The desktop workflow tunnels with `ssh -L 5000:localhost:4096
-ALF-UAT.coder` and points at localhost; a phone has no equivalent. In practice:
+**The phone needs a route to the machine**, and this is the part that doesn't come
+in the APK. The desktop workflow tunnels with `ssh -L 5000:localhost:4096
+ALF-UAT.coder` and points at localhost; a phone has no equivalent. Two that work:
 
-- **Tailscale** on both ends is the one that works anywhere, including off the
-  office network. Use the machine's `100.x.y.z` or its `*.ts.net` name.
+- **A Coder port-forward URL** — forward 4096 out of the workspace and paste the
+  URL in. This is the best of them: https from anywhere, including cellular, with
+  nothing installed on the phone. It has to be **shared publicly** in Coder, or
+  the app hits Coder's own login page instead of opencode2 — the app carries an
+  opencode2 Basic-auth header, not a Coder session.
+- **Tailscale** on both ends, using the machine's `100.x.y.z` or `*.ts.net` name.
+  Plain http, and it works off-network too.
 - **Same Wi-Fi** works for a LAN address with no extra software.
-- A Coder workspace reached only through `coder ssh` is **not** reachable from the
-  phone as-is. Either expose the port through Coder, or put Tailscale in the
-  workspace.
+
+⚠️ A publicly-shared Coder port puts opencode2 on the open internet, where its
+Basic-auth password is the only thing in front of an agent that can run shell
+commands in your workspace. Use a long password and know that is the posture.
+
+If the Coder deployment's certificate is issued by an internal CA rather than a
+public one, the handshake fails on the device unless that CA is in Android's trust
+store — the app reports it as `TLS handshake failed with <host>` rather than a
+generic connection error, so it can be told apart from a wrong address.
 
 ## Developing without an APK
 
@@ -112,16 +124,25 @@ closed too.
 What works instead: serve the app itself from a proxy that also forwards `/api`,
 making every request same-origin. That is `LocalProxy.java` — a small HTTP server
 on `127.0.0.1:47653` that serves the bundled assets and forwards
-`/api/<host>:<port>/…` to the real server. It is the same thing `vite.config.js`
-does in development, and it reads the target off the URL in the same format, so
-the JavaScript never has to tell either proxy anything (see `apiBase()` in
-`src/stores/ssh.js`).
+`/api/<scheme>/<host>:<port>/…` to the real server. It is the same thing
+`vite.config.js` does in development, and it reads the target off the URL in the
+same format, so the JavaScript never has to tell either proxy anything (see
+`apiBase()` in `src/stores/ssh.js`).
+
+The scheme is part of the address because the two routes differ on it: a
+tunnelled or LAN server is plain http, a Coder URL is https on 443. The proxy
+terminates that TLS itself, which is also why the page it serves can stay plain
+http on loopback with no mixed-content problem. Certificates are verified
+properly, hostname included — `mobile/proxy-test` asserts that a certificate
+issued for the wrong name is rejected, because wrapping an already-connected
+socket does *not* turn hostname verification on by default and getting that
+wrong would be silent.
 
 Same-origin buys three more things for free: SSE keeps streaming, WebSocket
 upgrades still work, and the PTY `connect-token`'s own same-origin check is
 satisfied.
 
-**A change to the `/api/<host>:<port>` prefix is a change in three files:**
+**A change to the `/api/<scheme>/<host>:<port>` prefix is a change in three files:**
 `src/stores/ssh.js`, `vite.config.js`, `LocalProxy.java`.
 
 ### The 401 that hangs the app
@@ -150,11 +171,33 @@ javac -d /tmp/pt android/app/src/main/java/dev/radius/mobile/LocalProxy.java \
 java -cp /tmp/pt dev.radius.mobile.ProxyTest 4097
 ```
 
-17 checks: asset serving and content types, proxying with and without the host
-part, POST bodies, `Origin` not forwarded, status passthrough, an unreachable
-upstream answering 502 rather than dropping the socket, the `WWW-Authenticate`
-strip, **SSE arriving incrementally rather than buffered**, and a WebSocket
-upgrade with bytes spliced through after the 101.
+20 checks: asset serving and content types, proxying, POST bodies, `Origin` not
+forwarded, status passthrough, an unreachable upstream answering 502 rather than
+dropping the socket, the `WWW-Authenticate` strip, **SSE arriving incrementally
+rather than buffered**, a WebSocket upgrade with bytes spliced through after the
+101, and — against a real HTTPS server with a generated certificate — a
+successful TLS handshake plus **a certificate for the wrong hostname being
+rejected**.
+
+The TLS checks need a keystore, and skip themselves without one:
+
+```sh
+cd /tmp && keytool -genkeypair -alias localhost -keyalg RSA -validity 365 \
+  -dname "CN=localhost" -ext "SAN=DNS:localhost" \
+  -keystore server.p12 -storetype PKCS12 -storepass changeit -keypass changeit
+keytool -exportcert -alias localhost -keystore server.p12 -storepass changeit -file server.crt
+keytool -importcert -noprompt -alias localhost -file server.crt \
+  -keystore trust.p12 -storetype PKCS12 -storepass changeit
+keytool -genkeypair -alias other -keyalg RSA -validity 365 \
+  -dname "CN=not-your-server.example" -ext "SAN=DNS:not-your-server.example" \
+  -keystore wrong.p12 -storetype PKCS12 -storepass changeit -keypass changeit
+
+java -Djavax.net.ssl.trustStore=/tmp/trust.p12 \
+     -Djavax.net.ssl.trustStorePassword=changeit \
+     -Djavax.net.ssl.trustStoreType=PKCS12 \
+     -Dtest.keyStore=/tmp/server.p12 -Dtest.wrongKeyStore=/tmp/wrong.p12 \
+     -cp /tmp/pt dev.radius.mobile.ProxyTest 4097
+```
 
 Keep this passing. It is the only test between a proxy change and a phone.
 

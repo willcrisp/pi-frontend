@@ -6,6 +6,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
+import java.security.KeyStore;
 
 /**
  * Off-device test for LocalProxy.
@@ -54,21 +59,24 @@ public class ProxyTest {
         check("js gets a js content-type", js.contains("text/javascript"));
 
         // ── Proxying ────────────────────────────────────────────────────────
-        String health = request("GET /api/127.0.0.1:" + upstream + "/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        String health = request("GET /api/http/127.0.0.1:" + upstream + "/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         check("proxied GET reaches upstream", health.contains("{\"ok\":true}"));
 
         // The prefix's host part is optional and defaults to loopback, which is
         // the older form the desktop app used. Both must keep working.
-        String noHost = request("GET /api/" + upstream + "/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
-        check("host-less prefix still defaults to 127.0.0.1", noHost.contains("{\"ok\":true}"));
+        // Every part of the prefix is mandatory now — a malformed one must not
+        // silently fall back to some default target, it must miss the proxy rule
+        // and be treated as an asset path.
+        String noScheme = request("GET /api/127.0.0.1:" + upstream + "/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        check("a prefix without a scheme is not proxied", !noScheme.contains("{\"ok\":true}"));
 
-        String sessions = request("GET /api/127.0.0.1:" + upstream + "/api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        String sessions = request("GET /api/http/127.0.0.1:" + upstream + "/api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         check("proxied list route returns the data envelope", sessions.contains("\"data\""));
 
         String post = request(
-                "POST /api/127.0.0.1:" + upstream + "/api/mock/control HTTP/1.1\r\n"
+                "POST /api/http/127.0.0.1:" + upstream + "/api/mock/control HTTP/1.1\r\n"
                         + "Host: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
-        check("proxied POST body reaches upstream", post.contains("200") || post.contains("204"));
+        check("proxied POST body reaches upstream", post.contains("application/json") && !post.contains("<!doctype"));
 
         check("Origin header is not forwarded", !upstreamSawOrigin(upstream));
 
@@ -78,10 +86,10 @@ public class ProxyTest {
         Thread notFound = serveOnce(48114, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
         notFound.start();
         Thread.sleep(200);
-        String missing = request("GET /api/127.0.0.1:48114/api/nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        String missing = request("GET /api/http/127.0.0.1:48114/api/nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         check("upstream 404 passes through as a 404", missing.startsWith("HTTP/1.1 404"));
 
-        String dead = request("GET /api/127.0.0.1:1/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        String dead = request("GET /api/http/127.0.0.1:1/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         check("unreachable upstream answers 502, not a dropped socket", dead.startsWith("HTTP/1.1 502"));
 
         // ── The 401 challenge ───────────────────────────────────────────────
@@ -92,7 +100,7 @@ public class ProxyTest {
                         + "Content-Length: 0\r\n\r\n");
         challenge.start();
         Thread.sleep(200);
-        String unauth = request("GET /api/127.0.0.1:48111/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        String unauth = request("GET /api/http/127.0.0.1:48111/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         check("401 still arrives as a 401", unauth.startsWith("HTTP/1.1 401"));
         check("WWW-Authenticate is stripped", !unauth.toLowerCase().contains("www-authenticate"));
 
@@ -108,11 +116,42 @@ public class ProxyTest {
         ws.start();
         Thread.sleep(200);
         String upgraded = request(
-                "GET /api/127.0.0.1:48112/api/pty/x/connect HTTP/1.1\r\n"
+                "GET /api/http/127.0.0.1:48112/api/pty/x/connect HTTP/1.1\r\n"
                         + "Host: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
         check("101 passes through", upgraded.startsWith("HTTP/1.1 101"));
         check("101 keeps Connection: Upgrade", upgraded.toLowerCase().contains("connection: upgrade"));
         check("bytes after the 101 are spliced through", upgraded.contains("FRAME"));
+
+        // ── TLS upstream (a Coder port-forward URL) ─────────────────────────
+        // Against a real HTTPS server with a self-signed cert. The test JVM
+        // trusts it via -Djavax.net.ssl.trustStore; see docs/android.md.
+        if (System.getProperty("test.keyStore") != null) {
+            String goodStore = System.getProperty("test.keyStore");
+            String wrongStore = System.getProperty("test.wrongKeyStore");
+            Thread tls = serveTlsOnce(48120, "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nsecured", goodStore);
+            tls.start();
+            Thread.sleep(400);
+            String over = request("GET /api/https/localhost:48120/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            check("https upstream: handshake succeeds and the body comes through", over.contains("secured"));
+
+            // A server on localhost presenting a certificate issued for a
+            // completely different name. If this succeeds, hostname verification
+            // is off and ANY certificate for ANY name would be accepted — which
+            // is most of the point of TLS gone, silently. This is the check that
+            // caught the wrapped-socket default during development.
+            Thread tls2 = serveTlsOnce(48121, "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nsecured", wrongStore);
+            tls2.start();
+            Thread.sleep(400);
+            String wrongName = request("GET /api/https/localhost:48121/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            check("https upstream: a cert for the wrong hostname is rejected",
+                    wrongName.startsWith("HTTP/1.1 502") && !wrongName.contains("secured"));
+
+            // Plain http to a TLS port must not be mistaken for success.
+            String plainToTls = request("GET /api/http/localhost:48122/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            check("http to a dead port still answers 502", plainToTls.startsWith("HTTP/1.1 502"));
+        } else {
+            System.out.println("  SKIP  https upstream checks (no -Djavax.net.ssl.trustStore)");
+        }
 
         proxy.stop();
         System.out.println(failures == 0 ? "\nALL PASSED" : "\n" + failures + " FAILED");
@@ -123,7 +162,7 @@ public class ProxyTest {
     private static boolean ssePassesThrough(int upstream) throws Exception {
         try (Socket s = new Socket("127.0.0.1", LocalProxy.PORT)) {
             s.getOutputStream().write(
-                    ("GET /api/127.0.0.1:" + upstream + "/api/event HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n")
+                    ("GET /api/http/127.0.0.1:" + upstream + "/api/event HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n")
                             .getBytes(StandardCharsets.ISO_8859_1));
             s.getOutputStream().flush();
             s.setSoTimeout(4000);
@@ -166,9 +205,35 @@ public class ProxyTest {
         });
         echo.start();
         Thread.sleep(200);
-        request("GET /api/127.0.0.1:48113/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:47653\r\n\r\n");
+        request("GET /api/http/127.0.0.1:48113/api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:47653\r\n\r\n");
         echo.join(2000);
         return got.toString().toLowerCase().contains("origin:");
+    }
+
+    /** A one-shot HTTPS server using the given PKCS12 keystore. */
+    private static Thread serveTlsOnce(int port, String response, String keyStore) {
+        return new Thread(() -> {
+            try {
+                KeyStore ks = KeyStore.getInstance("PKCS12");
+                try (InputStream in = new java.io.FileInputStream(keyStore)) {
+                    ks.load(in, "changeit".toCharArray());
+                }
+                KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                kmf.init(ks, "changeit".toCharArray());
+                SSLContext ctx = SSLContext.getInstance("TLS");
+                ctx.init(kmf.getKeyManagers(), null, null);
+                SSLServerSocketFactory f = ctx.getServerSocketFactory();
+                try (SSLServerSocket ss = (SSLServerSocket) f.createServerSocket(port)) {
+                    Socket c = ss.accept();
+                    c.getInputStream().read(new byte[4096]);
+                    c.getOutputStream().write(response.getBytes(StandardCharsets.ISO_8859_1));
+                    c.getOutputStream().flush();
+                    Thread.sleep(300);
+                    c.close();
+                }
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private static Thread serveOnce(int port, String response) {

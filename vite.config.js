@@ -2,19 +2,26 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import httpProxy from "http-proxy";
 
-// Forwards /api/<host>:<port>/<rest> -> http://<host>:<port>/<rest> (SSE-safe).
+// Forwards /api/<scheme>/<host>:<port>/<rest> -> <scheme>://<host>:<port>/<rest>
+// (SSE-safe). The address lives in the URL rather than in this file's config
+// because the Android build's in-app proxy (android/…/LocalProxy.java) parses
+// the exact same prefix — one addressing scheme, and neither proxy needs to be
+// told anything by the JS. See apiBase() in src/stores/ssh.js.
 //
-// `<host>:` is optional and defaults to 127.0.0.1, so the older /api/<port>/…
-// form still works. The address lives in the URL rather than in this file's
-// config because the Android build's in-app proxy (android/…/LocalProxy.java)
-// parses the exact same prefix — one addressing scheme, and neither proxy needs
-// to be told anything by the JS. See apiBase() in src/stores/ssh.js.
-const API_PREFIX = /^\/api\/(?:([A-Za-z0-9._-]+):)?(\d+)(\/.*)$/;
+// The scheme is in the prefix because the two ways of reaching a server differ
+// on it: a tunnelled or LAN server is plain http, while a Coder port-forward URL
+// is https on 443 with the port encoded in the hostname. Every part is
+// mandatory — apiBase() always writes all three — so there is one form to parse
+// in all three implementations rather than a nest of optional pieces.
+const API_PREFIX = /^\/api\/(https?)\/([A-Za-z0-9._-]+):(\d+)(\/.*)$/;
 
 // Only ever forward to a private address. The prefix is attacker-controllable in
 // the sense that any page the dev server serves can name a target, and a dev
 // server that will proxy to arbitrary internet hosts is an open relay.
 function isPrivateHost(host) {
+  // A TLS target is a named, publicly-resolvable host by definition (a Coder
+  // workspace URL), so the private-address rule below cannot apply to it. The
+  // protection there is that opencode2 still demands its own Basic auth.
   if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
   if (/^10\./.test(host)) return true;
   if (/^192\.168\./.test(host)) return true;
@@ -49,13 +56,13 @@ function opencodeDynamicProxy() {
       server.middlewares.use((req, res, next) => {
         const m = req.url && req.url.match(API_PREFIX);
         if (!m) return next();
-        const host = m[1] || "127.0.0.1";
-        if (!isPrivateHost(host)) {
+        const [, scheme, host, port] = m;
+        if (scheme === "http" && !isPrivateHost(host)) {
           res.writeHead(403);
-          return res.end(`refusing to proxy to non-private host ${host}`);
+          return res.end(`refusing to proxy cleartext to non-private host ${host}`);
         }
-        req.url = m[3]; // strip /api/<host>:<port>
-        proxy.web(req, res, { target: `http://${host}:${m[2]}` });
+        req.url = m[4]; // strip /api/<scheme>/<host>:<port>
+        proxy.web(req, res, { target: `${scheme}://${host}:${port}`, secure: true });
       });
       // WebSocket upgrades (PTY connect) — middlewares only see HTTP requests,
       // so forward upgrade events on the underlying HTTP server ourselves.
@@ -63,10 +70,10 @@ function opencodeDynamicProxy() {
       server.httpServer?.on("upgrade", (req, socket, head) => {
         const m = req.url && req.url.match(API_PREFIX);
         if (!m) return;
-        const host = m[1] || "127.0.0.1";
-        if (!isPrivateHost(host)) return socket.destroy();
-        req.url = m[3];
-        proxy.ws(req, socket, head, { target: `http://${host}:${m[2]}` });
+        const [, scheme, host, port] = m;
+        if (scheme === "http" && !isPrivateHost(host)) return socket.destroy();
+        req.url = m[4];
+        proxy.ws(req, socket, head, { target: `${scheme}://${host}:${port}`, secure: true });
       });
     },
   };

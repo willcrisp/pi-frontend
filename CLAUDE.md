@@ -118,10 +118,12 @@ sidebar and the sub-agent dialogs have no coverage:
 ### How requests actually reach the server
 
 `vite.config.js` installs a **dynamic** proxy, not a fixed `/api` → `:4096`
-rule: `/api/<host>:<port>/<rest>` is forwarded to `http://<host>:<port>/<rest>`,
-and WebSocket upgrades (the PTY connect stream) are forwarded too. The `<host>:`
-part is optional and defaults to 127.0.0.1. Both are user-selectable at runtime
-and persisted in localStorage, defaulting to 127.0.0.1:4096.
+rule: `/api/<scheme>/<host>:<port>/<rest>` is forwarded to
+`<scheme>://<host>:<port>/<rest>`, and WebSocket upgrades (the PTY connect
+stream) are forwarded too. All three parts are mandatory and user-selectable at
+runtime, persisted in localStorage, defaulting to `http`/127.0.0.1/4096. The
+scheme exists because a tunnelled or LAN server is plain http while a Coder
+port-forward URL is https on 443 — both proxies terminate the TLS themselves.
 
 ⚠️ **That prefix is implemented three times and they must agree**: `apiBase()` in
 `stores/ssh.js` writes it, `vite.config.js` reads it in development, and
@@ -136,7 +138,7 @@ strip `WWW-Authenticate` from a 401 — a browser left to see it opens a native
 credential prompt and never settles the fetch, which in a WebView is an app that
 hangs on a spinner forever. `docs/android.md` has the verification for both.
 
-Consequently every call needs the proxy prefix (`apiBase()` →`/api/<host>:<port>/api`)
+Consequently every call needs the proxy prefix (`apiBase()` →`/api/<scheme>/<host>:<port>/api`)
 and the `Authorization: Basic …` header (`authHeaders()`) — the OpenAPI declares
 `security: []` on every operation, but an unauthenticated request still 401s. A
 fetch that hardcodes `/api/...` or omits the header fails at runtime only, and
