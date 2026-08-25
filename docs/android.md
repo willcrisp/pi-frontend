@@ -201,6 +201,54 @@ java -Djavax.net.ssl.trustStore=/tmp/trust.p12 \
 
 Keep this passing. It is the only test between a proxy change and a phone.
 
+## Dictation
+
+**Use the keyboard's own microphone key.** Gboard (and every other Android IME)
+puts voice typing one tap from the composer, it is what people already reach for,
+and it needs no code, no permission prompt and no plugin.
+
+It works because the composer does nothing clever: no `inputmode` override, no
+custom key handling, no controlled-input games. Voice typing commits text through
+the IME as composition events rather than keystrokes, and Vue's `v-model` guards
+on composition and syncs at `compositionend` — verified by driving that exact
+event sequence at the real composer and watching the text land, autosize run, the
+send button enable and the prompt reach the transcript.
+
+The in-app alternatives were investigated and all are worse here:
+
+| Approach | Verdict |
+|---|---|
+| Web Speech API (`webkitSpeechRecognition`) | Present in desktop Chrome, **not implemented by Android System WebView** — it is a Chrome feature, not a WebView one. Would appear to work in `dev:mobile` and fail on the device, which is the worst failure mode. |
+| Capacitor speech-recognition plugin | Native `SpeechRecognizer`, so it works — but it needs the Capacitor bridge, a `RECORD_AUDIO` permission and a plugin dependency, to duplicate a button already on the keyboard. |
+| `MediaRecorder` + transcription | The app IS a secure context (`http://127.0.0.1` counts as potentially trustworthy, so `getUserMedia` and `MediaRecorder` are both available — verified), but opencode2 has no transcription route, so this needs a third-party API and a key on the phone. |
+
+No microphone permission is declared, deliberately: a sideloaded app asking for
+one it never uses is a bad signal.
+
+## Mobile conventions
+
+Things a phone app is expected to do, and where each is handled:
+
+| Behaviour | Where |
+|---|---|
+| Hardware back / back gesture goes up a screen | `App.vue` mirrors `screen` into the History API; a modal gate swallows the press instead of dismissing the screen under it |
+| Keyboard doesn't cover the composer | `android:windowSoftInputMode="adjustResize"`, plus a re-stick to the bottom on focus so the message you're replying to doesn't slide behind it |
+| Reconnect when you come back to the app | `visibilitychange` in `App.vue` — Android freezes the WebView and the SSE connection does not survive it |
+| Jump to latest when scrolled up | `.to-bottom` in `ChatScreen.vue`, shown only when parked away from the bottom |
+| Touch targets ≥ 44px | audited across both screens; the code-copy button extends its hit area with a pseudo-element since it can't grow inside a code block |
+| System bars match the page | `styles.xml` — dark status and navigation bars, light icons, `postSplashScreenTheme` so the real theme actually applies |
+| No white flash on launch | splash is a solid `appBackground`; the template's default splash PNGs were deleted |
+| Text is selectable where it should be | `user-select: none` globally, opted back in for message bodies and inputs |
+| No double-tap zoom or tap-highlight flash | viewport meta plus `touch-action: manipulation` |
+| Safe areas | `viewport-fit=cover` and `env(safe-area-inset-*)` on every screen edge |
+
+Back deserves a note: a WebView with no history entries sends the system back
+straight to "close the app", so opening a chat and swiping back **quit the app**
+rather than returning to the list. `screen` remains the source of truth and
+history only mirrors it. `boot()` re-syncs the stack explicitly, because restoring
+the last chat sets the screen while the watcher is suppressed — without that, a
+restored chat had no list behind it and back closed the app again.
+
 ## What was left out, and what that costs
 
 Cut because a phone is not where you do it: providers and TrueFoundry, usage

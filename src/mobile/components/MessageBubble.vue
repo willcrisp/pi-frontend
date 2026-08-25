@@ -136,6 +136,8 @@ function isImage(part) {
    `absolute` so it stays put while the code scrolls sideways under it. */
 .md :deep(.code-copy) {
   position: sticky;
+  /* anchors the extended hit area below */
+  isolation: isolate;
   float: right;
   top: 0;
   width: 30px;
@@ -150,6 +152,15 @@ function isImage(part) {
 .md :deep(.code-copy)::after {
   content: "⧉";
   font-size: 14px;
+}
+
+/* The button itself has to stay small to fit the code block's corner, so the
+   touch target is extended past its box instead — a finger lands on 44px even
+   though only 30px is painted. */
+.md :deep(.code-copy)::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
 }
 
 .md :deep(.code-copy.copied)::after {

@@ -13,8 +13,13 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- adjustResize: the window shrinks when the keyboard opens, so the
+             composer rides above it. Without it the keyboard covers the composer
+             and you type into something you cannot see — the single most obvious
+             way a web app in a WebView feels broken on a phone. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:windowSoftInputMode="adjustResize"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"

@@ -16,6 +16,10 @@ const emit = defineEmits(["back"]);
 const scroller = ref(null);
 const text = ref("");
 const box = ref(null);
+// Whether the transcript is parked away from the bottom. Drives the jump-to-
+// latest button: scrolled up in a long transcript there is otherwise no way back
+// down but to drag, and a streaming reply keeps growing under you.
+const atBottom = ref(true);
 
 const title = computed(() => {
   const s = projectsStore.sessions.find((x) => x.id === opencodeStore.activeSessionId);
@@ -33,10 +37,20 @@ function nearBottom() {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 }
 
+function onScroll() {
+  atBottom.value = nearBottom();
+}
+
+function toBottom() {
+  const el = scroller.value;
+  if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+}
+
 async function follow(force) {
   const stick = force || nearBottom();
   await nextTick();
   if (stick && scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight;
+  atBottom.value = nearBottom();
 }
 
 watch(
@@ -53,6 +67,14 @@ function autosize() {
   if (!el) return;
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+}
+
+// Opening the keyboard shrinks the window (adjustResize in the manifest), which
+// moves the composer but leaves the transcript scrolled where it was — so the
+// message you were replying to slides out of view behind the keyboard. Stick to
+// the bottom across the resize if that is where we already were.
+function onFocus() {
+  if (atBottom.value) setTimeout(() => follow(true), 250);
 }
 
 async function send() {
@@ -81,7 +103,7 @@ function stop() {
       <button class="refresh" aria-label="Refresh" @click="refreshActiveMessages()">⟳</button>
     </header>
 
-    <div ref="scroller" class="transcript">
+    <div ref="scroller" class="transcript" @scroll.passive="onScroll">
       <p v-if="opencodeStore.messagesLoading" class="note">Loading…</p>
       <p v-else-if="opencodeStore.messagesError" class="note bad">
         {{ opencodeStore.messagesError }}
@@ -93,7 +115,13 @@ function stop() {
       <p v-if="steers" class="note">{{ steers }} queued for the agent's next turn</p>
     </div>
 
+    <button v-if="!atBottom" class="to-bottom" aria-label="Jump to latest" @click="toBottom">
+      ↓
+    </button>
+
     <div class="composer">
+      <!-- No inputmode override and no custom key handling: that is what lets the
+           keyboard's own voice-typing key dictate straight into the field. -->
       <textarea
         ref="box"
         v-model="text"
@@ -101,6 +129,7 @@ function stop() {
         placeholder="Message…"
         autocapitalize="sentences"
         @input="autosize"
+        @focus="onFocus"
       />
       <!-- Stop and send are the same button in the same place, as on the desktop:
            during a run the square interrupts, otherwise the arrow sends. -->
@@ -122,6 +151,7 @@ function stop() {
 
 <style scoped>
 .screen {
+  position: relative; /* the jump-to-latest button anchors to this */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -183,6 +213,23 @@ header {
   color: var(--warn-fg);
 }
 
+.to-bottom {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Sits just above the composer, which is the one thing it must not cover. */
+  bottom: 80px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 16px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.4);
+  z-index: 20;
+}
+
 .composer {
   display: flex;
   align-items: flex-end;
@@ -214,8 +261,10 @@ textarea:focus {
 
 .act {
   flex: none;
-  width: 42px;
-  height: 42px;
+  /* 46, not 42: this is the most-tapped control in the app and Android's own
+     guidance is a 48dp minimum. It was under the practical 44px floor. */
+  width: 46px;
+  height: 46px;
   border: 0;
   border-radius: 50%;
   background: var(--accent);

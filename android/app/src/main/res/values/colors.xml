@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Capacitor template's styles.xml references colorPrimary, colorPrimaryDark
+     and colorAccent but ships no file defining them, so the project would not
+     link ("resource color/colorPrimary not found") — AppCompat provides
+     ?attr/colorPrimary, not a colour resource by that name.
+
+     The values match the tokens in src/mobile/mobile.css so the system chrome
+     and the page are the same colour: the page background, plus the accent for
+     anything Android tints itself. -->
+<resources>
+    <color name="colorPrimary">#0d0d0f</color>
+    <color name="colorPrimaryDark">#0d0d0f</color>
+    <color name="colorAccent">#5b8cff</color>
+
+    <!-- Behind the WebView and under the system bars. Any mismatch here shows as
+         a flash of the wrong colour on launch and on rotation. -->
+    <color name="appBackground">#0d0d0f</color>
+</resources>

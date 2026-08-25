@@ -110,8 +110,10 @@ header h1 {
 }
 
 .actions button {
-  width: 40px;
-  height: 40px;
+  /* 44px floor — these were 40 and sit right at the top edge, which is the
+     hardest part of a phone screen to hit accurately. */
+  width: 44px;
+  height: 44px;
   border: 0;
   border-radius: 10px;
   background: transparent;

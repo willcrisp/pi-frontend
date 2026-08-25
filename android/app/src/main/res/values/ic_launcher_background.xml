@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon's background plate. The template shipped white, which put
+     a white tile in the launcher for an app that is black everywhere else. -->
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="ic_launcher_background">#0D0D0F</color>
 </resources>
