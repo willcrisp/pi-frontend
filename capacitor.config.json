@@ -1,0 +1,13 @@
+{
+  "appId": "dev.radius.mobile",
+  "appName": "radius",
+  "webDir": "dist-mobile",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "url": "http://127.0.0.1:47653",
+    "cleartext": true,
+    "androidScheme": "http"
+  }
+}

@@ -1,0 +1,76 @@
+/* The mobile build's entire stylesheet.
+ *
+ * Deliberately NOT src/style.css: that is 20-odd partials whose import order is
+ * load-bearing, styling components this build doesn't mount. This is one flat
+ * file of tokens and resets, and every component that needs more carries its own
+ * <style scoped>. The rule for this build: if a style belongs to one component,
+ * it lives in that component.
+ *
+ * Dark only. The desktop has a colour-profile picker; a phone harness does not
+ * need one, and every screen here is a dark surface by design. */
+
+:root {
+  --bg: #0d0d0f;
+  --bg-raised: #17171b;
+  --fg: #e8e8ea;
+  --fg-dim: #8b8b93;
+  --line: #26262c;
+  --accent: #5b8cff;
+  --accent-soft: #1a2440;
+  --accent-fg: #ffffff;
+  --ok: #4ec9a0;
+  --bad: #ff6b6b;
+  --warn-fg: #e8b84b;
+  --warn-bg: #3a2f13;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  /* A WebView will happily inflate text in ways that break a fixed layout. */
+  -webkit-text-size-adjust: 100%;
+  /* No rubber-band on the document — each scroller owns its own overscroll, so
+     the shell itself must not move. */
+  overscroll-behavior: none;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  /* Kills the 300ms tap delay and the grey flash on tap. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Nothing in this app is a text document, and a long-press selection on a
+   button reads as a bug. Text that IS meant to be selectable opts back in. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.md,
+.bubble,
+.resources,
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}

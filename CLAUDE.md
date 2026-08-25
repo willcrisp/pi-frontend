@@ -6,6 +6,12 @@ This file provides guidance when working with code in this repository.
 
 `radius`: A minimal dark-themed Vue 3 frontend harness for **OpenCode V2**.
 
+There are **two builds over one engine**: the desktop/web app (`index.html`,
+`src/App.vue`) and a stripped Android app (`mobile.html`, `src/mobile/`). They
+share every store — a change to `src/stores/opencode/` serves both, and should
+never be made twice. Read `docs/android.md` before touching the mobile build,
+the Vite proxy, or `apiBase()`.
+
 - Vue 3 + Vite frontend (plain JS, no TypeScript). Talks directly to an
   OpenCode V2 HTTP REST & Event (SSE) API under `/api/*`. There is no backend of
   our own — the old Rust server was removed in the V2 pivot, and the frontend
@@ -41,15 +47,23 @@ here rather than grepping the whole tree:
 | TrueFoundry discovery, or the provider config written for it | `stores/providers.js` + `lib/truefoundry.js` — read `docs/truefoundry.md` first |
 | usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
 | a persisted preference | the owning store, via `lib/storage.js` |
+| anything in the Android app's UI | `src/mobile/` — it does **not** share components with the desktop, only stores |
+| how either build reaches the server | `apiBase()` in `stores/ssh.js`, **and** both proxies — see below |
 
 ## Development Commands
 
 ```sh
 npm install
-npm run dev     # Vite dev server on http://localhost:5173
-npm run build   # Production build to dist/
+npm run dev            # Vite dev server on http://localhost:5173
+npm run build          # Production build to dist/
+npm run dev:mobile     # the Android app's UI in a browser, http://localhost:5174
+npm run build:mobile   # Production build to dist-mobile/
+npm run android:sync   # build:mobile + copy into android/ (before any Gradle build)
   npm test        # Playwright composer tests — only when explicitly requested
 ```
+
+An APK needs the Android SDK, which `npm run build` does not: see
+`docs/android.md`.
 
 You also need an OpenCode V2 server to point at:
 
@@ -103,11 +117,25 @@ sidebar and the sub-agent dialogs have no coverage:
 ### How requests actually reach the server
 
 `vite.config.js` installs a **dynamic** proxy, not a fixed `/api` → `:4096`
-rule: `/api/<port>/<rest>` is forwarded to `http://127.0.0.1:<port>/<rest>`, and
-WebSocket upgrades (the PTY connect stream) are forwarded too. The port is
-user-selectable at runtime and persisted in localStorage, defaulting to 4096.
+rule: `/api/<host>:<port>/<rest>` is forwarded to `http://<host>:<port>/<rest>`,
+and WebSocket upgrades (the PTY connect stream) are forwarded too. The `<host>:`
+part is optional and defaults to 127.0.0.1. Both are user-selectable at runtime
+and persisted in localStorage, defaulting to 127.0.0.1:4096.
 
-Consequently every call needs the proxy prefix (`apiBase()` →`/api/<port>/api`)
+⚠️ **That prefix is implemented three times and they must agree**: `apiBase()` in
+`stores/ssh.js` writes it, `vite.config.js` reads it in development, and
+`android/app/src/main/java/dev/radius/mobile/LocalProxy.java` reads it on the
+device. Changing the format means changing all three.
+
+The Android build ships its own proxy because **the opencode2 server sends no
+CORS headers and 404s the OPTIONS preflight**, so a WebView cannot call it
+cross-origin at all; serving the app from a proxy that also forwards `/api` makes
+every request same-origin, which is also what keeps SSE streaming. Both proxies
+strip `WWW-Authenticate` from a 401 — a browser left to see it opens a native
+credential prompt and never settles the fetch, which in a WebView is an app that
+hangs on a spinner forever. `docs/android.md` has the verification for both.
+
+Consequently every call needs the proxy prefix (`apiBase()` →`/api/<host>:<port>/api`)
 and the `Authorization: Basic …` header (`authHeaders()`) — the OpenAPI declares
 `security: []` on every operation, but an unauthenticated request still 401s. A
 fetch that hardcodes `/api/...` or omits the header fails at runtime only, and
@@ -412,6 +440,7 @@ Two traps worth knowing, both of which have bitten:
 | `docs/audit-2026-07.md` | Feature/UX audit: ten findings, driven in the real app. All essentially fixed — kept for the reasoning behind the fixes. |
 | `docs/audit-2026-08.md` | Maintainability pass: what held, what accumulated, and the open items. Start here before a refactor. |
 | `docs/handover-subagents.md` | Pickup point for the inline sub-agent rendering work. |
+| `docs/android.md` | The Android build: how to build and run it, why it carries its own proxy, what was cut. Read before touching `src/mobile/`, either proxy, or `apiBase()`. |
 
 ⚠️ Both handover docs predate the store/style split, so the file paths in them
 are stale (they describe a single `stores/opencode.js` and a single

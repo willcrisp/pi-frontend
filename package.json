@@ -5,13 +5,19 @@
   "scripts": {
     "dev": "node --no-deprecation ./node_modules/vite/bin/vite.js",
     "build": "vite build",
-    "test": "playwright test"
+    "test": "playwright test",
+    "dev:mobile": "node --no-deprecation ./node_modules/vite/bin/vite.js --config vite.config.mobile.js",
+    "build:mobile": "vite build --config vite.config.mobile.js && node scripts/mobile-index.mjs",
+    "android:sync": "npm run build:mobile && cap sync android"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@playwright/test": "^1.62.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "http-proxy": "^1.18.1",
