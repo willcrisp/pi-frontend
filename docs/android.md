@@ -10,6 +10,23 @@ in `src/stores/opencode/` — the SSE reducer, the run-end reconciliation, steer
 transcript normalization — is shared verbatim with the desktop build. Only the
 component tree differs. A fix to the engine should never need doing twice.
 
+## Where the files are
+
+The mobile build is deliberately not one folder, because the useful half of it is
+shared. Capacitor also pins two of these paths — `cap` resolves its config and the
+native project from the repo root, and has no flag to move either.
+
+| Path | What |
+|---|---|
+| `mobile/` | this build's own tooling: the entry document, its Vite config, the dist flattener, the proxy test |
+| `src/mobile/` | the phone UI — sits beside `src/stores/` because that is what it imports |
+| `android/` | the Gradle project and `LocalProxy.java`; **root-pinned by Capacitor** |
+| `capacitor.config.json` | **root-pinned by Capacitor** |
+| `src/stores/`, `src/lib/` | shared with the desktop build, unmodified |
+
+The one file both builds change is `src/stores/ssh.js` (`apiBase()`), which is the
+subject of the proxy note below.
+
 ## Build it
 
 Needs the Android SDK (Android Studio, or `cmdline-tools` + `platform-tools`) and
@@ -56,7 +73,7 @@ ALF-UAT.coder` and points at localhost; a phone has no equivalent. In practice:
 
 `npm run dev:mobile` serves the mobile entry on <http://127.0.0.1:5174> with the
 same dev proxy the desktop uses, at the same URL shape the device serves
-(`/`, not `/mobile.html`). A desktop browser's device-emulation mode is enough for
+(`/`, not `/mobile/`). A desktop browser's device-emulation mode is enough for
 everything except the WebView itself.
 
 To drive the *production* bundle through the *real* proxy — the closest thing to
@@ -65,7 +82,7 @@ the APK short of installing it:
 ```sh
 npm run build:mobile && npx cap sync android
 javac -d /tmp/pt android/app/src/main/java/dev/radius/mobile/LocalProxy.java \
-      tools/proxy-test/ProxyTest.java tools/proxy-test/ServeBundle.java
+      mobile/proxy-test/ProxyTest.java mobile/proxy-test/ServeBundle.java
 java -cp /tmp/pt dev.radius.mobile.ServeBundle android/app/src/main/assets
 # -> http://127.0.0.1:47653
 ```
@@ -129,7 +146,7 @@ against a real upstream:
 ```sh
 MOCK_PORT=4097 node test/mock-opencode.js &
 javac -d /tmp/pt android/app/src/main/java/dev/radius/mobile/LocalProxy.java \
-      tools/proxy-test/ProxyTest.java
+      mobile/proxy-test/ProxyTest.java
 java -cp /tmp/pt dev.radius.mobile.ProxyTest 4097
 ```
 

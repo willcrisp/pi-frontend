@@ -6,8 +6,8 @@
     "dev": "node --no-deprecation ./node_modules/vite/bin/vite.js",
     "build": "vite build",
     "test": "playwright test",
-    "dev:mobile": "node --no-deprecation ./node_modules/vite/bin/vite.js --config vite.config.mobile.js",
-    "build:mobile": "vite build --config vite.config.mobile.js && node scripts/mobile-index.mjs",
+    "dev:mobile": "node --no-deprecation ./node_modules/vite/bin/vite.js --config mobile/vite.config.js",
+    "build:mobile": "vite build --config mobile/vite.config.js && node mobile/flatten-dist.mjs",
     "android:sync": "npm run build:mobile && cap sync android"
   },
   "dependencies": {

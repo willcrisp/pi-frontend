@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
  * <pre>
  *   MOCK_PORT=4097 node test/mock-opencode.js &amp;
  *   javac -d /tmp/pt android/app/src/main/java/dev/radius/mobile/LocalProxy.java \
- *         tools/proxy-test/ProxyTest.java
+ *         mobile/proxy-test/ProxyTest.java
  *   java -cp /tmp/pt dev.radius.mobile.ProxyTest 4097
  * </pre>
  */

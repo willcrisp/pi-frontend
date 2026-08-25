@@ -7,7 +7,7 @@ This file provides guidance when working with code in this repository.
 `radius`: A minimal dark-themed Vue 3 frontend harness for **OpenCode V2**.
 
 There are **two builds over one engine**: the desktop/web app (`index.html`,
-`src/App.vue`) and a stripped Android app (`mobile.html`, `src/mobile/`). They
+`src/App.vue`) and a stripped Android app (`mobile/`, `src/mobile/`). They
 share every store — a change to `src/stores/opencode/` serves both, and should
 never be made twice. Read `docs/android.md` before touching the mobile build,
 the Vite proxy, or `apiBase()`.
@@ -48,6 +48,7 @@ here rather than grepping the whole tree:
 | usage totals across sessions | `stores/usage.js`; the *live* session's accounting stays in `stores/opencode/context.js` |
 | a persisted preference | the owning store, via `lib/storage.js` |
 | anything in the Android app's UI | `src/mobile/` — it does **not** share components with the desktop, only stores |
+| the Android build's tooling (entry, Vite config, proxy test) | `mobile/` — but `android/` and `capacitor.config.json` are pinned to the root by Capacitor |
 | how either build reaches the server | `apiBase()` in `stores/ssh.js`, **and** both proxies — see below |
 
 ## Development Commands

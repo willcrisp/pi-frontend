@@ -42,7 +42,7 @@ import java.util.regex.Pattern;
  *
  * <p>DELIBERATELY FREE OF ANDROID IMPORTS. Assets come in through {@link
  * AssetSource} rather than an AssetManager so this class is plain Java and can be
- * exercised off-device — see tools/proxy-test/ProxyTest.java, which runs real
+ * exercised off-device — see mobile/proxy-test/ProxyTest.java, which runs real
  * requests, a real SSE stream and a real WebSocket upgrade through this exact
  * file. It is the piece of the port with the least margin for error and the
  * hardest to debug on a phone, so it is the piece that gets tested directly.
